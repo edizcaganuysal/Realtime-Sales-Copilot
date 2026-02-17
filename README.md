@@ -8,7 +8,8 @@ A web-first, multi-tenant B2B sales coaching platform. AI listens to outbound ca
 | ------------ | ----------------------------------------------- |
 | Web          | Next.js 15 (App Router) · TypeScript · Tailwind · shadcn/ui |
 | API          | NestJS · WebSocket Gateway · TypeScript         |
-| Database     | PostgreSQL 16                                   |
+| Database     | PostgreSQL 16 (Supabase cloud or local Docker)  |
+| ORM          | drizzle-orm · drizzle-kit                       |
 | Cache/PubSub | Redis 7                                         |
 | Dialer       | Twilio outbound (MVP)                           |
 | Monorepo     | pnpm workspaces · Turborepo                     |
@@ -84,6 +85,67 @@ pnpm dev
 
 ---
 
+## Database Setup
+
+### Option A — Supabase (recommended for production/team dev)
+
+1. Create a project at [supabase.com](https://supabase.com)
+2. Copy the **Direct connection** string (not pooler) from **Settings → Database**
+3. It looks like: `postgresql://postgres:[PASSWORD]@db.[REF].supabase.co:5432/postgres`
+4. Paste it as `DATABASE_URL` in `apps/api/.env`
+
+### Option B — Local Docker
+
+```bash
+docker compose -f infra/docker-compose.yml up -d
+# DATABASE_URL is already set to localhost in infra/.env.example
+```
+
+### Run migrations and seed
+
+```bash
+cd apps/api
+
+# 1. Generate the SQL migration files from schema.ts
+pnpm db:generate
+
+# 2. Apply migrations to the database
+pnpm db:migrate
+
+# 3. Seed initial data (org, admin user, playbook, default agent)
+pnpm db:seed
+```
+
+Or from repo root:
+
+```bash
+pnpm --filter @live-sales-coach/api db:generate
+pnpm --filter @live-sales-coach/api db:migrate
+pnpm --filter @live-sales-coach/api db:seed
+```
+
+### Seed defaults
+
+| What           | Value                          |
+| -------------- | ------------------------------ |
+| Org            | Demo Organization              |
+| Admin email    | `admin@example.com`            |
+| Admin password | `Password123!`                 |
+| Playbook       | Default Sales Playbook (5 stages) |
+| Agent          | Default Coach (APPROVED, ORG)  |
+
+Override via env: `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD`
+
+### Database schema (12 tables)
+
+```
+orgs · org_settings · users · playbooks · playbook_stages
+agents · calls · call_transcript · call_events
+call_suggestions · call_summaries
+```
+
+---
+
 ## Environment Variables Reference
 
 ### API — `apps/api/.env`
@@ -107,6 +169,8 @@ pnpm dev
 | `LLM_API_KEY`           | LLM API key                          | `sk-...`                    |
 | `LLM_MODEL`             | Model ID                             | `gpt-4o`                    |
 | `LLM_BASE_URL`          | Optional custom base URL             | _(blank = use provider default)_ |
+| `SEED_ADMIN_EMAIL`      | Admin email created by `db:seed`     | `admin@example.com`              |
+| `SEED_ADMIN_PASSWORD`   | Admin password created by `db:seed`  | `Password123!`                   |
 
 ### Web — `apps/web/.env.local`
 
