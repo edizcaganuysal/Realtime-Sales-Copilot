@@ -106,6 +106,43 @@ export interface CoachingSuggestion {
   generatedAt: Date;
 }
 
+
+// ─── Auth ────────────────────────────────────────────────────────────────────
+
+export interface JwtPayload {
+  sub: string;
+  email: string;
+  role: Role;
+  orgId: string;
+  iat?: number;
+  exp?: number;
+}
+
+export interface MeResponse {
+  user: {
+    id: string;
+    email: string;
+    name: string;
+    role: Role;
+    orgId: string;
+    status: string;
+    createdAt: string;
+  };
+  org: {
+    id: string;
+    name: string;
+    createdAt: string;
+  };
+  orgSettings: {
+    orgId: string;
+    requiresAgentApproval: boolean;
+    allowRepAgentCreation: boolean;
+    publisherPolicy: PublisherPolicy;
+    liveLayoutDefault: LiveLayout;
+    retentionDays: number;
+  };
+}
+
 // ─── WebSocket event shapes ──────────────────────────────────────────────────
 
 export interface WsTranscriptEvent {

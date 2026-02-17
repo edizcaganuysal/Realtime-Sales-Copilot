@@ -71,3 +71,32 @@ export type LoginInput = z.infer<typeof LoginSchema>;
 export type CreateAgentInput = z.infer<typeof CreateAgentSchema>;
 export type UpdateAgentInput = z.infer<typeof UpdateAgentSchema>;
 export type CreateCallInput = z.infer<typeof CreateCallSchema>;
+
+// ─── Me response ─────────────────────────────────────────────────────────────
+
+export const MeResponseSchema = z.object({
+  user: z.object({
+    id: z.string().uuid(),
+    email: z.string().email(),
+    name: z.string(),
+    role: z.nativeEnum(Role),
+    orgId: z.string().uuid(),
+    status: z.string(),
+    createdAt: z.string(),
+  }),
+  org: z.object({
+    id: z.string().uuid(),
+    name: z.string(),
+    createdAt: z.string(),
+  }),
+  orgSettings: z.object({
+    orgId: z.string().uuid(),
+    requiresAgentApproval: z.boolean(),
+    allowRepAgentCreation: z.boolean(),
+    publisherPolicy: z.nativeEnum(PublisherPolicy),
+    liveLayoutDefault: z.nativeEnum(LiveLayout),
+    retentionDays: z.number(),
+  }),
+});
+
+export type MeResponseType = z.infer<typeof MeResponseSchema>;
