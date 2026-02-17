@@ -25,14 +25,13 @@ export default function LoginPage() {
       if (!res.ok) {
         const data = await res.json();
         setError(data.message ?? 'Invalid credentials');
+        setLoading(false);
         return;
       }
 
       router.push('/app/home');
-      router.refresh();
     } catch {
       setError('Something went wrong. Please try again.');
-    } finally {
       setLoading(false);
     }
   }

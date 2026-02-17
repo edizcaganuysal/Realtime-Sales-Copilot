@@ -10,6 +10,7 @@ import {
   BookOpen,
   Settings,
   ShieldCheck,
+  Users,
   LogOut,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -24,7 +25,10 @@ const NAV = [
   { href: '/app/settings', label: 'Settings', icon: Settings },
 ];
 
-const ADMIN_NAV = [{ href: '/app/admin', label: 'Admin', icon: ShieldCheck }];
+const ADMIN_NAV = [
+  { href: '/app/admin/governance', label: 'Governance', icon: ShieldCheck },
+  { href: '/app/admin/users', label: 'Users', icon: Users },
+];
 
 interface SidebarProps {
   me: MeResponse;
@@ -80,7 +84,7 @@ export function Sidebar({ me }: SidebarProps) {
                 href={href}
                 className={cn(
                   'flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors',
-                  pathname === href
+                  pathname.startsWith(href)
                     ? 'bg-slate-800 text-white'
                     : 'text-slate-400 hover:text-white hover:bg-slate-800/60',
                 )}
