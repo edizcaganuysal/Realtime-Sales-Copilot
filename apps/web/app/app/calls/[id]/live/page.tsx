@@ -11,6 +11,7 @@ import {
   ChevronUp,
   RefreshCw,
   AlignLeft,
+  PhoneCall,
 } from 'lucide-react';
 
 const WS_URL = process.env['NEXT_PUBLIC_WS_URL'] ?? process.env['NEXT_PUBLIC_API_URL'] ?? 'http://localhost:3001';
@@ -349,6 +350,7 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
   const router = useRouter();
 
   const [call, setCall] = useState<CallData | null>(null);
+  const [callStatus, setCallStatus] = useState<string>('INITIATED');
   const [connected, setConnected] = useState(false);
   const [transcript, setTranscript] = useState<TranscriptLine[]>([]);
   const [suggestion, setSuggestion] = useState('');
@@ -365,7 +367,10 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
   useEffect(() => {
     fetch(`/api/calls/${id}`)
       .then((r) => r.json())
-      .then((d) => setCall(d));
+      .then((d) => {
+        setCall(d);
+        setCallStatus(d.status ?? 'INITIATED');
+      });
   }, [id]);
 
   // WebSocket connection
@@ -414,6 +419,15 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
 
     socket.on('engine.checklist', (data: { items: ChecklistItem[] }) => {
       setChecklist(data.items);
+    });
+
+    socket.on('call.status', (data: { status: string; startedAt: string | null }) => {
+      setCallStatus(data.status);
+      if (data.startedAt) {
+        setCall((prev) => prev ? { ...prev, status: data.status, startedAt: data.startedAt } : prev);
+      } else {
+        setCall((prev) => prev ? { ...prev, status: data.status } : prev);
+      }
     });
 
     return () => {
@@ -474,8 +488,32 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
         </div>
       </div>
 
-      {/* Layout body */}
-      {layout === 'MINIMAL' && (
+      {/* Connecting overlay — shown while call is not yet answered */}
+      {callStatus === 'INITIATED' && (
+        <div className="flex-1 flex flex-col items-center justify-center gap-6 bg-slate-950">
+          <div className="relative">
+            <div className="w-20 h-20 rounded-full bg-slate-800 flex items-center justify-center">
+              <PhoneCall size={32} className="text-emerald-400" />
+            </div>
+            <span className="absolute inset-0 rounded-full border-2 border-emerald-400/40 animate-ping" />
+          </div>
+          <div className="text-center space-y-1">
+            <p className="text-white font-medium text-lg">Calling {call.phoneTo}…</p>
+            <p className="text-slate-500 text-sm">Ringing — waiting for prospect to answer</p>
+          </div>
+          <button
+            onClick={handleEnd}
+            disabled={ending}
+            className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
+          >
+            <PhoneOff size={15} />
+            {ending ? 'Ending…' : 'Cancel call'}
+          </button>
+        </div>
+      )}
+
+      {/* Layout body — only when call is active */}
+      {callStatus !== 'INITIATED' && layout === 'MINIMAL' && (
         <MinimalLayout
           suggestion={suggestion}
           nudges={nudges}
@@ -485,7 +523,7 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
         />
       )}
 
-      {layout === 'STANDARD' && (
+      {callStatus !== 'INITIATED' && layout === 'STANDARD' && (
         <StandardLayout
           suggestion={suggestion}
           nudges={nudges}
@@ -497,7 +535,7 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
         />
       )}
 
-      {layout === 'TRANSCRIPT' && (
+      {callStatus !== 'INITIATED' && layout === 'TRANSCRIPT' && (
         <TranscriptLayout
           suggestion={suggestion}
           transcript={transcript}

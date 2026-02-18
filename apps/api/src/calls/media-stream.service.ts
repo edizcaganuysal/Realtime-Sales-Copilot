@@ -70,7 +70,7 @@ export class MediaStreamService implements OnApplicationBootstrap {
         return;
       }
 
-      this.logger.log(`Media stream connected for call ${callId}`);
+      this.logger.log(`Media stream connected for call ${callId} (STT available: ${this.sttService.available})`);
 
       // One Deepgram session per WS connection. track name (inbound/outbound)
       // is mapped to speaker after the start event.
@@ -85,7 +85,10 @@ export class MediaStreamService implements OnApplicationBootstrap {
             // "inbound" track  = prospect speaking (called party)
             // "outbound" track = rep speaking (goes to called party)
             speaker = msg.start.tracks.includes('inbound') ? 'PROSPECT' : 'REP';
-            this.logger.log(`Stream started — call ${callId}, speaker: ${speaker}`);
+            this.logger.log(
+              `Stream started — call ${callId}, streamSid: ${msg.start.streamSid}, ` +
+              `callSid: ${msg.start.callSid}, tracks: ${msg.start.tracks.join(',')}, speaker: ${speaker}`,
+            );
 
             if (this.sttService.available) {
               deepgramWs = this.sttService.createDeepgramSession(

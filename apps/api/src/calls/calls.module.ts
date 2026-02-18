@@ -8,7 +8,7 @@ import { SttService } from './stt.service';
 import { MediaStreamService } from './media-stream.service';
 
 @Module({
-  controllers: [CallsController, TwilioWebhookController],
+  controllers: [TwilioWebhookController, CallsController],
   providers: [CallsService, CallsGateway, EngineService, TwilioService, SttService, MediaStreamService],
 })
 export class CallsModule {}
