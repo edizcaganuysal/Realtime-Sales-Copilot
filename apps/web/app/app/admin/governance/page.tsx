@@ -129,7 +129,6 @@ export default function GovernancePage() {
           >
             <option value={LiveLayout.MINIMAL}>Minimal</option>
             <option value={LiveLayout.STANDARD}>Standard</option>
-            <option value={LiveLayout.TRANSCRIPT}>Transcript</option>
           </select>
         </Row>
 
