@@ -6,7 +6,9 @@ export class TwilioService implements OnModuleInit {
 
   private readonly accountSid = process.env['TWILIO_ACCOUNT_SID'];
   private readonly authToken = process.env['TWILIO_AUTH_TOKEN'];
-  private readonly fromNumber = process.env['TWILIO_FROM_NUMBER'];
+  // Support both TWILIO_FROM_NUMBER and TWILIO_PHONE_NUMBER for backwards compat
+  private readonly fromNumber =
+    process.env['TWILIO_FROM_NUMBER'] ?? process.env['TWILIO_PHONE_NUMBER'];
   private readonly webhookBase = process.env['TWILIO_WEBHOOK_BASE_URL'];
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -25,8 +25,16 @@ export class SttService implements OnModuleInit {
   private readonly useStub = process.env['USE_STUB_TRANSCRIPT'] === 'true';
 
   onModuleInit() {
-    if (this.useStub || !this.apiKey) {
-      if (!this.useStub && !this.apiKey) {
+    if (!this.available) {
+      if (this.useStub) {
+        this.logger.log('STT: stub transcript mode (USE_STUB_TRANSCRIPT=true)');
+      } else if (this.provider !== 'deepgram') {
+        this.logger.warn(
+          `STT provider "${this.provider}" is not supported for real-time streaming. ` +
+            'Set STT_PROVIDER=deepgram and update STT_API_KEY with your Deepgram key. ' +
+            'Falling back to stub transcript.',
+        );
+      } else {
         this.logger.warn(
           '\n' +
             '┌──────────────────────────────────────────────────────────┐\n' +
@@ -38,8 +46,6 @@ export class SttService implements OnModuleInit {
             '│  Or set USE_STUB_TRANSCRIPT=true to silence this warning │\n' +
             '└──────────────────────────────────────────────────────────┘',
         );
-      } else {
-        this.logger.log('STT: using stub transcript (USE_STUB_TRANSCRIPT=true)');
       }
     } else {
       this.logger.log(`STT ready — provider: ${this.provider}`);
@@ -47,7 +53,7 @@ export class SttService implements OnModuleInit {
   }
 
   get available(): boolean {
-    return !this.useStub && !!this.apiKey;
+    return !this.useStub && !!this.apiKey && this.provider === 'deepgram';
   }
 
   /**
