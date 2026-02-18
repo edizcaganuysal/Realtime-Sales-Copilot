@@ -27,7 +27,7 @@ const NAV = [
 ];
 
 const ADMIN_NAV = [
-  { href: '/app/admin/governance', label: 'Governance', icon: ShieldCheck },
+  { href: '/app/admin/governance', label: 'Manage', icon: ShieldCheck },
   { href: '/app/admin/users', label: 'Users', icon: Users },
   { href: '/app/admin/playbooks', label: 'Playbooks', icon: ClipboardList },
   { href: '/app/admin/agents', label: 'Agents', icon: Bot },

@@ -6,8 +6,9 @@ import { OrgModule } from './org/org.module';
 import { UsersModule } from './users/users.module';
 import { PlaybooksModule } from './playbooks/playbooks.module';
 import { AgentsModule } from './agents/agents.module';
+import { CallsModule } from './calls/calls.module';
 
 @Module({
-  imports: [DbModule, HealthModule, AuthModule, OrgModule, UsersModule, PlaybooksModule, AgentsModule],
+  imports: [DbModule, HealthModule, AuthModule, OrgModule, UsersModule, PlaybooksModule, AgentsModule, CallsModule],
 })
 export class AppModule {}
