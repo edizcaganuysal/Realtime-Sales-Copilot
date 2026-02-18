@@ -41,7 +41,9 @@ export class CallsService {
         layoutPreset,
         phoneTo: dto.phoneTo,
         notes: dto.notes ?? null,
-        status: 'IN_PROGRESS',
+        // When Twilio is configured, the call starts as INITIATED and transitions
+        // to IN_PROGRESS via the status webhook. Without Twilio it's immediately active.
+        status: 'INITIATED',
         startedAt: new Date(),
       })
       .returning();
@@ -139,5 +141,37 @@ export class CallsService {
     }));
 
     return this.db.insert(schema.callSuggestions).values(rows).returning();
+  }
+
+  // ── Twilio helpers ────────────────────────────────────────────────────────
+
+  async setTwilioSid(callId: string, callSid: string) {
+    await this.db
+      .update(schema.calls)
+      .set({ twilioCallSid: callSid })
+      .where(eq(schema.calls.id, callId));
+  }
+
+  /**
+   * Called by the Twilio status webhook. Returns the updated call (if found).
+   */
+  async updateStatusBySid(
+    callSid: string,
+    status: string,
+    extra: { startedAt?: Date; endedAt?: Date } = {},
+  ) {
+    const [updated] = await this.db
+      .update(schema.calls)
+      .set({ status, ...extra })
+      .where(eq(schema.calls.twilioCallSid, callSid))
+      .returning();
+    return updated ?? null;
+  }
+
+  async setStatusImmediate(callId: string, status: string) {
+    await this.db
+      .update(schema.calls)
+      .set({ status })
+      .where(eq(schema.calls.id, callId));
   }
 }

@@ -34,7 +34,9 @@
     "pg": "^8.12.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
-    "socket.io": "^4.8.3"
+    "socket.io": "^4.8.3",
+    "twilio": "^5.12.1",
+    "ws": "^8.19.0"
   },
   "devDependencies": {
     "@nestjs/cli": "^10.4.0",
@@ -45,6 +47,7 @@
     "@types/node": "^20.14.0",
     "@types/passport-jwt": "^4.0.1",
     "@types/pg": "^8.11.10",
+    "@types/ws": "^8.18.1",
     "drizzle-kit": "^0.27.2",
     "ts-loader": "^9.5.4",
     "ts-node": "^10.9.2",

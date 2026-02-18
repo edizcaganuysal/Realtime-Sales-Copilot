@@ -4,6 +4,7 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import cookieParser from 'cookie-parser';
 import { IoAdapter } from '@nestjs/platform-socket.io';
+import express from 'express';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
@@ -11,6 +12,8 @@ async function bootstrap() {
 
   app.useWebSocketAdapter(new IoAdapter(app));
   app.use(cookieParser());
+  // Twilio status webhooks send application/x-www-form-urlencoded
+  app.use(express.urlencoded({ extended: false }));
 
   app.enableCors({
     origin: process.env['CORS_ORIGIN'] ?? 'http://localhost:3000',
