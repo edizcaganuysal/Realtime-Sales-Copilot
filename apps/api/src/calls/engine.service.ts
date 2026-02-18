@@ -16,11 +16,7 @@ const SUGGESTIONS = [
   "Let's nail down a follow-up with your technical lead.",
 ];
 
-const NUDGES: string[] = [
-  'ASK_QUESTION',
-  'CONFIRM_UNDERSTANDING',
-  'TOO_MUCH_TALKING',
-];
+const NUDGES: string[] = ['ASK_QUESTION', 'CONFIRM_UNDERSTANDING', 'TOO_MUCH_TALKING'];
 
 const CHECKLIST_ITEMS = [
   'Introduce yourself',
@@ -36,7 +32,12 @@ export class EngineService {
 
   constructor(private readonly gateway: CallsGateway) {}
 
-  start(callId: string) {
+  /**
+   * @param stubTranscript  When true the engine emits fake transcript events.
+   *                        Set to false when Twilio + STT handle real audio.
+   *                        Suggestions / nudges / checklist are ALWAYS emitted.
+   */
+  start(callId: string, stubTranscript = true) {
     if (this.engines.has(callId)) return;
 
     let tick = 0;
@@ -45,26 +46,28 @@ export class EngineService {
     const interval = setInterval(() => {
       tick++;
 
-      // Partial transcript every 2s
-      if (tick % 2 === 1) {
-        this.gateway.emitToCall(callId, 'transcript.partial', {
-          speaker: tick % 6 < 3 ? 'REP' : 'PROSPECT',
-          text: `[Speaking… tick ${tick}]`,
-          tsMs: Date.now(),
-        });
+      // Stub transcript (only when no real STT)
+      if (stubTranscript) {
+        if (tick % 2 === 1) {
+          this.gateway.emitToCall(callId, 'transcript.partial', {
+            speaker: tick % 6 < 3 ? 'REP' : 'PROSPECT',
+            text: `[Speaking\u2026 tick ${tick}]`,
+            tsMs: Date.now(),
+          });
+        }
+
+        if (tick % 5 === 0) {
+          this.gateway.emitToCall(callId, 'transcript.final', {
+            speaker: tick % 10 < 5 ? 'REP' : 'PROSPECT',
+            text: `Completed utterance at tick ${tick}.`,
+            tsMs: Date.now(),
+            isFinal: true,
+          });
+        }
       }
 
-      // Final transcript every 5 ticks
-      if (tick % 5 === 0) {
-        this.gateway.emitToCall(callId, 'transcript.final', {
-          speaker: tick % 10 < 5 ? 'REP' : 'PROSPECT',
-          text: `Completed utterance at tick ${tick}.`,
-          tsMs: Date.now(),
-          isFinal: true,
-        });
-      }
+      // Always: stage / suggestions / nudges / checklist
 
-      // Stage advancement every 12 ticks
       if (tick % 12 === 0 && stageIdx < STAGES.length - 1) {
         stageIdx++;
         this.gateway.emitToCall(callId, 'engine.stage', {
@@ -73,7 +76,6 @@ export class EngineService {
         });
       }
 
-      // Primary suggestion every 8 ticks
       if (tick % 8 === 0) {
         this.gateway.emitToCall(callId, 'engine.primary_suggestion', {
           text: SUGGESTIONS[Math.floor(tick / 8) % SUGGESTIONS.length],
@@ -82,14 +84,12 @@ export class EngineService {
         });
       }
 
-      // Nudges every 15 ticks
       if (tick % 15 === 0) {
         this.gateway.emitToCall(callId, 'engine.nudges', {
           nudges: [NUDGES[Math.floor(tick / 15) % NUDGES.length]],
         });
       }
 
-      // Checklist every 20 ticks
       if (tick % 20 === 0) {
         const doneCount = Math.min(Math.floor(tick / 20), CHECKLIST_ITEMS.length);
         this.gateway.emitToCall(callId, 'engine.checklist', {
