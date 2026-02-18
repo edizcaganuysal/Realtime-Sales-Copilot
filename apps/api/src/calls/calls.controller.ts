@@ -97,6 +97,16 @@ export class CallsController {
     return this.callsService.update(user, id, dto);
   }
 
+  @Get(':id/transcript')
+  transcript(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.callsService.getTranscript(user, id);
+  }
+
+  @Get(':id/summary')
+  summary(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.callsService.getSummary(user, id);
+  }
+
   @Post(':id/end')
   @HttpCode(200)
   async end(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
