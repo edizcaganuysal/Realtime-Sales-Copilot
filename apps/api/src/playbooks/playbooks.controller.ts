@@ -44,6 +44,13 @@ export class PlaybooksController {
     return this.playbooksService.update(user.orgId, id, dto);
   }
 
+  @Delete(':id')
+  @Roles(Role.ADMIN)
+  @HttpCode(204)
+  delete(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.playbooksService.delete(user.orgId, id);
+  }
+
   @Post(':id/set-default')
   @Roles(Role.ADMIN)
   @HttpCode(200)

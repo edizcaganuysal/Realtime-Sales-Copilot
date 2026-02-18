@@ -156,6 +156,14 @@ export class PlaybooksService {
     );
   }
 
+  async delete(orgId: string, id: string) {
+    const [deleted] = await this.db
+      .delete(schema.playbooks)
+      .where(and(eq(schema.playbooks.id, id), eq(schema.playbooks.orgId, orgId)))
+      .returning({ id: schema.playbooks.id });
+    if (!deleted) throw new NotFoundException('Playbook not found');
+  }
+
   async reorderStages(orgId: string, playbookId: string, dto: ReorderStagesDto) {
     const [playbook] = await this.db
       .select({ id: schema.playbooks.id })
