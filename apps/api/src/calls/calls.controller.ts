@@ -20,6 +20,8 @@ import { CurrentUser } from '../auth/current-user.decorator';
 import { CallsService } from './calls.service';
 import { EngineService } from './engine.service';
 import { TwilioService } from './twilio.service';
+import { SttService } from './stt.service';
+import { CallsGateway } from './calls.gateway';
 import { CreateCallDto } from './dto/create-call.dto';
 import { UpdateCallDto } from './dto/update-call.dto';
 
@@ -55,20 +57,20 @@ export class CallsController {
     const call = await this.callsService.create(user, dto);
 
     if (this.twilioService.available) {
-      // Real call — engine provides suggestions only; STT handles transcript
+      // Real call — engine starts only after Twilio confirms "answered" via webhook
       try {
         const callSid = await this.twilioService.initiateCall(call.id, dto.phoneTo);
         await this.callsService.setTwilioSid(call.id, callSid);
+        this.logger.log(`Call ${call.id} created with Twilio SID ${callSid} — waiting for answer`);
       } catch (err) {
         this.logger.error(`Twilio initiation failed: ${(err as Error).message}`);
-        // Fall back to stub transcript if Twilio fails
+        // Fall back to stub mode if Twilio fails
         await this.callsService.setStatusImmediate(call.id, 'IN_PROGRESS');
         this.engineService.start(call.id, true);
-        return call;
       }
-      this.engineService.start(call.id, false);
     } else {
       // Stub / dev mode — fake transcript + suggestions
+      this.logger.log(`Call ${call.id} created in stub mode`);
       await this.callsService.setStatusImmediate(call.id, 'IN_PROGRESS');
       this.engineService.start(call.id, true);
     }
@@ -118,6 +120,8 @@ export class TwilioWebhookController {
   constructor(
     private readonly callsService: CallsService,
     private readonly engineService: EngineService,
+    private readonly sttService: SttService,
+    private readonly gateway: CallsGateway,
   ) {}
 
   /**
@@ -131,6 +135,8 @@ export class TwilioWebhookController {
     // Convert http(s):// → ws(s)://
     const wsBase = base.replace(/^https/, 'wss').replace(/^http(?!s)/, 'ws');
     const streamUrl = `${wsBase}/media-stream?callId=${callId}`;
+
+    this.logger.log(`TwiML requested — callId: ${callId}, streamUrl: ${streamUrl}`);
 
     return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -149,10 +155,18 @@ export class TwilioWebhookController {
     const callSid = body['CallSid'] ?? '';
     const twilioStatus = (body['CallStatus'] ?? '').toLowerCase();
 
-    if (!callSid || !twilioStatus) return;
+    this.logger.log(`Status webhook received: CallSid=${callSid} CallStatus=${twilioStatus}`);
+
+    if (!callSid || !twilioStatus) {
+      this.logger.warn('Status webhook missing CallSid or CallStatus — ignoring');
+      return;
+    }
 
     const newStatus = TWILIO_STATUS[twilioStatus];
-    if (!newStatus) return;
+    if (!newStatus) {
+      this.logger.warn(`Unknown Twilio status "${twilioStatus}" — ignoring`);
+      return;
+    }
 
     const extra: { startedAt?: Date; endedAt?: Date } = {};
     if (newStatus === 'IN_PROGRESS') extra.startedAt = new Date();
@@ -160,8 +174,26 @@ export class TwilioWebhookController {
 
     const call = await this.callsService.updateStatusBySid(callSid, newStatus, extra);
 
-    if (call && (newStatus === 'COMPLETED' || newStatus === 'FAILED')) {
-      this.engineService.stop(call.id);
+    if (call) {
+      // Notify the live UI of the new call status
+      this.gateway.emitToCall(call.id, 'call.status', { status: newStatus, startedAt: extra.startedAt ?? null });
+      this.logger.log(`Emitted call.status=${newStatus} to room ${call.id}`);
+
+      if (newStatus === 'IN_PROGRESS') {
+        // Call is now answered — start the engine (no stub transcript, Deepgram handles it)
+        const stubTranscript = !this.sttService.available;
+        this.logger.log(
+          `Call ${call.id} answered — starting engine (stubTranscript=${stubTranscript})`,
+        );
+        this.engineService.start(call.id, stubTranscript);
+      }
+
+      if (newStatus === 'COMPLETED' || newStatus === 'FAILED') {
+        this.logger.log(`Call ${call.id} ended (${newStatus}) — stopping engine`);
+        this.engineService.stop(call.id);
+      }
+    } else {
+      this.logger.warn(`No call found for Twilio SID ${callSid}`);
     }
 
     this.logger.log(`Status webhook: ${callSid} → ${twilioStatus} (→ ${newStatus})`);
