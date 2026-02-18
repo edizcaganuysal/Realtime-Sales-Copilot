@@ -12,6 +12,7 @@ import { DRIZZLE, DrizzleDb } from '../db/db.module';
 import * as schema from '../db/schema';
 import { CallsGateway } from './calls.gateway';
 import { SttService } from './stt.service';
+import { EngineService } from './engine.service';
 
 type TwilioMsg =
   | { event: 'connected' }
@@ -38,6 +39,7 @@ export class MediaStreamService implements OnApplicationBootstrap {
     private readonly httpAdapterHost: HttpAdapterHost,
     private readonly gateway: CallsGateway,
     private readonly sttService: SttService,
+    private readonly engineService: EngineService,
     @Inject(DRIZZLE) private readonly db: DrizzleDb,
   ) {}
 
@@ -104,6 +106,9 @@ export class MediaStreamService implements OnApplicationBootstrap {
                   );
 
                   if (isFinal) {
+                    // Push to engine buffer so LLM tick has real transcript context
+                    this.engineService.pushTranscript(callId, spk, text);
+
                     await this.db.insert(schema.callTranscript).values({
                       callId,
                       tsMs,

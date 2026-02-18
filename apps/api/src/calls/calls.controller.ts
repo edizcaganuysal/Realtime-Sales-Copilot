@@ -101,13 +101,20 @@ export class CallsController {
   @HttpCode(200)
   async end(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     this.engineService.stop(id);
-    return this.callsService.end(user, id);
+    const call = await this.callsService.end(user, id);
+    // Fire post-call analysis async — do not await, do not block the response
+    void this.engineService
+      .runPostCall(call.id, call.notes ?? null, call.playbookId ?? null)
+      .catch((err: Error) =>
+        this.logger.error(`Post-call analysis failed for ${call.id}: ${err.message}`),
+      );
+    return call;
   }
 
   @Post(':id/suggestions/more')
   @HttpCode(200)
-  moreSuggestions(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.callsService.moreSuggestions(user, id);
+  moreSuggestions(@Param('id') id: string) {
+    return this.engineService.getAlternatives(id);
   }
 }
 
