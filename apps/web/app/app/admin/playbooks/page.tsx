@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Trash2 } from 'lucide-react';
 
 type Playbook = {
   id: string;
@@ -27,6 +28,14 @@ export default function PlaybooksPage() {
   }
 
   useEffect(() => { load(); }, []);
+
+  async function handleDelete(id: string, name: string) {
+    if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
+    const res = await fetch(`/api/playbooks/${id}`, { method: 'DELETE' });
+    if (res.ok || res.status === 204) {
+      setPlaybooks((prev) => prev.filter((pb) => pb.id !== id));
+    }
+  }
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -123,9 +132,17 @@ export default function PlaybooksPage() {
                     </span>
                   )}
                 </div>
-                <span className="text-xs text-slate-500">
-                  {new Date(pb.createdAt).toLocaleDateString()}
-                </span>
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-slate-500">
+                    {new Date(pb.createdAt).toLocaleDateString()}
+                  </span>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleDelete(pb.id, pb.name); }}
+                    className="p-1 text-slate-600 hover:text-red-400 transition-colors"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
               </li>
             ))}
           </ul>
