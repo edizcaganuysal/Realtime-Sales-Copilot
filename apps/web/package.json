@@ -14,12 +14,13 @@
     "@radix-ui/react-slot": "^1.1.0",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
+    "jose": "^5.9.6",
     "lucide-react": "^0.400.0",
     "next": "^15.1.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
-    "tailwind-merge": "^2.3.0",
-    "jose": "^5.9.6"
+    "socket.io-client": "^4.8.3",
+    "tailwind-merge": "^2.3.0"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
