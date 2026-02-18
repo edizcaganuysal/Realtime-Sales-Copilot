@@ -130,6 +130,14 @@ export default function CallsPage() {
                         Rejoin
                       </Link>
                     )}
+                    {(call.status === 'COMPLETED' || call.status === 'FAILED') && (
+                      <Link
+                        href={`/app/calls/${call.id}`}
+                        className="text-xs px-2.5 py-1 bg-slate-700 hover:bg-slate-600 text-slate-300 hover:text-white rounded-lg transition-colors"
+                      >
+                        Review
+                      </Link>
+                    )}
                   </td>
                 </tr>
               ))}

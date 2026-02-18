@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq } from 'drizzle-orm';
 import { GuidanceLevel, LiveLayout } from '@live-sales-coach/shared';
 import type { JwtPayload } from '@live-sales-coach/shared';
 import { DRIZZLE, DrizzleDb } from '../db/db.module';
@@ -113,6 +113,39 @@ export class CallsService {
       .returning();
 
     return updated;
+  }
+
+  // ── Transcript + summary ──────────────────────────────────────────────────
+
+  async getTranscript(user: JwtPayload, id: string) {
+    const [call] = await this.db
+      .select()
+      .from(schema.calls)
+      .where(and(eq(schema.calls.id, id), eq(schema.calls.orgId, user.orgId)))
+      .limit(1);
+    if (!call) throw new NotFoundException('Call not found');
+
+    return this.db
+      .select()
+      .from(schema.callTranscript)
+      .where(and(eq(schema.callTranscript.callId, id), eq(schema.callTranscript.isFinal, true)))
+      .orderBy(asc(schema.callTranscript.tsMs));
+  }
+
+  async getSummary(user: JwtPayload, id: string) {
+    const [call] = await this.db
+      .select()
+      .from(schema.calls)
+      .where(and(eq(schema.calls.id, id), eq(schema.calls.orgId, user.orgId)))
+      .limit(1);
+    if (!call) throw new NotFoundException('Call not found');
+
+    const [summary] = await this.db
+      .select()
+      .from(schema.callSummaries)
+      .where(eq(schema.callSummaries.callId, id))
+      .limit(1);
+    return summary ?? null;
   }
 
   // ── Twilio helpers ────────────────────────────────────────────────────────

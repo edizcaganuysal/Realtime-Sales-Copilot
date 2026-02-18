@@ -29,7 +29,11 @@ export class TwilioService implements OnModuleInit {
           '└─────────────────────────────────────────────────────────┘',
       );
     } else {
+      const base = this.webhookBase!.replace(/\/$/, '');
       this.logger.log(`Twilio ready — from: ${this.fromNumber}`);
+      this.logger.log(`TwiML URL  : GET  ${base}/calls/twiml?callId=<callId>`);
+      this.logger.log(`Status URL : POST ${base}/calls/webhook/status`);
+      this.logger.log(`Media WS   : wss${base.slice(5)}/media-stream?callId=<callId>`);
     }
   }
 
