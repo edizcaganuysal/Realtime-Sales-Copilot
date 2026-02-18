@@ -240,4 +240,3 @@ Roles: `ADMIN > MANAGER > REP`
 | `MINIMAL`    | Large card   | 1–2 chips           | Drawer button only   |
 | `STANDARD`   | Large card   | 3 chips + checklist | Slide-over drawer    |
 | `TRANSCRIPT` | Floating card | Minimal            | Center stage         |
-# Sales-App
