@@ -115,34 +115,6 @@ export class CallsService {
     return updated;
   }
 
-  async moreSuggestions(user: JwtPayload, id: string) {
-    const [call] = await this.db
-      .select()
-      .from(schema.calls)
-      .where(and(eq(schema.calls.id, id), eq(schema.calls.orgId, user.orgId)))
-      .limit(1);
-
-    if (!call) throw new NotFoundException('Call not found');
-
-    const now = Date.now();
-    const stubs = [
-      { text: 'Could you tell me more about your current process?', intent: 'DISCOVERY' },
-      { text: 'What would success look like for you in six months?', intent: 'VISION' },
-      { text: 'Have you explored alternatives? What held you back?', intent: 'OBJECTION' },
-    ];
-
-    const rows = stubs.map((s, i) => ({
-      callId: id,
-      tsMs: now,
-      kind: 'ALTERNATIVE' as const,
-      rank: i,
-      text: s.text,
-      intent: s.intent,
-    }));
-
-    return this.db.insert(schema.callSuggestions).values(rows).returning();
-  }
-
   // ── Twilio helpers ────────────────────────────────────────────────────────
 
   async setTwilioSid(callId: string, callSid: string) {
