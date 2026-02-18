@@ -1,6 +1,6 @@
 # Live Sales Coach
 
-A web-first, multi-tenant B2B sales coaching platform. AI listens to outbound calls in real time and gives reps clean, focused guidance — one suggestion at a time.
+A web-first, multi-tenant B2B sales coaching platform. AI listens to outbound calls in real time and gives reps clean, focused guidance.
 
 ## Stack
 
