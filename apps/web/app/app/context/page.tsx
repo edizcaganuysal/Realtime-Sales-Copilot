@@ -350,7 +350,7 @@ function toPrettyJson(value: unknown, fallback: string) {
 function toInputValue(context: SalesContext, key: keyof SalesContext): string {
   const value = context[key];
   if (Array.isArray(value)) return value.join('\n');
-  return value;
+  return (value as string | null | undefined) ?? '';
 }
 
 function fieldRows(type: ContextFieldType) {
@@ -405,6 +405,12 @@ export default function ContextPage() {
       const nextContext: SalesContext = {
         ...DEFAULT_CONTEXT,
         ...contextData,
+        companyName: contextData?.companyName ?? '',
+        whatWeSell: contextData?.whatWeSell ?? '',
+        howItWorks: contextData?.howItWorks ?? '',
+        offerCategory: contextData?.offerCategory ?? 'service',
+        targetCustomer: contextData?.targetCustomer ?? '',
+        knowledgeAppendix: contextData?.knowledgeAppendix ?? '',
         targetRoles: Array.isArray(contextData?.targetRoles) ? contextData.targetRoles : [],
         industries: Array.isArray(contextData?.industries) ? contextData.industries : [],
         buyingTriggers: Array.isArray(contextData?.buyingTriggers) ? contextData.buyingTriggers : [],
@@ -477,6 +483,12 @@ export default function ContextPage() {
     const nextContext: SalesContext = {
       ...DEFAULT_CONTEXT,
       ...saved,
+      companyName: saved?.companyName ?? '',
+      whatWeSell: saved?.whatWeSell ?? '',
+      howItWorks: saved?.howItWorks ?? '',
+      offerCategory: saved?.offerCategory ?? 'service',
+      targetCustomer: saved?.targetCustomer ?? '',
+      knowledgeAppendix: saved?.knowledgeAppendix ?? '',
       targetRoles: Array.isArray(saved?.targetRoles) ? saved.targetRoles : [],
       industries: Array.isArray(saved?.industries) ? saved.industries : [],
       buyingTriggers: Array.isArray(saved?.buyingTriggers) ? saved.buyingTriggers : [],
