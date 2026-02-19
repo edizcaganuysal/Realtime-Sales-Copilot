@@ -7,10 +7,10 @@ import {
   AlertTriangle,
   Bot,
   Copy,
-  Ellipsis,
-  MessageSquareText,
+  MessageSquare,
   Mic,
   MicOff,
+  MoreHorizontal,
   PhoneCall,
   PhoneOff,
 } from 'lucide-react';
@@ -754,7 +754,7 @@ export default function LiveCallPage({
             onClick={() => setTranscriptOpen(true)}
             className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 px-2.5 py-1.5 text-xs text-slate-300 transition-colors hover:border-slate-500 hover:text-white"
           >
-            <MessageSquareText size={13} />
+            <MessageSquare size={13} />
             Transcript
           </button>
           <button
@@ -763,7 +763,7 @@ export default function LiveCallPage({
             disabled={prospectSpeaking}
             className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 px-2.5 py-1.5 text-xs text-slate-300 transition-colors hover:border-slate-500 hover:text-white"
           >
-            <Ellipsis size={13} />
+            <MoreHorizontal size={13} />
             More options
           </button>
           <button
