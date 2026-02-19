@@ -1,4 +1,4 @@
-import { IsEnum, IsObject, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsBoolean, IsEnum, IsObject, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { AgentScope } from '@live-sales-coach/shared';
 
 export class UpdateAgentDto {
@@ -20,4 +20,16 @@ export class UpdateAgentDto {
   @IsOptional()
   @IsObject()
   configJson?: Record<string, unknown>;
+
+  @IsOptional()
+  @IsBoolean()
+  useDefaultTemplate?: boolean;
+
+  @IsOptional()
+  @IsString()
+  promptDelta?: string;
+
+  @IsOptional()
+  @IsString()
+  fullPromptOverride?: string | null;
 }

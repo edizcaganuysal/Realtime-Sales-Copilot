@@ -9,6 +9,9 @@ type Agent = {
   name: string;
   prompt: string;
   scope: string;
+  useDefaultTemplate?: boolean;
+  promptDelta?: string;
+  fullPromptOverride?: string | null;
   status: AgentStatus;
   ownerUserId: string | null;
   configJson?: Record<string, unknown>;
@@ -16,14 +19,14 @@ type Agent = {
 };
 
 const STATUS_BADGE: Partial<Record<AgentStatus, string>> = {
-  APPROVED: 'bg-emerald-500/15 text-emerald-400',
+  APPROVED: 'bg-sky-500/15 text-sky-400',
   REJECTED: 'bg-red-500/15 text-red-400',
   PENDING_APPROVAL: 'bg-yellow-500/15 text-yellow-400',
   DRAFT: 'bg-slate-700 text-slate-300',
 };
 
 const INPUT_CLASS =
-  'w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500';
+  'w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-sky-500';
 
 export default function AdminAgentsPage() {
   const [pending, setPending] = useState<Agent[]>([]);
@@ -34,7 +37,15 @@ export default function AdminAgentsPage() {
 
   const [reviewing, setReviewing] = useState<Agent | null>(null);
   const [editing, setEditing] = useState<Agent | null>(null);
-  const [form, setForm] = useState({ name: '', prompt: '', scope: 'ORG', configText: '{}' });
+  const [form, setForm] = useState({
+    name: '',
+    prompt: '',
+    scope: 'ORG',
+    configText: '{}',
+    useDefaultTemplate: true,
+    promptDelta: '',
+    fullPromptOverride: '',
+  });
 
   async function load() {
     setLoading(true);
@@ -60,6 +71,9 @@ export default function AdminAgentsPage() {
       prompt: agent.prompt,
       scope: agent.scope,
       configText: JSON.stringify(agent.configJson ?? {}, null, 2),
+      useDefaultTemplate: agent.useDefaultTemplate ?? true,
+      promptDelta: agent.promptDelta ?? agent.prompt ?? '',
+      fullPromptOverride: agent.fullPromptOverride ?? '',
     });
     setError('');
   }
@@ -99,6 +113,9 @@ export default function AdminAgentsPage() {
         prompt: form.prompt,
         scope: form.scope,
         configJson: parsedConfig,
+        useDefaultTemplate: form.useDefaultTemplate,
+        promptDelta: form.promptDelta,
+        fullPromptOverride: form.fullPromptOverride.trim() ? form.fullPromptOverride : null,
       }),
     });
     const data = await res.json();
@@ -305,7 +322,7 @@ export default function AdminAgentsPage() {
               <button
                 onClick={() => handleAction(reviewing.id, 'approve')}
                 disabled={!!actioning}
-                className="text-xs px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg transition-colors text-white disabled:opacity-40"
+                className="text-xs px-3 py-1.5 bg-sky-600 hover:bg-sky-500 rounded-lg transition-colors text-white disabled:opacity-40"
               >
                 {actioning === reviewing.id + 'approve' ? 'Approving...' : 'Approve'}
               </button>
@@ -349,6 +366,40 @@ export default function AdminAgentsPage() {
                 />
               </div>
               <div>
+                <label className="text-xs text-slate-400 block mb-1.5">Prompt mode</label>
+                <select
+                  value={form.useDefaultTemplate ? 'DEFAULT' : 'FULL'}
+                  onChange={(e) =>
+                    setForm((p) => ({ ...p, useDefaultTemplate: e.target.value === 'DEFAULT' }))
+                  }
+                  className={INPUT_CLASS}
+                >
+                  <option value="DEFAULT">Default template + context + delta</option>
+                  <option value="FULL">Context + full override prompt</option>
+                </select>
+              </div>
+              {form.useDefaultTemplate ? (
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1.5">Agent add-on prompt (delta)</label>
+                  <textarea
+                    rows={5}
+                    value={form.promptDelta}
+                    onChange={(e) => setForm((p) => ({ ...p, promptDelta: e.target.value }))}
+                    className={INPUT_CLASS}
+                  />
+                </div>
+              ) : (
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1.5">Full prompt override</label>
+                  <textarea
+                    rows={6}
+                    value={form.fullPromptOverride}
+                    onChange={(e) => setForm((p) => ({ ...p, fullPromptOverride: e.target.value }))}
+                    className={INPUT_CLASS}
+                  />
+                </div>
+              )}
+              <div>
                 <label className="text-xs text-slate-400 block mb-1.5">Scope</label>
                 <select
                   value={form.scope}
@@ -374,7 +425,7 @@ export default function AdminAgentsPage() {
               <button
                 onClick={handleSaveEdit}
                 disabled={!!actioning}
-                className="text-xs px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg transition-colors text-white disabled:opacity-40"
+                className="text-xs px-3 py-1.5 bg-sky-600 hover:bg-sky-500 rounded-lg transition-colors text-white disabled:opacity-40"
               >
                 {actioning === editing.id + 'edit' ? 'Saving...' : 'Save'}
               </button>

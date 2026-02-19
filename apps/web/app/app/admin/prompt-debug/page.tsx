@@ -110,7 +110,7 @@ export default function PromptDebugPage() {
     <div className="p-8 max-w-5xl space-y-4">
       <div>
         <h1 className="text-lg font-semibold text-white">Prompt Debug</h1>
-        <p className="text-sm text-slate-500 mt-1">Validate prompt and output against transcript + product context.</p>
+        <p className="text-sm text-slate-500 mt-1">Validate prompt and output against transcript + offering context.</p>
       </div>
 
       <div className="rounded-xl border border-slate-800 bg-slate-900 p-4 space-y-3">
@@ -140,21 +140,21 @@ export default function PromptDebugPage() {
             </select>
           </div>
           <div>
-            <label className="block text-xs text-slate-400 mb-1.5">Products mode</label>
+            <label className="block text-xs text-slate-400 mb-1.5">Offerings mode</label>
             <select
               value={productsMode}
               onChange={(event) => setProductsMode(event.target.value as 'ALL' | 'SELECTED')}
               className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white"
             >
-              <option value="ALL">All products</option>
-              <option value="SELECTED">Selected products</option>
+              <option value="ALL">All offerings</option>
+              <option value="SELECTED">Selected offerings</option>
             </select>
           </div>
         </div>
 
         {productsMode === 'SELECTED' && (
           <div className="rounded-lg border border-slate-800 bg-slate-950 p-3">
-            <p className="text-xs text-slate-400 mb-2">Selected products: {selectedProductsLabel}</p>
+            <p className="text-xs text-slate-400 mb-2">Selected offerings: {selectedProductsLabel}</p>
             <div className="grid gap-1 md:grid-cols-2">
               {products.map((product) => (
                 <label key={product.id} className="text-sm text-slate-300 flex items-center gap-2">

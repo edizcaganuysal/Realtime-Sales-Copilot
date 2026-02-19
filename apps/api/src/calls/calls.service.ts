@@ -14,6 +14,7 @@ import { CreateCallDto } from './dto/create-call.dto';
 import { UpdateCallDto } from './dto/update-call.dto';
 import { CreditsService } from '../credits/credits.service';
 import { getCreditCost } from '../config/credit-costs';
+import { LlmService } from './llm.service';
 
 type Tx = Parameters<Parameters<DrizzleDb['transaction']>[0]>[0];
 
@@ -22,7 +23,111 @@ export class CallsService {
   constructor(
     @Inject(DRIZZLE) private readonly db: DrizzleDb,
     private readonly creditsService: CreditsService,
+    private readonly llm: LlmService,
   ) {}
+
+  private compactText(value: string, max = 200) {
+    const cleaned = value.replace(/\s+/g, ' ').trim();
+    if (cleaned.length <= max) return cleaned;
+    return `${cleaned.slice(0, max - 1).trimEnd()}...`;
+  }
+
+  private buildDeterministicOpener(input: {
+    companyName: string;
+    whatWeSell: string;
+    callType: string;
+    notes: string | null;
+    offeringName: string;
+  }) {
+    const companyName = input.companyName || 'our team';
+    const offering = input.offeringName || 'our offering';
+    if (input.callType === 'follow_up' || /follow|existing|check-in/i.test(input.notes ?? '')) {
+      return `Hi, this is ${companyName} following up on ${offering}. Before we continue, what changed since our last conversation?`;
+    }
+    if (input.callType === 'discovery') {
+      return `Hi, this is ${companyName}. I want to understand your current process around ${offering}. What is the biggest blocker today?`;
+    }
+    return `Hi, this is ${companyName}. Quick reason for my call about ${offering}: I think we can help improve outcomes. Is now a bad time, or do you have a minute?`;
+  }
+
+  private async generatePreparedOpener(
+    orgId: string,
+    callId: string,
+    callType: string,
+    notes: string | null,
+    productsMode: ProductsMode,
+  ) {
+    const [contextRow, selectedProducts, allProducts] = await Promise.all([
+      this.db
+        .select()
+        .from(schema.salesContext)
+        .where(eq(schema.salesContext.orgId, orgId))
+        .limit(1)
+        .then((rows) => rows[0] ?? null),
+      productsMode === ProductsMode.SELECTED
+        ? this.db
+            .select({
+              id: schema.products.id,
+              name: schema.products.name,
+              elevatorPitch: schema.products.elevatorPitch,
+            })
+            .from(schema.callProducts)
+            .innerJoin(schema.products, eq(schema.callProducts.productId, schema.products.id))
+            .where(and(eq(schema.callProducts.callId, callId), eq(schema.products.orgId, orgId)))
+            .orderBy(asc(schema.products.name))
+        : Promise.resolve([]),
+      this.db
+        .select({
+          id: schema.products.id,
+          name: schema.products.name,
+          elevatorPitch: schema.products.elevatorPitch,
+        })
+        .from(schema.products)
+        .where(eq(schema.products.orgId, orgId))
+        .orderBy(asc(schema.products.name)),
+    ]);
+
+    const selected = productsMode === ProductsMode.SELECTED && selectedProducts.length > 0
+      ? selectedProducts
+      : allProducts;
+    const names = selected.map((item) => item.name).slice(0, 4);
+    const summary = selected
+      .map((item) => `${item.name}${item.elevatorPitch ? `: ${this.compactText(item.elevatorPitch, 120)}` : ''}`)
+      .slice(0, 4)
+      .join(' | ');
+
+    const context = {
+      companyName: contextRow?.companyName?.trim() || '',
+      whatWeSell: contextRow?.whatWeSell?.trim() || '',
+      callType,
+      notes,
+      offeringName: names[0] ?? '',
+    };
+
+    const deterministic = this.buildDeterministicOpener(context);
+    if (!this.llm.available) {
+      return deterministic;
+    }
+
+    try {
+      const system =
+        'You are an expert sales coach that drafts a concise opening line before a live call starts. Output plain text only.';
+      const user =
+        `Call type: ${callType}\n` +
+        `Company: ${context.companyName || 'Unknown'}\n` +
+        `What we sell: ${context.whatWeSell || 'Not provided'}\n` +
+        `Offerings: ${names.length > 0 ? names.join(', ') : 'None'}\n` +
+        `Offering summary: ${summary || 'None'}\n` +
+        `Notes: ${notes ?? 'None'}\n` +
+        'Generate one opener in 1-2 sentences for the rep. It must include rapport, reason, and one question. Keep it speakable and concrete. Do not use markdown or labels.';
+      const raw = await this.llm.chatFast(system, user);
+      const opener = raw.replace(/\s+/g, ' ').trim();
+      if (!opener) return deterministic;
+      return opener;
+    } catch {
+      return deterministic;
+    }
+  }
 
   private async getOrgSettings(orgId: string) {
     const [settings] = await this.db
@@ -121,6 +226,7 @@ export class CallsService {
     const productsMode = dto.products_mode ?? ProductsMode.ALL;
     const selectedProductIds = this.normalizeSelectedProductIds(dto.selected_product_ids);
     const callMode = dto.mode ?? 'OUTBOUND';
+    const callType = dto.call_type ?? 'cold_outbound';
     const usageType =
       callMode === 'MOCK' ? 'USAGE_CALL_PRACTICE' : 'USAGE_CALL_REAL';
     const debitAmount =
@@ -150,6 +256,7 @@ export class CallsService {
           agentId: dto.agentId ?? null,
           playbookId: null,
           mode: callMode,
+          callType,
           guidanceLevel,
           layoutPreset,
           productsMode,
@@ -166,7 +273,24 @@ export class CallsService {
       return created;
     });
 
-    return this.hydrateCall(user.orgId, call);
+    const opener = await this.generatePreparedOpener(
+      user.orgId,
+      call.id,
+      callType,
+      dto.notes ?? null,
+      productsMode,
+    );
+
+    const [withOpener] = await this.db
+      .update(schema.calls)
+      .set({
+        preparedOpenerText: opener,
+        preparedOpenerGeneratedAt: new Date(),
+      })
+      .where(eq(schema.calls.id, call.id))
+      .returning();
+
+    return this.hydrateCall(user.orgId, withOpener ?? call);
   }
 
   async list(user: JwtPayload) {

@@ -8,6 +8,7 @@ import type { JwtPayload } from '@live-sales-coach/shared';
 import { OrgService } from './org.service';
 import { UpdateOrgSettingsDto } from './dto/update-org-settings.dto';
 import { UpdateCompanyProfileDto } from './dto/update-company-profile.dto';
+import { UpdateSalesContextDto } from './dto/update-sales-context.dto';
 import { SubscribePlanDto } from './dto/subscribe-plan.dto';
 import { AdjustCreditsDto } from './dto/adjust-credits.dto';
 
@@ -38,6 +39,18 @@ export class OrgController {
   @Roles(Role.MANAGER)
   updateCompanyProfile(@CurrentUser() user: JwtPayload, @Body() dto: UpdateCompanyProfileDto) {
     return this.orgService.updateCompanyProfile(user.orgId, dto);
+  }
+
+  @Get('sales-context')
+  @Roles(Role.REP)
+  getSalesContext(@CurrentUser() user: JwtPayload) {
+    return this.orgService.getSalesContext(user.orgId);
+  }
+
+  @Patch('sales-context')
+  @Roles(Role.MANAGER)
+  updateSalesContext(@CurrentUser() user: JwtPayload, @Body() dto: UpdateSalesContextDto) {
+    return this.orgService.updateSalesContext(user.orgId, dto);
   }
 
   @Get('subscription')

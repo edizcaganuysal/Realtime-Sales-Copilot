@@ -251,6 +251,10 @@ export class AuthService {
         ...EMPTY_COMPANY_PROFILE_DEFAULTS,
       });
 
+      await tx.insert(schema.salesContext).values({
+        orgId: org.id,
+      });
+
       const [user] = await tx
         .insert(schema.users)
         .values({

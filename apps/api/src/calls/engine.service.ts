@@ -19,9 +19,14 @@ type StageInfo = {
 type CallContext = {
   callId: string;
   callMode: string;
+  callType: string;
   guidanceLevel: string;
   agentPrompt: string;
+  agentUseDefaultTemplate: boolean;
+  agentPromptDelta: string;
+  agentFullPrompt: string | null;
   notes: string | null;
+  preparedOpenerText: string | null;
   stages: StageInfo[];
   companyProfile: CompanyProfile;
   productContext: ProductContext;
@@ -75,6 +80,14 @@ type TickReason = 'session_start' | 'prospect_final' | 'prospect_silence' | 'man
 
 type AlternativesMode = 'SWAP' | 'MORE_OPTIONS';
 
+type CoachMemory = {
+  used_value_props: string[];
+  used_differentiators: string[];
+  used_objection_responses: string[];
+  questions_asked: string[];
+  last_5_primary_suggestions: string[];
+};
+
 type EngineState = {
   context: CallContext | null;
   cancelled: boolean;
@@ -102,6 +115,7 @@ type EngineState = {
   sessionStarted: boolean;
   recentPrimarySuggestions: string[];
   pendingTickPayload: { reason: TickReason; utteranceSeq: number; payload: EngineTickPayload } | null;
+  coachMemory: CoachMemory;
   stubTick: number;
   stubInterval: ReturnType<typeof setInterval> | null;
   llmInterval: ReturnType<typeof setInterval> | null;
@@ -334,6 +348,13 @@ export class EngineService implements OnModuleDestroy {
       sessionStarted: false,
       recentPrimarySuggestions: [],
       pendingTickPayload: null,
+      coachMemory: {
+        used_value_props: [],
+        used_differentiators: [],
+        used_objection_responses: [],
+        questions_asked: [],
+        last_5_primary_suggestions: [],
+      },
       stubTick: 0,
       stubInterval: null,
       llmInterval: null,
@@ -378,6 +399,12 @@ export class EngineService implements OnModuleDestroy {
     this.emitInitialSuggestion(callId, state);
   }
 
+  markPrimaryConsumed(callId: string) {
+    const state = this.engines.get(callId);
+    if (!state || state.cancelled) return;
+    this.gateway.emitToCall(callId, 'engine.primary_consumed', { tsMs: Date.now() });
+  }
+
   /**
    * Push a final transcript line. Triggers LLM immediately when PROSPECT finishes.
    * When PROSPECT starts talking, signals UI to dim suggestions.
@@ -395,6 +422,7 @@ export class EngineService implements OnModuleDestroy {
       state.stats.repTurns++;
       state.stats.repWords += this.countWords(text);
       if (text.includes('?')) state.stats.repQuestions++;
+      this.gateway.emitToCall(callId, 'engine.primary_consumed', { tsMs: Date.now() });
     } else {
       state.stats.prospectTurns++;
       state.stats.prospectWords += this.countWords(text);
@@ -577,12 +605,14 @@ export class EngineService implements OnModuleDestroy {
       return;
     }
 
-    const openingSuggestions = this.buildOpeningSuggestions(
-      state.context.companyProfile,
-      state.context.productContext,
-      state.context.callMode,
-      state.context.notes,
-    );
+    const openingSuggestions = state.context.preparedOpenerText?.trim()
+      ? [state.context.preparedOpenerText.trim()]
+      : this.buildOpeningSuggestions(
+          state.context.companyProfile,
+          state.context.productContext,
+          state.context.callMode,
+          state.context.notes,
+        );
     const payload: EngineTickPayload = {
       suggestions: openingSuggestions,
       nudges: ['ASK_QUESTION', 'CONFIRM_UNDERSTANDING'].slice(0, 2),
@@ -664,22 +694,20 @@ export class EngineService implements OnModuleDestroy {
   }
 
   private normalizeNudges(raw: string[], state: EngineState): string[] {
-    const picked = Array.from(new Set(raw.filter((item) => ALLOWED_NUDGES.includes(item))));
-    if (picked.length < 2) {
-      if (state.stats.talkRatioRep > 65 && !picked.includes('TOO_MUCH_TALKING')) {
-        picked.push('TOO_MUCH_TALKING');
-      }
-      if (state.stats.objectionDetected && !picked.includes('ADDRESS_OBJECTION')) {
-        picked.push('ADDRESS_OBJECTION');
-      }
-      if (!picked.includes('ASK_QUESTION')) {
-        picked.push('ASK_QUESTION');
-      }
-      if (!picked.includes('CONFIRM_UNDERSTANDING')) {
-        picked.push('CONFIRM_UNDERSTANDING');
-      }
+    const cleaned = raw
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0)
+      .map((item) => (ALLOWED_NUDGES.includes(item) ? item : item.replace(/\s+/g, ' ')));
+    const picked = Array.from(new Set(cleaned)).slice(0, 3);
+    if (picked.length >= 2) return picked;
+    const fallbacks = ['Ask one question', 'Confirm understanding', 'Drive next step'];
+    if (state.stats.talkRatioRep > 65) {
+      fallbacks.unshift('Let prospect finish');
     }
-    return picked.slice(0, 3);
+    if (state.stats.objectionDetected) {
+      fallbacks.unshift('Address concern directly');
+    }
+    return Array.from(new Set([...picked, ...fallbacks])).slice(0, 3);
   }
 
   private pickNonRepeatingPrimary(
@@ -888,7 +916,7 @@ export class EngineService implements OnModuleDestroy {
         )
       : [];
 
-    const [companyProfile, productContext, agentPrompt] = await Promise.all([
+    const [companyProfile, productContext, agentConfig] = await Promise.all([
       this.fetchCompanyProfile(orgId),
       this.fetchProductContextForDebug(orgId, mode, selectedIds),
       this.resolveDebugAgentPrompt(orgId, input.agentId),
@@ -897,9 +925,14 @@ export class EngineService implements OnModuleDestroy {
     const context: CallContext = {
       callId: 'prompt-debug',
       callMode: 'OUTBOUND',
+      callType: 'cold_outbound',
       guidanceLevel: input.guidance_level ?? 'STANDARD',
-      agentPrompt,
+      agentPrompt: agentConfig.agentPrompt,
+      agentUseDefaultTemplate: agentConfig.agentUseDefaultTemplate,
+      agentPromptDelta: agentConfig.agentPromptDelta,
+      agentFullPrompt: agentConfig.agentFullPrompt,
       notes: input.notes ?? null,
+      preparedOpenerText: null,
       stages: FALLBACK_STAGES,
       companyProfile,
       productContext,
@@ -954,26 +987,28 @@ export class EngineService implements OnModuleDestroy {
     try {
       const raw = await this.llm.chatFast(systemPrompt, userPrompt);
       const parsed = this.llm.parseJson<{
-        suggestions?: string[];
-        suggestion?: string;
+        primary?: string;
+        moment?: string;
         nudges?: string[];
-        objection?: string | null;
-        sentiment?: 'positive' | 'neutral' | 'negative';
-        supportingData?: string[];
+        context_toast?: { title?: string; bullets?: string[] } | null;
       }>(raw, {});
       const suggestions = this.normalizeSuggestions(
-        parsed.suggestions ?? (parsed.suggestion ? [parsed.suggestion] : []),
+        parsed.primary ? [parsed.primary] : [],
         companyProfile,
         productContext,
         currentStage.name,
-        parsed.objection ?? null,
+        null,
         1,
         lastProspectLine,
       );
-      const nudges = (parsed.nudges ?? [])
-        .filter((item) => ALLOWED_NUDGES.includes(item))
+      const nudges = this.pickNonEmpty(parsed.nudges, 3)
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0)
         .slice(0, 3);
-      const cards = (parsed.supportingData ?? [])
+      const cards = [
+        parsed.context_toast?.title?.trim() ? `Context: ${parsed.context_toast.title.trim()}` : '',
+        ...this.pickNonEmpty(parsed.context_toast?.bullets, 4),
+      ]
         .map((line) => line.trim())
         .filter((line) => line.length > 0)
         .slice(0, 4);
@@ -989,13 +1024,8 @@ export class EngineService implements OnModuleDestroy {
           suggestions,
           nudges,
           cards: cards.length > 0 ? cards : fallbackCards,
-          objection: parsed.objection ?? null,
-          sentiment:
-            parsed.sentiment === 'positive' ||
-            parsed.sentiment === 'negative' ||
-            parsed.sentiment === 'neutral'
-              ? parsed.sentiment
-              : 'neutral',
+          objection: null,
+          sentiment: 'neutral',
         },
       };
     } catch (error) {
@@ -1106,16 +1136,33 @@ export class EngineService implements OnModuleDestroy {
 
     if (!call || state.cancelled) return null;
 
-    let agentPrompt = state.context?.agentPrompt ?? PROFESSIONAL_SALES_CALL_AGENT_PROMPT;
+    let agentPrompt = state.context?.agentPrompt ?? '';
+    let agentUseDefaultTemplate = true;
+    let agentPromptDelta = '';
+    let agentFullPrompt: string | null = null;
     if (call.agentId) {
       const [agent] = await this.db
-        .select({ prompt: schema.agents.prompt })
+        .select({
+          prompt: schema.agents.prompt,
+          useDefaultTemplate: schema.agents.useDefaultTemplate,
+          promptDelta: schema.agents.promptDelta,
+          fullPromptOverride: schema.agents.fullPromptOverride,
+        })
         .from(schema.agents)
         .where(eq(schema.agents.id, call.agentId))
         .limit(1);
-      if (agent?.prompt) {
-        agentPrompt = agent.prompt;
+      if (agent) {
+        agentPrompt = agent.prompt ?? '';
+        agentUseDefaultTemplate = agent.useDefaultTemplate ?? true;
+        agentPromptDelta = agent.promptDelta?.trim() || agent.prompt?.trim() || '';
+        agentFullPrompt = agent.fullPromptOverride?.trim() || agent.prompt?.trim() || null;
       }
+    }
+    if (!call.agentId) {
+      agentPromptDelta = '';
+      agentFullPrompt = null;
+      agentPrompt = '';
+      agentUseDefaultTemplate = true;
     }
 
     const [companyProfile, productContext] = await Promise.all([
@@ -1125,12 +1172,22 @@ export class EngineService implements OnModuleDestroy {
 
     if (state.cancelled) return null;
 
+    state.coachMemory = this.normalizeCoachMemory(call.coachMemory);
+    if (state.coachMemory.last_5_primary_suggestions.length > 0) {
+      state.recentPrimarySuggestions = state.coachMemory.last_5_primary_suggestions.slice(0, 5);
+    }
+
     state.context = {
       callId,
       callMode: call.mode,
+      callType: call.callType ?? 'cold_outbound',
       guidanceLevel: call.guidanceLevel,
       agentPrompt,
+      agentUseDefaultTemplate,
+      agentPromptDelta,
+      agentFullPrompt,
       notes: call.notes ?? null,
+      preparedOpenerText: call.preparedOpenerText ?? null,
       stages: state.context?.stages ?? FALLBACK_STAGES,
       companyProfile,
       productContext,
@@ -1152,6 +1209,23 @@ export class EngineService implements OnModuleDestroy {
       .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
       .filter((entry) => entry.length > 0)
       .slice(0, 40);
+  }
+
+  private normalizeCoachMemory(value: unknown): CoachMemory {
+    const record = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+    return {
+      used_value_props: this.parseStringArray(record['used_value_props']).slice(0, 40),
+      used_differentiators: this.parseStringArray(record['used_differentiators']).slice(0, 40),
+      used_objection_responses: this.parseStringArray(record['used_objection_responses']).slice(
+        0,
+        40,
+      ),
+      questions_asked: this.parseStringArray(record['questions_asked']).slice(0, 40),
+      last_5_primary_suggestions: this.parseStringArray(record['last_5_primary_suggestions']).slice(
+        0,
+        5,
+      ),
+    };
   }
 
   private valueToOneLine(value: unknown): string {
@@ -1382,13 +1456,38 @@ export class EngineService implements OnModuleDestroy {
   }
 
   private async resolveDebugAgentPrompt(orgId: string, agentId?: string) {
-    if (!agentId) return PROFESSIONAL_SALES_CALL_AGENT_PROMPT;
+    if (!agentId) {
+      return {
+        agentPrompt: '',
+        agentUseDefaultTemplate: true,
+        agentPromptDelta: '',
+        agentFullPrompt: null as string | null,
+      };
+    }
     const [agent] = await this.db
-      .select({ prompt: schema.agents.prompt })
+      .select({
+        prompt: schema.agents.prompt,
+        useDefaultTemplate: schema.agents.useDefaultTemplate,
+        promptDelta: schema.agents.promptDelta,
+        fullPromptOverride: schema.agents.fullPromptOverride,
+      })
       .from(schema.agents)
       .where(and(eq(schema.agents.id, agentId), eq(schema.agents.orgId, orgId)))
       .limit(1);
-    return agent?.prompt?.trim() ? agent.prompt : PROFESSIONAL_SALES_CALL_AGENT_PROMPT;
+    if (!agent) {
+      return {
+        agentPrompt: '',
+        agentUseDefaultTemplate: true,
+        agentPromptDelta: '',
+        agentFullPrompt: null as string | null,
+      };
+    }
+    return {
+      agentPrompt: agent.prompt?.trim() ?? '',
+      agentUseDefaultTemplate: agent.useDefaultTemplate ?? true,
+      agentPromptDelta: agent.promptDelta?.trim() || agent.prompt?.trim() || '',
+      agentFullPrompt: agent.fullPromptOverride?.trim() || agent.prompt?.trim() || null,
+    };
   }
 
   private extractLastProspectLine(transcript: string) {
@@ -1409,34 +1508,121 @@ export class EngineService implements OnModuleDestroy {
   }
 
   private async fetchCompanyProfile(orgId: string): Promise<CompanyProfile> {
-    const [profile] = await this.db
-      .select()
-      .from(schema.orgCompanyProfiles)
-      .where(eq(schema.orgCompanyProfiles.orgId, orgId))
-      .limit(1);
+    const [[salesContext], [legacyProfile], products] = await Promise.all([
+      this.db
+        .select()
+        .from(schema.salesContext)
+        .where(eq(schema.salesContext.orgId, orgId))
+        .limit(1),
+      this.db
+        .select()
+        .from(schema.orgCompanyProfiles)
+        .where(eq(schema.orgCompanyProfiles.orgId, orgId))
+        .limit(1),
+      this.fetchOrgProducts(orgId),
+    ]);
 
-    if (!profile) {
-      return { ...EMPTY_COMPANY_PROFILE_DEFAULTS };
-    }
+    const offeringsSummary = products
+      .slice(0, 4)
+      .map((item) => item.name)
+      .join(', ');
+    const valueProps = products
+      .flatMap((item) => this.parseStringArray(item.valueProps).slice(0, 2))
+      .slice(0, 8)
+      .join('\n');
+    const diffs = products
+      .flatMap((item) => this.parseStringArray(item.differentiators).slice(0, 2))
+      .slice(0, 8)
+      .join('\n');
+    const objections = products
+      .flatMap((item) => this.toProductObjectionSnippets(item.objections, item.name))
+      .slice(0, 8)
+      .join('\n');
+    const pricingRules = this.compactText(
+      products
+        .map((item) => this.valueToOneLine(item.pricingRules))
+        .filter((line) => line.length > 0)
+        .join('; '),
+      450,
+    );
+    const faqLines = products
+      .flatMap((item) => this.toProductFaqSnippets(item.faqs, item.name))
+      .slice(0, 10)
+      .join('\n');
+    const dontSay = products
+      .flatMap((item) => this.parseStringArray(item.dontSay))
+      .slice(0, 10)
+      .join('\n');
 
-    return {
-      companyName: profile.companyName,
-      productName: profile.productName,
-      productSummary: profile.productSummary,
-      idealCustomerProfile: profile.idealCustomerProfile,
-      valueProposition: profile.valueProposition,
-      differentiators: profile.differentiators,
-      proofPoints: profile.proofPoints,
-      repTalkingPoints: profile.repTalkingPoints,
-      discoveryGuidance: profile.discoveryGuidance,
-      qualificationGuidance: profile.qualificationGuidance,
-      objectionHandling: profile.objectionHandling,
-      competitorGuidance: profile.competitorGuidance,
-      pricingGuidance: profile.pricingGuidance,
-      implementationGuidance: profile.implementationGuidance,
-      faq: profile.faq,
-      doNotSay: profile.doNotSay,
+    const scProof = this.parseStringArray(salesContext?.proofPoints);
+    const scAllowedClaims = this.parseStringArray(salesContext?.allowedClaims);
+    const scForbiddenClaims = this.parseStringArray(salesContext?.forbiddenClaims);
+    const scSalesPolicies = this.parseStringArray(salesContext?.salesPolicies);
+    const scEscalation = this.parseStringArray(salesContext?.escalationRules);
+    const scCompetitors = this.parseStringArray(salesContext?.competitors);
+    const scPositioning = this.parseStringArray(salesContext?.positioningRules);
+    const scDisco = this.parseStringArray(salesContext?.discoveryQuestions);
+    const scQual = this.parseStringArray(salesContext?.qualificationRubric);
+    const scRoles = this.parseStringArray(salesContext?.targetRoles);
+    const scIndustries = this.parseStringArray(salesContext?.industries);
+    const scDisqualifiers = this.parseStringArray(salesContext?.disqualifiers);
+    const scNextSteps = this.parseStringArray(salesContext?.nextSteps);
+
+    const mappedFromSalesContext: CompanyProfile = {
+      companyName: salesContext?.companyName?.trim() || legacyProfile?.companyName || '',
+      productName:
+        offeringsSummary ||
+        salesContext?.whatWeSell?.trim() ||
+        legacyProfile?.productName ||
+        '',
+      productSummary:
+        salesContext?.whatWeSell?.trim() ||
+        legacyProfile?.productSummary ||
+        '',
+      idealCustomerProfile: [
+        salesContext?.targetCustomer?.trim() || '',
+        scRoles.length > 0 ? `Roles: ${scRoles.join(', ')}` : '',
+        scIndustries.length > 0 ? `Industries: ${scIndustries.join(', ')}` : '',
+        scDisqualifiers.length > 0 ? `Disqualifiers: ${scDisqualifiers.join(', ')}` : '',
+      ]
+        .filter((line) => line.length > 0)
+        .join('\n'),
+      valueProposition: valueProps || legacyProfile?.valueProposition || '',
+      differentiators: diffs || legacyProfile?.differentiators || '',
+      proofPoints:
+        scProof.join('\n') || legacyProfile?.proofPoints || '',
+      repTalkingPoints:
+        scNextSteps.join('\n') || legacyProfile?.repTalkingPoints || '',
+      discoveryGuidance:
+        scDisco.join('\n') || legacyProfile?.discoveryGuidance || '',
+      qualificationGuidance:
+        scQual.join('\n') || legacyProfile?.qualificationGuidance || '',
+      objectionHandling: objections || legacyProfile?.objectionHandling || '',
+      competitorGuidance: [
+        scCompetitors.length > 0 ? `Competitors: ${scCompetitors.join(', ')}` : '',
+        ...scPositioning,
+      ]
+        .filter((line) => line.length > 0)
+        .join('\n') || legacyProfile?.competitorGuidance || '',
+      pricingGuidance: [
+        ...scSalesPolicies,
+        ...scEscalation.map((line) => `Escalate: ${line}`),
+        ...scAllowedClaims.map((line) => `Allowed claim: ${line}`),
+        pricingRules,
+      ]
+        .filter((line) => line.length > 0)
+        .join('\n') || legacyProfile?.pricingGuidance || '',
+      implementationGuidance:
+        scNextSteps.join('\n') || legacyProfile?.implementationGuidance || '',
+      faq: faqLines || legacyProfile?.faq || '',
+      doNotSay:
+        [...scForbiddenClaims, ...dontSay.split('\n').filter((line) => line.trim().length > 0)]
+          .filter((line) => line.trim().length > 0)
+          .slice(0, 16)
+          .join('\n') || legacyProfile?.doNotSay || '',
     };
+
+    return { ...EMPTY_COMPANY_PROFILE_DEFAULTS, ...mappedFromSalesContext };
   }
 
   // ── Private: engine tick ────────────────────────────────────────────────────
@@ -1504,16 +1690,11 @@ export class EngineService implements OnModuleDestroy {
       (state.lastProspectUtteranceText ||
         [...state.transcriptBuffer].reverse().find((t) => t.speaker === 'PROSPECT')?.text) ??
       '';
-    const isQuestion = lastProspectLine.includes('?');
     const userPrompt =
-      `Transcript:\n${recentTurns}\n\n` +
-      (lastProspectLine
-        ? `IMPORTANT — The prospect just said: "${lastProspectLine}"\n` +
-          (isQuestion
-            ? `This is a DIRECT QUESTION. Your suggestion MUST answer this question specifically using data from the company context above. Do NOT give an unrelated statistic or pivot away.\n\n`
-            : `Respond directly to what they said. Do NOT give an unrelated statistic.\n\n`)
-        : '') +
-      `Provide the JSON coaching output now.`;
+      `Conversation window (REP/PROSPECT only):\n${recentTurns}\n\n` +
+      `Last prospect final utterance: ${lastProspectLine || 'None'}\n` +
+      `Update trigger: ${opts.reason}\n` +
+      `Return JSON only now.`;
 
     try {
       const llmStartedAt = Date.now();
@@ -1526,35 +1707,44 @@ export class EngineService implements OnModuleDestroy {
       state.suggestionCountTarget = 1;
       this.logger.debug(`LLM tick (${callId}): ${raw.slice(0, 180)}`);
 
-      const parsed = this.llm.parseJson<{
-        stage?: string;
-        suggestions?: string[];
-        suggestion?: string;
+      let parsed = this.llm.parseJson<{
+        moment?: string;
+        primary?: string;
         nudges?: string[];
-        momentTag?: string;
-        objection?: string;
-        sentiment?: string;
-        supportingData?: string[];
-        checklistUpdates?: Record<string, boolean>;
+        context_toast?: { title?: string; bullets?: string[] } | null;
+        ask?: string[] | null;
+        used_updates?: {
+          value_props_used?: string[];
+          differentiators_used?: string[];
+          objection_responses_used?: string[];
+          questions_asked?: string[];
+        };
       }>(raw, {});
 
-      void parsed.stage;
+      if (!parsed.primary || !parsed.moment) {
+        const retryRaw = await this.llm.chatFast(
+          systemPrompt,
+          `${userPrompt}\nReturn strictly valid JSON with keys: moment, primary, nudges, context_toast, ask, used_updates.`,
+        );
+        parsed = this.llm.parseJson(retryRaw, parsed);
+      }
 
-      const suggestions = parsed.suggestions ?? (parsed.suggestion ? [parsed.suggestion] : []);
       const normalizedSuggestions = this.normalizeSuggestions(
-        suggestions,
+        parsed.primary ? [parsed.primary] : [],
         context.companyProfile,
         context.productContext,
         stageForPrompt.name,
-        parsed.objection ?? state.stats.objectionDetected,
+        state.stats.objectionDetected,
         desiredCount,
         lastProspectLine,
       );
-      const nudges = (parsed.nudges ?? []).filter((n) => ALLOWED_NUDGES.includes(n)).slice(0, 3);
-      const supportingData = (parsed.supportingData ?? [])
-        .map((x) => x.trim())
-        .filter((x) => x.length > 0)
-        .slice(0, 4);
+      const nudges = this.pickNonEmpty(parsed.nudges, 3).map((item) => item.trim()).filter(Boolean);
+      const toastBullets = this.pickNonEmpty(parsed.context_toast?.bullets, 4);
+      const toastTitle = parsed.context_toast?.title?.trim() ?? '';
+      const supportingData = [
+        toastTitle ? `Context: ${toastTitle}` : '',
+        ...toastBullets,
+      ].filter((item) => item.length > 0);
       const fallbackData = ragSnippets
         .slice(0, 4)
         .map((s) => `${FIELD_LABELS[s.field]}: ${s.text}`);
@@ -1562,23 +1752,43 @@ export class EngineService implements OnModuleDestroy {
       const cardsFromContext = supportingData.length > 0 ? supportingData : fallbackData;
       const cards = [...cardsFromContext, ...productFallback].slice(0, 4);
       const momentTag = this.normalizeMomentTag(
-        parsed.momentTag,
+        parsed.moment,
         stageForPrompt.name,
-        parsed.objection ?? state.stats.objectionDetected ?? null,
-        parsed.sentiment,
+        state.stats.objectionDetected ?? null,
+        state.stats.sentiment,
       );
+      const updates = {
+        value_props_used: this.pickNonEmpty(parsed.used_updates?.value_props_used, 4),
+        differentiators_used: this.pickNonEmpty(parsed.used_updates?.differentiators_used, 4),
+        objection_responses_used: this.pickNonEmpty(
+          parsed.used_updates?.objection_responses_used,
+          4,
+        ),
+        questions_asked: this.pickNonEmpty(parsed.used_updates?.questions_asked, 4),
+      };
+      state.coachMemory.used_value_props = [
+        ...updates.value_props_used,
+        ...state.coachMemory.used_value_props,
+      ].filter((item, index, all) => item && all.indexOf(item) === index).slice(0, 40);
+      state.coachMemory.used_differentiators = [
+        ...updates.differentiators_used,
+        ...state.coachMemory.used_differentiators,
+      ].filter((item, index, all) => item && all.indexOf(item) === index).slice(0, 40);
+      state.coachMemory.used_objection_responses = [
+        ...updates.objection_responses_used,
+        ...state.coachMemory.used_objection_responses,
+      ].filter((item, index, all) => item && all.indexOf(item) === index).slice(0, 40);
+      state.coachMemory.questions_asked = [
+        ...updates.questions_asked,
+        ...state.coachMemory.questions_asked,
+      ].filter((item, index, all) => item && all.indexOf(item) === index).slice(0, 40);
       const tickPayload: EngineTickPayload = {
         suggestions: normalizedSuggestions,
         nudges,
         cards,
-        objection: parsed.objection ?? state.stats.objectionDetected ?? null,
-        sentiment:
-          parsed.sentiment === 'positive' ||
-          parsed.sentiment === 'negative' ||
-          parsed.sentiment === 'neutral'
-            ? parsed.sentiment
-            : null,
-        checklistUpdates: parsed.checklistUpdates ?? {},
+        objection: state.stats.objectionDetected ?? null,
+        sentiment: state.stats.sentiment,
+        checklistUpdates: {},
         momentTag,
       };
 
@@ -1670,6 +1880,11 @@ export class EngineService implements OnModuleDestroy {
         ...state.recentPrimarySuggestions.filter((item) => item !== suggestionsForEmit[0]),
       ].slice(0, 5);
     }
+    state.coachMemory.last_5_primary_suggestions = state.recentPrimarySuggestions.slice(0, 5);
+    void this.db
+      .update(schema.calls)
+      .set({ coachMemory: state.coachMemory })
+      .where(eq(schema.calls.id, callId));
 
     this.gateway.emitToCall(callId, 'engine.debug', {
       reason,
@@ -2304,7 +2519,7 @@ export class EngineService implements OnModuleDestroy {
     score = Math.max(1, Math.min(10, score));
 
     const summary =
-      `Rep communicated GTAPhotoPro value and used numeric proof, but discovery depth and close discipline were inconsistent. ` +
+      `Rep communicated value and used evidence, but discovery depth and close discipline were inconsistent. ` +
       `${proposedNextStep ? 'A follow-up path was introduced' : 'No firm next step was secured'}, and the next call should prioritize permission, diagnostics, and a two-option close.`;
 
     return {
@@ -2353,117 +2568,86 @@ export class EngineService implements OnModuleDestroy {
     suggestionCount: 1 | 3 = 3,
     recentPrimarySuggestions: string[] = [],
   ): string {
-    const stages = context.stages;
-    const list =
-      stageList ??
-      stages.map((s, i) => `${i + 1}. ${s.name}${s.goals ? ` — ${s.goals}` : ''}`).join('\n');
+    void stageList;
+    void checklistItems;
+    void suggestionCount;
     const company = context.companyProfile;
-    const extraAgentGuidance =
-      context.agentPrompt.trim() === PROFESSIONAL_SALES_CALL_AGENT_PROMPT.trim()
-        ? 'No extra custom guidance.'
-        : context.agentPrompt;
+    const offerMode = context.productContext.mode === ProductsMode.SELECTED ? 'SELECTED' : 'ALL';
+    const offerNames =
+      context.productContext.names.length > 0
+        ? context.productContext.names.join(', ')
+        : 'No offerings configured';
+    const condensedOfferings =
+      context.productContext.snippets.length > 0
+        ? context.productContext.snippets.slice(0, 8).join('\n')
+        : context.productContext.summary;
+    const forbiddenClaims = company.doNotSay || 'None configured.';
+    const salesPolicies = company.pricingGuidance || 'None configured.';
+    const recentPrimary =
+      recentPrimarySuggestions.length > 0
+        ? recentPrimarySuggestions.map((item, index) => `${index + 1}. ${item}`).join('\n')
+        : 'None';
     const ragSection =
       ragSnippets.length > 0
         ? ragSnippets
             .slice(0, 8)
-            .map((s, i) => `${i + 1}. [${FIELD_LABELS[s.field]}] ${s.text}`)
+            .map((item, index) => `${index + 1}. [${FIELD_LABELS[item.field]}] ${item.text}`)
             .join('\n')
-        : 'No additional snippets retrieved.';
-    const productModeLabel =
-      context.productContext.mode === ProductsMode.SELECTED ? 'SELECTED' : 'ALL';
-    const productNames =
-      context.productContext.names.length > 0
-        ? context.productContext.names.join(', ')
-        : 'No products configured';
-    const productSummary =
-      context.productContext.summary || 'No product summary is currently available.';
-    const productSnippetSection =
-      context.productContext.snippets.length > 0
-        ? context.productContext.snippets
-            .slice(0, 12)
-            .map((line, index) => `${index + 1}. ${line}`)
-            .join('\n')
-        : 'No product snippets available.';
-    const recentSuggestionSection =
-      recentPrimarySuggestions.length > 0
-        ? recentPrimarySuggestions.map((item, index) => `${index + 1}. ${item}`).join('\n')
-        : 'No recent suggestions yet.';
-
-    let nudgeRule: string;
-    if (context.guidanceLevel === 'MINIMAL') {
-      nudgeRule = '- "nudges": always empty array []\n';
-    } else if (context.guidanceLevel === 'GUIDED') {
-      nudgeRule = '- "nudges": 1-3 items from the allowed list\n';
-    } else {
-      nudgeRule = '- "nudges": 0-3 items from the allowed list\n';
-    }
-
-    const checklistRule =
-      checklistItems?.length
-        ? `- "checklistUpdates": object mapping these items to true if completed: ${checklistItems.join(', ')}\n`
-        : '- "checklistUpdates": empty object {}\n';
+        : 'None';
+    const memoryState = this.engines.get(context.callId);
+    const memorySection = memoryState
+      ? [
+          `used_value_props: ${memoryState.coachMemory.used_value_props.join(' | ') || 'none'}`,
+          `used_differentiators: ${memoryState.coachMemory.used_differentiators.join(' | ') || 'none'}`,
+          `used_objection_responses: ${memoryState.coachMemory.used_objection_responses.join(' | ') || 'none'}`,
+          `questions_asked: ${memoryState.coachMemory.questions_asked.join(' | ') || 'none'}`,
+          `last_5_primary_suggestions: ${memoryState.coachMemory.last_5_primary_suggestions.join(' | ') || 'none'}`,
+        ].join('\n')
+      : 'None';
+    const systemCore = context.agentUseDefaultTemplate
+      ? PROFESSIONAL_SALES_CALL_AGENT_PROMPT
+      : 'You are a real-time sales copilot. Return valid JSON only. Enforce truthfulness, listening rules, concise outputs, and anti-repetition.';
+    const agentBlock = context.agentUseDefaultTemplate
+      ? `Agent Add-on Instructions: ${context.agentPromptDelta || 'None.'}`
+      : `Agent Prompt: ${context.agentFullPrompt || context.agentPrompt || 'None.'}`;
 
     return (
-      `You are a real-time AI sales coach. The rep is on a LIVE call RIGHT NOW. Speed matters.\n\n` +
-      `${PROFESSIONAL_SALES_CALL_AGENT_PROMPT}\n\n` +
-      `Org company context:\n` +
-      `- Company: ${company.companyName}\n` +
-      `- Product: ${company.productName}\n` +
-      `- Product summary: ${company.productSummary}\n` +
-      `- ICP: ${company.idealCustomerProfile}\n` +
-      `- Differentiators:\n${company.differentiators}\n\n` +
-      `Product context baseline:\n` +
-      `- Mode: ${productModeLabel}\n` +
-      `- Product names: ${productNames}\n` +
-      `- Summary: ${productSummary}\n` +
-      `- Product snippets:\n${productSnippetSection}\n\n` +
-      `Retrieved context snippets for this exact moment:\n${ragSection}\n\n` +
-      `Additional coach persona guidance: ${extraAgentGuidance}\n\n` +
-      `Default call stages:\n${list}\n\n` +
-      `Current stage: "${currentStage.name}"\n` +
-      `Call notes: ${context.notes ?? 'None'}\n` +
-      `Guidance: ${context.guidanceLevel}\n\n` +
-      `Recent primary suggestions to avoid repeating:\n${recentSuggestionSection}\n\n` +
-      `Respond ONLY with a JSON object. Rules:\n` +
-      `- "stage": current stage name\n` +
-      `- "suggestions": array of EXACTLY ${suggestionCount} primary suggestion${suggestionCount === 1 ? '' : 's'} the REP should say next.\n` +
-      `\n` +
-      `Output contract:\n` +
-      `- Return one primary suggestion in 1-2 sentences.\n` +
-      `- Return up to 3 nudges.\n` +
-      `- Return one short "momentTag" (2-4 words).\n` +
-      `- Do not hallucinate. If context lacks a fact, state uncertainty and ask a qualifier.\n\n` +
-      `Base coaching quality rules:\n` +
-      `- Prioritize rapport + reason + one question in openings.\n` +
-      `- Run discovery before pitching.\n` +
-      `- Objection flow: acknowledge, clarify, respond, confirm.\n` +
-      `- Every response must move toward a next step.\n` +
-      `- Avoid repeating any recent primary suggestion structure.\n\n` +
-      `CRITICAL SUGGESTION RULES (follow these strictly):\n` +
-      `1. READ THE LAST PROSPECT LINE CAREFULLY. Your suggestion MUST directly respond to what they said or asked.\n` +
-      `2. If the prospect asked a QUESTION (pricing, features, timeline, etc.), your suggestion must ANSWER that specific question using data from context. Do NOT deflect or pivot to unrelated stats.\n` +
-      `3. If the prospect asked about PRICING → give pricing info from context, then qualify scope.\n` +
-      `4. If the prospect asked about FEATURES → describe the specific feature they asked about.\n` +
-      `5. If the prospect raised a CONCERN → acknowledge it directly, then address it with evidence.\n` +
-      `6. If the prospect made a STATEMENT → respond to its content, then ask one diagnostic question.\n` +
-      `7. NEVER respond with a generic statistic when the prospect asked a specific question.\n` +
-      `8. Keep each suggestion concise and practical. One main point per suggestion.\n` +
-      `9. No filler intros ("Great question", "Totally fair", "Absolutely", "Thanks for sharing").\n` +
-      `10. Include concrete details from context: numbers, timeframes, service names, packages.\n` +
-      `11. If you lack data to answer their question, say so honestly and ask one qualifier.\n` +
-      `12. Never invent pricing, guarantees, logos, or statistics not in context.\n` +
-      `13. Output in English only.\n` +
-      `14. Use product context baseline in every suggestion. If product mode is SELECTED, prioritize only selected products.\n` +
-      `\n` +
-      `- "supportingData": up to 4 concise factual bullets the rep can cite from the provided company context.\n` +
-      `- "momentTag": short tag for call moment, like "Discovery" or "Pricing objection"\n` +
-      `- "objection": if prospect raised an objection, one of: BUDGET, COMPETITOR, TIMING, NO_NEED, AUTHORITY, or null\n` +
-      `- "sentiment": prospect mood — "positive", "neutral", or "negative"\n` +
-      nudgeRule +
-      `  Allowed: ASK_QUESTION, ADDRESS_OBJECTION, TOO_MUCH_TALKING, MISSING_NEXT_STEP, SOFTEN_TONE, SLOW_DOWN, CONFIRM_UNDERSTANDING\n` +
-      checklistRule +
-      `\nExample when prospect asks about pricing: {"stage":"Value Framing","suggestions":["Packages start at $X for a standard shoot; what property type are you listing?"],"supportingData":["Standard package: 1-hour interior/exterior shoot","Premium: adds drone + virtual tour"],"objection":"BUDGET","sentiment":"neutral","nudges":[],"checklistUpdates":{}}\n` +
-      `Example when prospect asks about features: {"stage":"Discovery","suggestions":["We cover interior, exterior, drone, and virtual tours — which matters most for your listings?"],"supportingData":["One-vendor workflow reduces coordination by 38%"],"objection":null,"sentiment":"neutral","nudges":["ASK_QUESTION"],"checklistUpdates":{}}`
+      `${systemCore}\n\n` +
+      `${agentBlock}\n\n` +
+      `Sales Context:\n` +
+      `Company: ${company.companyName || 'Unknown'}\n` +
+      `What we sell: ${company.productSummary || company.productName || 'Unknown'}\n` +
+      `ICP: ${company.idealCustomerProfile || 'Unknown'}\n` +
+      `Proof points:\n${company.proofPoints || 'None'}\n` +
+      `Value props:\n${company.valueProposition || 'None'}\n` +
+      `Differentiators:\n${company.differentiators || 'None'}\n` +
+      `Sales policies:\n${salesPolicies}\n` +
+      `Forbidden claims:\n${forbiddenClaims}\n` +
+      `Discovery guidance:\n${company.discoveryGuidance || 'None'}\n` +
+      `Qualification guidance:\n${company.qualificationGuidance || 'None'}\n` +
+      `Competitor stance:\n${company.competitorGuidance || 'None'}\n` +
+      `Next-step guidance:\n${company.implementationGuidance || 'None'}\n\n` +
+      `Offerings Context:\n` +
+      `Mode: ${offerMode}\n` +
+      `Selected offerings: ${offerNames}\n` +
+      `Condensed offerings summary:\n${condensedOfferings || 'None'}\n\n` +
+      `Live call metadata:\n` +
+      `Current stage: ${currentStage.name}\n` +
+      `Call type: ${context.callType}\n` +
+      `Call mode: ${context.callMode}\n` +
+      `Call notes: ${context.notes || 'None'}\n\n` +
+      `Retrieved snippets for this turn:\n${ragSection}\n\n` +
+      `Recent primary suggestions:\n${recentPrimary}\n\n` +
+      `Coach memory:\n${memorySection}\n\n` +
+      `Rules:\n` +
+      `- Never invent company/product claims.\n` +
+      `- If uncertain, ask a clarifying question.\n` +
+      `- Do not repeat recent arguments unless prospect asks again.\n` +
+      `- Primary must be 1-2 sentences and speakable.\n` +
+      `- Nudges must be 2-3 items, <=6 words each.\n` +
+      `- Moment must be short 2-4 words.\n` +
+      `- Return JSON only with exact keys: moment, primary, nudges, context_toast, ask, used_updates.\n` +
+      `- used_updates must include keys value_props_used, differentiators_used, objection_responses_used, questions_asked.\n`
     );
   }
 
@@ -2490,7 +2674,7 @@ export class EngineService implements OnModuleDestroy {
     }
     if (callMode === 'OUTBOUND') {
       return [
-        `Hi, this is ${companyName}. Quick reason for my call on ${productLabel}: ${numericProof} What usually slows your listings down the most today?`,
+        `Hi, this is ${companyName}. Quick reason for my call on ${productLabel}: ${numericProof} What is the biggest blocker in your current process today?`,
       ];
     }
     return [
@@ -2580,49 +2764,49 @@ export class EngineService implements OnModuleDestroy {
       .filter((line) => /\d/.test(line));
     const pickProof = (fallback: string) =>
       proofs.length > 0 ? proofs[Math.floor(Math.random() * proofs.length)] ?? fallback : fallback;
-    const proofA = pickProof('24-hour standard listing photo turnaround.');
-    const proofB = pickProof('+31% average listing click-through uplift.');
-    const proofC = pickProof('4.9/5 average client rating.');
+    const proofA = pickProof('we focus on reliable delivery and clear handoffs.');
+    const proofB = pickProof('teams typically care most about speed, consistency, and reduced rework.');
+    const proofC = pickProof('we can share relevant proof points once we confirm your use case.');
 
     if (/price|pricing|cost|budget|package/.test(last)) {
       return [
-        `Pricing for ${primaryProduct} depends on property type and package scope; share one listing and I can send an exact quote today.`,
+        `Pricing for ${primaryProduct} depends on scope and goals. Which use case should we size first?`,
       ];
     }
     if (/revision|adjust|changes|edit/.test(last)) {
       return [
-        'Revision handling depends on package scope; tell me your usual change requests and I will confirm exact turnaround.',
+        'Revision handling depends on scope and workflow. What level of flexibility do you need in practice?',
       ];
     }
     if (/what kind|which service|services|media|what do you provide/.test(last)) {
       return [
-        `For ${primaryProduct}, we cover interior, exterior, drone, virtual tours, and virtual staging with one team, reducing coordination time by about 38%.`,
+        `For ${primaryProduct}, we can map the right package for your workflow. Which outcomes matter most to you first?`,
       ];
     }
     if (/quality|consistent|how do you ensure/.test(last)) {
       return [
-        'We use a standardized editing workflow and delivered on time on 98.2% of shoots over the last 12 months.',
+        'We use a standardized process and clear QA checkpoints. Which quality issues have caused the most friction recently?',
       ];
     }
     if (/turnaround|how fast|delivery|deliver/.test(last)) {
       return [
-        'Standard listing photos are delivered in 24 hours on 91% of shoots, which helps launch listings faster.',
+        'Turnaround depends on package scope and timeline. What deadline are you working against for the next listing?',
       ];
     }
 
     if (stage.includes('opening')) {
       return [
-        `Hi, this is ${company.companyName} about ${primaryProduct}. Is now a bad time, or do you have 90 seconds?`,
+        `Hi, this is ${company.companyName || 'our team'} about ${primaryProduct}. Is now a bad time, or do you have 60 seconds?`,
         `Quick context: ${proofA}`,
-        `Can I ask 2 quick questions to see if ${primaryProduct} fits your listing workflow?`,
+        `Can I ask 2 quick questions to see if ${primaryProduct} fits your current workflow?`,
       ];
     }
 
     if (stage.includes('discovery')) {
       return [
-        'How long does it usually take from shoot to final listing photos today?',
-        'How many listings per month wait more than 48 hours for media delivery?',
-        `If you fixed one issue this quarter, would it be speed, consistency, or package coverage? ${proofB}`,
+        'How are you handling this process today?',
+        'What is the biggest friction point right now?',
+        `If one issue got fixed this quarter, would it be speed, consistency, or conversion? ${proofB}`,
       ];
     }
 
@@ -2637,23 +2821,23 @@ export class EngineService implements OnModuleDestroy {
     if (stage.includes('objection') || objection) {
       if (objection === 'BUDGET') {
         return [
-          'Is your concern per-listing price, or keeping monthly spend predictable?',
-          `Most teams justify media spend when listings launch faster; ${proofB}`,
-          'Would a single pilot listing help you compare cost versus response impact?',
+          'Is your concern upfront cost or overall return?',
+          `Teams usually justify spend when outcomes improve. ${proofB}`,
+          'Would a small pilot help you compare cost versus impact?',
         ];
       }
       if (objection === 'COMPETITOR') {
         return [
-          'What works with your current vendor, and where do delays still happen?',
-          `One-vendor workflow plus reliability matters here; ${proofA}`,
-          'Would a side-by-side pilot on your next listing be fair?',
+          'What works with your current option, and where are the gaps?',
+          `Reliability and execution consistency tend to matter most. ${proofA}`,
+          'Would a side-by-side pilot be fair to evaluate fit?',
         ];
       }
       if (objection === 'TIMING') {
         return [
-          'When does your next listing need media delivered?',
-          `We can align to that date with 24-48 hour output; ${proofA}`,
-          'Would you prefer booking the pilot now or early next week?',
+          'What timeline are you working against?',
+          `We can align scope to that timeline. ${proofA}`,
+          'Would now or next week be better for a pilot kickoff?',
         ];
       }
       return [
@@ -2666,8 +2850,8 @@ export class EngineService implements OnModuleDestroy {
     if (stage.includes('close') || stage.includes('next step')) {
       return [
         `Based on what you shared, ${proofA}`,
-        'Would a 15-minute package-fit call later this week work better than next week?',
-        'Can we lock one pilot listing date now to benchmark results?',
+        'Would a 15-minute fit call later this week work better than next week?',
+        'Can we lock a small pilot date now to benchmark results?',
       ];
     }
 

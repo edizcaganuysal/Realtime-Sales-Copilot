@@ -85,6 +85,12 @@ export class AgentsService {
         scope,
         name: dto.name,
         prompt: dto.prompt,
+        useDefaultTemplate: dto.useDefaultTemplate ?? true,
+        promptDelta: dto.promptDelta?.trim() ?? dto.prompt.trim(),
+        fullPromptOverride:
+          dto.fullPromptOverride === null
+            ? null
+            : (dto.fullPromptOverride?.trim() || null),
         configJson: dto.configJson ?? {},
       })
       .returning();
@@ -119,6 +125,16 @@ export class AgentsService {
     if (dto.prompt !== undefined) updatePayload.prompt = dto.prompt;
     if (dto.configJson !== undefined) updatePayload.configJson = dto.configJson;
     if (dto.scope !== undefined && privileged) updatePayload.scope = dto.scope;
+    if (dto.useDefaultTemplate !== undefined) {
+      updatePayload.useDefaultTemplate = dto.useDefaultTemplate;
+    }
+    if (dto.promptDelta !== undefined) {
+      updatePayload.promptDelta = dto.promptDelta.trim();
+    }
+    if (dto.fullPromptOverride !== undefined) {
+      updatePayload.fullPromptOverride =
+        dto.fullPromptOverride === null ? null : dto.fullPromptOverride.trim();
+    }
 
     const [updated] = await this.db
       .update(schema.agents)

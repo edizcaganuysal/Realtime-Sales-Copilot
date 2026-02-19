@@ -39,8 +39,8 @@ const ADMIN_NAV = [
   { href: '/app/admin/governance', label: 'Manage', icon: ShieldCheck },
   { href: '/app/admin/ai', label: 'AI', icon: BrainCircuit },
   { href: '/app/admin/requests', label: 'Requests', icon: ClipboardList },
-  { href: '/app/admin/company', label: 'Company', icon: Building2 },
-  { href: '/app/admin/products', label: 'Products', icon: Package },
+  { href: '/app/admin/context', label: 'Context', icon: Building2 },
+  { href: '/app/admin/context/offerings', label: 'Offerings', icon: Package },
   { href: '/app/billing', label: 'Billing', icon: CreditCard },
   { href: '/app/billing?tab=upgrade', label: 'Upgrade', icon: ArrowUp },
   { href: '/app/billing?tab=add-credits', label: 'Add credits', icon: PlusCircle },
@@ -183,6 +183,8 @@ export function Sidebar({ me }: SidebarProps) {
                 ? pathname.startsWith('/app/billing') && activeBillingTab === tabMatch[1]
                 : isBillingBase
                   ? pathname.startsWith('/app/billing') && activeBillingTab === 'overview'
+                  : href === '/app/admin/context'
+                    ? pathname === href
                   : pathname.startsWith(href);
 
               return (
