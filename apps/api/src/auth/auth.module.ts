@@ -4,13 +4,14 @@ import { PassportModule } from '@nestjs/passport';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './jwt.strategy';
+import { requireEnv } from '../config/env';
 
 @Module({
   imports: [
     PassportModule,
     JwtModule.registerAsync({
       useFactory: () => ({
-        secret: process.env['JWT_SECRET'],
+        secret: requireEnv('JWT_SECRET'),
         signOptions: { expiresIn: process.env['JWT_EXPIRES_IN'] ?? '7d' },
       }),
     }),

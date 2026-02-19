@@ -3,17 +3,28 @@ import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import cookieParser from 'cookie-parser';
-import { IoAdapter } from '@nestjs/platform-socket.io';
 import express from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import { AppModule } from './app.module';
+import { CustomIoAdapter } from './custom-io.adapter';
+import { getWebOrigins } from './config/env';
 
 const httpLogger = new Logger('HTTP');
 
 async function bootstrap() {
+  if (!process.env['LLM_API_KEY'] && process.env['OPENAI_API_KEY']) {
+    process.env['LLM_API_KEY'] = process.env['OPENAI_API_KEY'];
+  }
+  if (!process.env['STT_API_KEY'] && process.env['DEEPGRAM_API_KEY']) {
+    process.env['STT_API_KEY'] = process.env['DEEPGRAM_API_KEY'];
+  }
+  if (!process.env['TWILIO_WEBHOOK_BASE_URL'] && process.env['API_BASE_URL']) {
+    process.env['TWILIO_WEBHOOK_BASE_URL'] = process.env['API_BASE_URL'];
+  }
+
   const app = await NestFactory.create(AppModule);
 
-  app.useWebSocketAdapter(new IoAdapter(app));
+  app.useWebSocketAdapter(new CustomIoAdapter(app));
   app.use(cookieParser());
 
   // Log every incoming HTTP request — critical for seeing if Twilio webhooks arrive
@@ -25,7 +36,7 @@ async function bootstrap() {
   app.use(express.urlencoded({ extended: false }));
 
   app.enableCors({
-    origin: process.env['CORS_ORIGIN'] ?? 'http://localhost:3000',
+    origin: getWebOrigins(),
     credentials: true,
   });
 
@@ -37,7 +48,7 @@ async function bootstrap() {
   );
 
   const port = process.env['PORT'] ?? 3001;
-  await app.listen(port);
+  await app.listen(port, '0.0.0.0');
 
   console.log(`\n🚀  API running on http://localhost:${port}`);
   console.log(`❤️   Health → http://localhost:${port}/health\n`);
