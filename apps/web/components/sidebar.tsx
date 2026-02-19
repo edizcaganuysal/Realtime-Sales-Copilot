@@ -14,6 +14,7 @@ import {
   LogOut,
   Building2,
   Package,
+  CreditCard,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { MeResponse } from '@live-sales-coach/shared';
@@ -31,6 +32,7 @@ const ADMIN_NAV = [
   { href: '/app/admin/governance', label: 'Manage', icon: ShieldCheck },
   { href: '/app/admin/company', label: 'Company', icon: Building2 },
   { href: '/app/admin/products', label: 'Products', icon: Package },
+  { href: '/app/billing', label: 'Billing', icon: CreditCard },
   { href: '/app/admin/users', label: 'Users', icon: Users },
   { href: '/app/admin/agents', label: 'Agents', icon: Bot },
 ];

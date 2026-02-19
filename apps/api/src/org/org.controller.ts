@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Patch, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, NotFoundException, Patch, Post, UseGuards } from '@nestjs/common';
 import { Role } from '@live-sales-coach/shared';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
@@ -8,6 +8,8 @@ import type { JwtPayload } from '@live-sales-coach/shared';
 import { OrgService } from './org.service';
 import { UpdateOrgSettingsDto } from './dto/update-org-settings.dto';
 import { UpdateCompanyProfileDto } from './dto/update-company-profile.dto';
+import { SubscribePlanDto } from './dto/subscribe-plan.dto';
+import { AdjustCreditsDto } from './dto/adjust-credits.dto';
 
 @Controller('org')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -36,5 +38,31 @@ export class OrgController {
   @Roles(Role.MANAGER)
   updateCompanyProfile(@CurrentUser() user: JwtPayload, @Body() dto: UpdateCompanyProfileDto) {
     return this.orgService.updateCompanyProfile(user.orgId, dto);
+  }
+
+  @Get('subscription')
+  @Roles(Role.REP)
+  async getSubscription(@CurrentUser() user: JwtPayload) {
+    const subscription = await this.orgService.getSubscription(user.orgId);
+    if (!subscription) throw new NotFoundException('Subscription not found');
+    return subscription;
+  }
+
+  @Post('subscribe')
+  @Roles(Role.ADMIN)
+  subscribe(@CurrentUser() user: JwtPayload, @Body() dto: SubscribePlanDto) {
+    return this.orgService.subscribe(user.orgId, dto);
+  }
+
+  @Post('credits/adjust')
+  @Roles(Role.ADMIN)
+  adjustCredits(@CurrentUser() user: JwtPayload, @Body() dto: AdjustCreditsDto) {
+    return this.orgService.adjustCredits(user.orgId, dto);
+  }
+
+  @Get('credits')
+  @Roles(Role.REP)
+  getCredits(@CurrentUser() user: JwtPayload) {
+    return this.orgService.getCredits(user.orgId);
   }
 }
