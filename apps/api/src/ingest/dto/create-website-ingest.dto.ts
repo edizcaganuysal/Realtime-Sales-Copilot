@@ -1,11 +1,11 @@
 import {
   ArrayMaxSize,
   IsArray,
+  IsIn,
   IsInt,
   IsOptional,
   IsString,
   IsUrl,
-  Max,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -18,14 +18,17 @@ export class CreateWebsiteIngestDto {
   @IsOptional()
   @IsInt()
   @Min(1)
-  @Max(15)
   maxPages?: number;
 
   @IsOptional()
   @IsInt()
   @Min(1)
-  @Max(3)
-  depth?: number;
+  pagesToScan?: number;
+
+  @IsOptional()
+  @IsString()
+  @IsIn(['QUICK', 'STANDARD', 'DEEP'])
+  focus?: 'QUICK' | 'STANDARD' | 'DEEP';
 
   @IsOptional()
   @IsArray()

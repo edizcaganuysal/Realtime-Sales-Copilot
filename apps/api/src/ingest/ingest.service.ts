@@ -11,7 +11,7 @@ import { and, eq } from 'drizzle-orm';
 import type { JwtPayload } from '@live-sales-coach/shared';
 import { DRIZZLE, DrizzleDb } from '../db/db.module';
 import * as schema from '../db/schema';
-import { GTAPHOTOPRO_COMPANY_PROFILE_DEFAULTS } from '../org/company-profile.defaults';
+import { EMPTY_COMPANY_PROFILE_DEFAULTS } from '../org/company-profile.defaults';
 import { CreateWebsiteIngestDto } from './dto/create-website-ingest.dto';
 import { QualityCompanyDto } from './dto/quality-company.dto';
 import { QualityProductDto } from './dto/quality-product.dto';
@@ -31,6 +31,7 @@ type ExtractedField<T> = {
   value: T;
   confidence: number;
   citations: string[];
+  suggested: boolean;
 };
 
 type SourceRef = {
@@ -80,14 +81,45 @@ type CrawledAsset = {
   contentText: string;
 };
 
-const PAGE_TEXT_CAP = 20_000;
-const TOTAL_TEXT_CAP = 120_000;
-const WEBSITE_MAX_PAGES_DEFAULT = 8;
-const WEBSITE_MAX_PAGES_CAP = 15;
-const WEBSITE_DEPTH_DEFAULT = 2;
-const WEBSITE_DEPTH_CAP = 3;
+type IngestFocus = 'QUICK' | 'STANDARD' | 'DEEP';
+
+type CrawlConfig = {
+  focus: IngestFocus;
+  maxPages: number;
+  depth: number;
+  pageCharCap: number;
+  totalCharCap: number;
+  timeCapMs: number;
+  userRequestedPages: number;
+  clamped: boolean;
+  note: string | null;
+};
+
+const PDF_TEXT_CAP = 120_000;
+const WEBSITE_PAGES_DEFAULT = 20;
+const WEBSITE_MAX_PAGES_HARD_CAP = 80;
 const MAX_FILES = 5;
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
+
+const SALES_POLICY_SUGGESTED_DEFAULTS = [
+  'Booking is confirmed after scope and timing are agreed in writing.',
+  'Standard turnaround is shared before booking and may vary by package complexity.',
+  'Reschedule and cancellation requests should be submitted as early as possible.',
+  'Deposits or payment milestones are clarified before service delivery.',
+  'Usage rights, licensing, and delivery terms are confirmed in the service agreement.',
+];
+
+const COMPETITOR_SUGGESTED_DEFAULTS = [
+  'Position on service reliability, delivery speed, and quality consistency.',
+  'Avoid negative competitor claims and focus on verifiable outcomes.',
+  'Use side-by-side scope comparisons instead of broad superiority claims.',
+];
+
+const ESCALATION_SUGGESTED_DEFAULTS = [
+  'Escalate custom pricing or contract exceptions to an admin or manager.',
+  'Escalate legal, compliance, or licensing questions before making commitments.',
+  'Escalate unusual delivery timelines or service-area exceptions for approval.',
+];
 
 @Injectable()
 export class IngestService {
@@ -302,21 +334,109 @@ export class IngestService {
     return { suggestions: this.normalizeSuggestions(raw) };
   }
 
+  aiFieldsStatus() {
+    const enabled = Boolean(this.readEnv('OPENAI_API_KEY') || this.readEnv('LLM_API_KEY'));
+    return {
+      enabled,
+      message: enabled
+        ? ''
+        : 'AI actions are unavailable. Add OPENAI_API_KEY to API environment variables.',
+    };
+  }
+
+  async aiFieldDraft(input: {
+    target: 'company' | 'product';
+    fieldKey: string;
+    currentState?: Record<string, unknown>;
+  }) {
+    this.ensureOpenAiConfigured();
+    const target = input.target === 'product' ? 'product' : 'company';
+    const fieldKey = this.readString(input.fieldKey, 160);
+    if (!fieldKey) {
+      throw new BadRequestException('fieldKey is required');
+    }
+    const currentState = this.toObject(input.currentState);
+
+    const raw = await this.runJsonCompletion({
+      system:
+        'You are a concise sales writing assistant. Draft field values that are useful, realistic, and policy-safe.',
+      user:
+        `Target: ${target}\n` +
+        `Field: ${fieldKey}\n` +
+        'Rules:\n' +
+        '- Use the provided currentState as the only context source.\n' +
+        '- Keep output concise and practical.\n' +
+        '- Use bullets when appropriate.\n' +
+        '- Do not invent hard claims, pricing guarantees, or unverifiable stats.\n' +
+        '- If uncertain, use cautious language like "Typically..." or placeholders.\n' +
+        'Return JSON: {"text": string, "notes": string[], "warnings": string[]}\n' +
+        `currentState:\n${JSON.stringify(currentState).slice(0, 16000)}`,
+    });
+
+    return {
+      text: this.readString(raw.text, 9000),
+      notes: this.toStringArray(raw.notes).slice(0, 6),
+      warnings: this.toStringArray(raw.warnings).slice(0, 6),
+    };
+  }
+
+  async aiFieldImprove(input: {
+    target: 'company' | 'product';
+    fieldKey: string;
+    text: string;
+    currentState?: Record<string, unknown>;
+  }) {
+    this.ensureOpenAiConfigured();
+    const target = input.target === 'product' ? 'product' : 'company';
+    const fieldKey = this.readString(input.fieldKey, 160);
+    if (!fieldKey) {
+      throw new BadRequestException('fieldKey is required');
+    }
+    const text = this.readString(input.text, 12000);
+    if (!text) {
+      throw new BadRequestException('text is required');
+    }
+    const currentState = this.toObject(input.currentState);
+
+    const raw = await this.runJsonCompletion({
+      system:
+        'You are a concise sales writing editor. Improve clarity and professionalism while preserving intent and constraints.',
+      user:
+        `Target: ${target}\n` +
+        `Field: ${fieldKey}\n` +
+        'Rules:\n' +
+        '- Use the provided currentState as context.\n' +
+        '- Rewrite to be clearer and more professional.\n' +
+        '- Keep concise and keep bullet structure if present.\n' +
+        '- Do not invent hard claims, guarantees, or unverifiable specifics.\n' +
+        '- If uncertainty exists, keep wording cautious.\n' +
+        `Original text:\n${text}\n\n` +
+        `currentState:\n${JSON.stringify(currentState).slice(0, 16000)}\n\n` +
+        'Return JSON: {"text": string, "notes": string[], "warnings": string[]}',
+    });
+
+    return {
+      text: this.readString(raw.text, 9000),
+      notes: this.toStringArray(raw.notes).slice(0, 6),
+      warnings: this.toStringArray(raw.warnings).slice(0, 6),
+    };
+  }
+
   private async runWebsiteJob(jobId: string) {
     try {
       const job = await this.requireJobById(jobId);
       const input = this.asRecord(job.input);
+      const config = this.getCrawlConfigFromInput(input);
       await this.setJobRunning(job.id, {
         stage: 'crawl',
         message: 'Crawling website',
         completed: 0,
-        total: this.readNumber(input.maxPages, WEBSITE_MAX_PAGES_DEFAULT),
+        total: config.maxPages,
       });
 
       const crawl = await this.crawlWebsite({
         url: this.readString(input.url),
-        maxPages: this.readNumber(input.maxPages, WEBSITE_MAX_PAGES_DEFAULT),
-        depth: this.readNumber(input.depth, WEBSITE_DEPTH_DEFAULT),
+        config,
         includePaths: this.readStringArray(input.includePaths),
         excludePaths: this.readStringArray(input.excludePaths),
       });
@@ -345,7 +465,12 @@ export class IngestService {
             stats: {
               assetCount: crawl.assets.length,
               totalChars: crawl.totalChars,
+              pagesRequested: config.userRequestedPages,
+              pagesUsed: config.maxPages,
+              focus: config.focus,
+              note: crawl.note,
             },
+            note: crawl.note,
             progress: {
               stage: 'done',
               message: 'Extraction complete',
@@ -382,11 +507,11 @@ export class IngestService {
         if (!extracted) {
           continue;
         }
-        const remaining = TOTAL_TEXT_CAP - totalChars;
+        const remaining = PDF_TEXT_CAP - totalChars;
         if (remaining <= 0) {
           break;
         }
-        const capped = extracted.slice(0, Math.min(PAGE_TEXT_CAP, remaining));
+        const capped = extracted.slice(0, Math.min(24_000, remaining));
         assets.push({
           uri,
           title: file.originalname,
@@ -540,18 +665,92 @@ export class IngestService {
   }
 
   private normalizeWebsiteInput(dto: CreateWebsiteIngestDto) {
-    const maxPages = Math.max(
-      1,
-      Math.min(WEBSITE_MAX_PAGES_CAP, dto.maxPages ?? WEBSITE_MAX_PAGES_DEFAULT),
+    const focus = this.toFocus(dto.focus);
+    const requestedRaw = this.readNumber(
+      dto.pagesToScan ?? dto.maxPages,
+      WEBSITE_PAGES_DEFAULT,
     );
-    const depth = Math.max(1, Math.min(WEBSITE_DEPTH_CAP, dto.depth ?? WEBSITE_DEPTH_DEFAULT));
+    const requestedPages = Math.max(1, Math.floor(requestedRaw || WEBSITE_PAGES_DEFAULT));
+    const clamped = requestedPages > WEBSITE_MAX_PAGES_HARD_CAP;
+    const maxPages = Math.min(WEBSITE_MAX_PAGES_HARD_CAP, requestedPages);
+    const config = this.buildCrawlConfig(focus, maxPages, requestedPages, clamped);
     return {
       url: this.normalizeUrl(dto.url),
-      maxPages,
-      depth,
+      pagesToScan: requestedPages,
+      maxPages: config.maxPages,
+      focus: config.focus,
+      note: config.note,
       includePaths: this.normalizePaths(dto.includePaths),
       excludePaths: this.normalizePaths(dto.excludePaths),
     };
+  }
+
+  private toFocus(raw: unknown): IngestFocus {
+    const value =
+      typeof raw === 'string' ? raw.trim().toUpperCase() : '';
+    if (value === 'QUICK' || value === 'DEEP') {
+      return value;
+    }
+    return 'STANDARD';
+  }
+
+  private buildCrawlConfig(
+    focus: IngestFocus,
+    maxPages: number,
+    requestedPages: number,
+    clamped: boolean,
+  ): CrawlConfig {
+    if (focus === 'QUICK') {
+      return {
+        focus,
+        maxPages,
+        depth: 1,
+        pageCharCap: 14_000,
+        totalCharCap: 90_000,
+        timeCapMs: 60_000,
+        userRequestedPages: requestedPages,
+        clamped,
+        note: clamped ? `Scanned first ${maxPages} pages for speed.` : null,
+      };
+    }
+
+    if (focus === 'DEEP') {
+      return {
+        focus,
+        maxPages,
+        depth: 3,
+        pageCharCap: 22_000,
+        totalCharCap: 180_000,
+        timeCapMs: 120_000,
+        userRequestedPages: requestedPages,
+        clamped,
+        note: clamped ? `Scanned first ${maxPages} pages for speed.` : null,
+      };
+    }
+
+    return {
+      focus: 'STANDARD',
+      maxPages,
+      depth: 2,
+      pageCharCap: 18_000,
+      totalCharCap: 140_000,
+      timeCapMs: 90_000,
+      userRequestedPages: requestedPages,
+      clamped,
+      note: clamped ? `Scanned first ${maxPages} pages for speed.` : null,
+    };
+  }
+
+  private getCrawlConfigFromInput(input: Record<string, unknown>): CrawlConfig {
+    const focus = this.toFocus(input.focus);
+    const requestedRaw = this.readNumber(
+      input.pagesToScan ?? input.maxPages,
+      WEBSITE_PAGES_DEFAULT,
+    );
+    const requestedPages = Math.max(1, Math.floor(requestedRaw || WEBSITE_PAGES_DEFAULT));
+    const clamped = requestedPages > WEBSITE_MAX_PAGES_HARD_CAP;
+    const maxPages = Math.min(WEBSITE_MAX_PAGES_HARD_CAP, requestedPages);
+    return this.buildCrawlConfig(focus, maxPages, requestedPages, clamped);
   }
 
   private normalizeUrl(raw: string) {
@@ -582,11 +781,10 @@ export class IngestService {
 
   private async crawlWebsite(input: {
     url: string;
-    maxPages: number;
-    depth: number;
+    config: CrawlConfig;
     includePaths: string[];
     excludePaths: string[];
-  }): Promise<{ assets: CrawledAsset[]; totalChars: number }> {
+  }): Promise<{ assets: CrawledAsset[]; totalChars: number; note: string | null }> {
     const startUrl = this.normalizeUrl(input.url);
     const base = new URL(startUrl);
     const queue: Array<{ url: string; depth: number; priority: number }> = [
@@ -596,13 +794,20 @@ export class IngestService {
     const assets: CrawledAsset[] = [];
     let totalChars = 0;
     let guard = 0;
+    const startedAt = Date.now();
+    let note = input.config.note;
 
     while (
       queue.length > 0 &&
-      assets.length < input.maxPages &&
-      totalChars < TOTAL_TEXT_CAP &&
-      guard < input.maxPages * 40
+      assets.length < input.config.maxPages &&
+      totalChars < input.config.totalCharCap &&
+      guard < input.config.maxPages * 60
     ) {
+      if (Date.now() - startedAt > input.config.timeCapMs) {
+        note = note ?? `Scanned first ${assets.length} pages for speed.`;
+        break;
+      }
+
       guard += 1;
       queue.sort((a, b) => b.priority - a.priority);
       const next = queue.shift();
@@ -616,10 +821,10 @@ export class IngestService {
       const text = this.extractPageText(page.html);
       if (!text) continue;
 
-      const remaining = TOTAL_TEXT_CAP - totalChars;
+      const remaining = input.config.totalCharCap - totalChars;
       if (remaining <= 0) break;
 
-      const capped = text.slice(0, Math.min(PAGE_TEXT_CAP, remaining));
+      const capped = text.slice(0, Math.min(input.config.pageCharCap, remaining));
       assets.push({
         uri: next.url,
         title: page.title || this.fallbackTitle(next.url),
@@ -627,13 +832,13 @@ export class IngestService {
       });
       totalChars += capped.length;
 
-      if (next.depth >= input.depth) continue;
+      if (next.depth >= input.config.depth) continue;
 
       const links = this.extractInternalLinks(page.html, next.url, base, input.includePaths, input.excludePaths);
       for (const url of links) {
         if (visited.has(url)) continue;
         const parsed = new URL(url);
-        const priority = this.rankPath(parsed.pathname) - next.depth * 4;
+        const priority = this.rankPath(parsed.pathname, input.config.focus) - next.depth * 3;
         queue.push({
           url,
           depth: next.depth + 1,
@@ -645,7 +850,7 @@ export class IngestService {
     if (assets.length === 0) {
       throw new BadRequestException('No readable pages were extracted from the website.');
     }
-    return { assets, totalChars };
+    return { assets, totalChars, note };
   }
 
   private async fetchHtml(url: string) {
@@ -697,6 +902,8 @@ export class IngestService {
       if (!['http:', 'https:'].includes(resolved.protocol)) continue;
       if (resolved.hostname !== base.hostname) continue;
       resolved.hash = '';
+      resolved.search = '';
+      if (/\.(jpg|jpeg|png|webp|gif|svg|pdf|zip|mp4|mp3)$/i.test(resolved.pathname)) continue;
       if (!this.pathAllowed(resolved.pathname, includePaths, excludePaths)) continue;
       links.add(resolved.toString());
     }
@@ -715,32 +922,62 @@ export class IngestService {
     return true;
   }
 
-  private rankPath(pathname: string) {
+  private rankPath(pathname: string, focus: IngestFocus) {
     const path = pathname.toLowerCase();
-    let score = 0;
-    const ranked = [
+    let score = path === '/' || path === '' ? 18 : 0;
+
+    const highSignal = [
+      'service',
+      'services',
+      'portfolio',
+      'pricing',
       'about',
+      'faq',
+      'contact',
+      'package',
+      'packages',
+      'booking',
+      'book',
       'product',
       'products',
       'solution',
-      'pricing',
-      'faq',
-      'docs',
-      'documentation',
-      'security',
-      'compliance',
-      'terms',
-      'privacy',
+      'solutions',
+      'virtual-tour',
+      'drone',
     ];
-    for (const key of ranked) {
-      if (path.includes(key)) score += 12;
+    const mediumSignal = ['docs', 'documentation', 'security', 'compliance', 'terms'];
+    const lowSignal = ['privacy', 'accessibility', 'cookie', 'cookies'];
+    const noisy = ['blog', 'news', 'career', 'jobs', 'press', 'login', 'signin', 'signup', 'account'];
+
+    for (const key of highSignal) {
+      if (path.includes(key)) score += 16;
     }
-    if (path === '/' || path === '') score += 6;
+    for (const key of mediumSignal) {
+      if (path.includes(key)) score += 7;
+    }
+    for (const key of noisy) {
+      if (path.includes(key)) score -= 12;
+    }
+
+    if (focus !== 'DEEP') {
+      for (const key of lowSignal) {
+        if (path.includes(key)) score -= 18;
+      }
+    }
+
+    if (focus === 'QUICK') {
+      if (path.includes('service') || path.includes('pricing') || path.includes('package')) {
+        score += 8;
+      }
+      if (path.includes('terms')) score -= 4;
+    }
+
     return score;
   }
 
   private extractPageText(html: string) {
-    const stripped = html
+    const mainSection = this.extractMainSection(html);
+    const stripped = mainSection
       .replace(/<script[\s\S]*?<\/script>/gi, ' ')
       .replace(/<style[\s\S]*?<\/style>/gi, ' ')
       .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
@@ -748,11 +985,26 @@ export class IngestService {
       .replace(/<nav[\s\S]*?<\/nav>/gi, ' ')
       .replace(/<footer[\s\S]*?<\/footer>/gi, ' ')
       .replace(/<header[\s\S]*?<\/header>/gi, ' ')
+      .replace(/<aside[\s\S]*?<\/aside>/gi, ' ')
+      .replace(/<form[\s\S]*?<\/form>/gi, ' ')
       .replace(/<[^>]+>/g, ' ');
     const decoded = this.decodeHtml(stripped);
     const compact = this.compactWhitespace(decoded);
     if (compact.length < 180) return '';
     return compact;
+  }
+
+  private extractMainSection(html: string) {
+    const main = html.match(/<main\b[^>]*>([\s\S]*?)<\/main>/i)?.[1];
+    if (main) return main;
+
+    const article = html.match(/<article\b[^>]*>([\s\S]*?)<\/article>/i)?.[1];
+    if (article) return article;
+
+    const body = html.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i)?.[1];
+    if (body) return body;
+
+    return html;
   }
 
   private decodeHtml(input: string) {
@@ -840,7 +1092,7 @@ export class IngestService {
       }
     }
     const text = Array.from(chunks).join('\n');
-    return text.slice(0, TOTAL_TEXT_CAP);
+    return text.slice(0, PDF_TEXT_CAP);
   }
 
   private async structureResult(target: IngestionTarget, assets: CrawledAsset[]): Promise<IngestionResult> {
@@ -860,16 +1112,32 @@ export class IngestService {
   private async structureCompany(sources: SourceRef[]): Promise<CompanyExtractionResult> {
     const raw = await this.runJsonCompletion({
       system:
-        'You are a B2B sales enablement analyst. Extract concise company messaging with confidence and citations from sources.',
+        'You are a sales enablement analyst. Extract concise company messaging with confidence and citations from sources. Do not fabricate claims.',
       user:
         'Given these sources, produce JSON with key fields. Schema:\n' +
-        '{ "fields": { "company_overview": {"value": string, "confidence": number, "citations": string[]}, "target_customers": {"value": string, "confidence": number, "citations": string[]}, "value_props": {"value": string[], "confidence": number, "citations": string[]}, "tone_style": {"value": string, "confidence": number, "citations": string[]}, "compliance_and_policies": {"value": string[], "confidence": number, "citations": string[]}, "forbidden_claims": {"value": string[], "confidence": number, "citations": string[]}, "competitor_positioning": {"value": string[], "confidence": number, "citations": string[]}, "escalation_rules": {"value": string[], "confidence": number, "citations": string[]}, "knowledge_base_appendix": {"value": string, "confidence": number, "citations": string[]} } }\n' +
-        'Rules: keep text concise, preserve only high-signal content, citations must be source IDs like S1.\n' +
+        '{ "fields": { "company_overview": {"value": string, "confidence": number, "citations": string[], "suggested": boolean}, "target_customers": {"value": string, "confidence": number, "citations": string[], "suggested": boolean}, "value_props": {"value": string[], "confidence": number, "citations": string[], "suggested": boolean}, "tone_style": {"value": string, "confidence": number, "citations": string[], "suggested": boolean}, "compliance_and_policies": {"value": string[], "confidence": number, "citations": string[], "suggested": boolean}, "forbidden_claims": {"value": string[], "confidence": number, "citations": string[], "suggested": boolean}, "competitor_positioning": {"value": string[], "confidence": number, "citations": string[], "suggested": boolean}, "escalation_rules": {"value": string[], "confidence": number, "citations": string[], "suggested": boolean}, "knowledge_base_appendix": {"value": string, "confidence": number, "citations": string[], "suggested": boolean} } }\n' +
+        'Rules:\n' +
+        '- compliance_and_policies means SALES & SERVICE POLICIES only: booking process, turnaround time, reschedule/cancellation, deposits/payment expectations, licensing/usage rights, service area/travel fees, on-site privacy expectations.\n' +
+        '- Do not use privacy policy, WCAG, cookie, or generic legal site content as compliance_and_policies unless it directly impacts sales/service delivery.\n' +
+        '- If no reliable evidence exists for competitor_positioning or escalation_rules, provide practical suggested defaults with low confidence, suggested=true, and citations=[].\n' +
+        '- Keep text concise and citations must be source IDs like S1.\n' +
         this.renderSources(sources),
     });
 
     const valid = new Set(sources.map((source) => source.id));
     const fields = this.asRecord(raw.fields);
+    const complianceAndPolicies = this.normalizeStringArrayField(
+      fields.compliance_and_policies,
+      valid,
+    );
+    const competitorPositioning = this.ensureSuggestedArrayField(
+      this.normalizeStringArrayField(fields.competitor_positioning, valid),
+      COMPETITOR_SUGGESTED_DEFAULTS,
+    );
+    const escalationRules = this.ensureSuggestedArrayField(
+      this.normalizeStringArrayField(fields.escalation_rules, valid),
+      ESCALATION_SUGGESTED_DEFAULTS,
+    );
 
     return {
       kind: 'COMPANY',
@@ -879,16 +1147,12 @@ export class IngestService {
         target_customers: this.normalizeStringField(fields.target_customers, valid),
         value_props: this.normalizeStringArrayField(fields.value_props, valid),
         tone_style: this.normalizeStringField(fields.tone_style, valid),
-        compliance_and_policies: this.normalizeStringArrayField(
-          fields.compliance_and_policies,
-          valid,
+        compliance_and_policies: this.normalizeSalesPoliciesField(
+          complianceAndPolicies,
         ),
         forbidden_claims: this.normalizeStringArrayField(fields.forbidden_claims, valid),
-        competitor_positioning: this.normalizeStringArrayField(
-          fields.competitor_positioning,
-          valid,
-        ),
-        escalation_rules: this.normalizeStringArrayField(fields.escalation_rules, valid),
+        competitor_positioning: competitorPositioning,
+        escalation_rules: escalationRules,
         knowledge_base_appendix: this.normalizeStringField(fields.knowledge_base_appendix, valid),
       },
     };
@@ -897,18 +1161,23 @@ export class IngestService {
   private async structureProducts(sources: SourceRef[]): Promise<ProductExtractionResult> {
     const raw = await this.runJsonCompletion({
       system:
-        'You are a B2B product marketing analyst. Extract product definitions with confidence and citations from sources.',
+        'You are a sales offering extraction analyst. Extract offerings/packages/services with citations and avoid hallucinations.',
       user:
         'Given these sources, return JSON with key "products" as an array. Each product item must contain:\n' +
-        '{ "name": {"value": string, "confidence": number, "citations": string[]}, "elevator_pitch": {"value": string, "confidence": number, "citations": string[]}, "value_props": {"value": string[], "confidence": number, "citations": string[]}, "differentiators": {"value": string[], "confidence": number, "citations": string[]}, "pricing_rules": {"value": object, "confidence": number, "citations": string[]}, "dont_say": {"value": string[], "confidence": number, "citations": string[]}, "faqs": {"value": array, "confidence": number, "citations": string[]}, "objections": {"value": array, "confidence": number, "citations": string[]} }\n' +
-        'Return up to 5 distinct products, prioritize clarity, avoid fabricated pricing numbers, citations must be IDs like S1.\n' +
+        '{ "name": {"value": string, "confidence": number, "citations": string[], "suggested": boolean}, "elevator_pitch": {"value": string, "confidence": number, "citations": string[], "suggested": boolean}, "value_props": {"value": string[], "confidence": number, "citations": string[], "suggested": boolean}, "differentiators": {"value": string[], "confidence": number, "citations": string[], "suggested": boolean}, "pricing_rules": {"value": object, "confidence": number, "citations": string[], "suggested": boolean}, "dont_say": {"value": string[], "confidence": number, "citations": string[], "suggested": boolean}, "faqs": {"value": array, "confidence": number, "citations": string[], "suggested": boolean}, "objections": {"value": array, "confidence": number, "citations": string[], "suggested": boolean} }\n' +
+        'Rules:\n' +
+        '- For service businesses, detect multiple offerings/packages/services, not the company name as a product.\n' +
+        '- Product names must be offering names such as package/service names found in sources.\n' +
+        '- If a claim lacks evidence, keep it in value with suggested=true and citations=[].\n' +
+        '- Never fabricate AI capabilities, pricing numbers, or unverified differentiators.\n' +
+        '- Return up to 8 distinct offerings and citations must be IDs like S1.\n' +
         this.renderSources(sources),
     });
 
     const valid = new Set(sources.map((source) => source.id));
     const rawProducts = Array.isArray(raw.products) ? raw.products : [];
     const products = rawProducts
-      .slice(0, 5)
+      .slice(0, 8)
       .map((item) => this.asRecord(item))
       .map((item) => ({
         id: randomUUID(),
@@ -921,6 +1190,7 @@ export class IngestService {
         faqs: this.normalizeArrayField(item.faqs, valid),
         objections: this.normalizeArrayField(item.objections, valid),
       }))
+      .map((item) => this.normalizeProductCandidate(item, sources))
       .filter((item) => item.name.value.trim().length > 0);
 
     return {
@@ -932,14 +1202,14 @@ export class IngestService {
           : [
               {
                 id: randomUUID(),
-                name: { value: 'Imported Product', confidence: 0.15, citations: [] },
-                elevator_pitch: { value: '', confidence: 0.15, citations: [] },
-                value_props: { value: [], confidence: 0.15, citations: [] },
-                differentiators: { value: [], confidence: 0.15, citations: [] },
-                pricing_rules: { value: {}, confidence: 0.15, citations: [] },
-                dont_say: { value: [], confidence: 0.15, citations: [] },
-                faqs: { value: [], confidence: 0.15, citations: [] },
-                objections: { value: [], confidence: 0.15, citations: [] },
+                name: { value: 'Service Offering', confidence: 0.2, citations: [], suggested: true },
+                elevator_pitch: { value: '', confidence: 0.2, citations: [], suggested: true },
+                value_props: { value: [], confidence: 0.2, citations: [], suggested: true },
+                differentiators: { value: [], confidence: 0.2, citations: [], suggested: true },
+                pricing_rules: { value: {}, confidence: 0.2, citations: [], suggested: true },
+                dont_say: { value: [], confidence: 0.2, citations: [], suggested: true },
+                faqs: { value: [], confidence: 0.2, citations: [], suggested: true },
+                objections: { value: [], confidence: 0.2, citations: [], suggested: true },
               },
             ],
     };
@@ -957,10 +1227,13 @@ export class IngestService {
   private normalizeStringField(input: unknown, validCitations: Set<string>): ExtractedField<string> {
     const record = this.asRecord(input);
     const value = this.readString(record.value, 2400);
+    const citations = this.normalizeCitations(record.citations, validCitations);
+    const confidence = this.normalizeConfidence(record.confidence);
     return {
       value,
-      confidence: this.normalizeConfidence(record.confidence),
-      citations: this.normalizeCitations(record.citations, validCitations),
+      confidence,
+      citations,
+      suggested: this.normalizeSuggested(record.suggested, confidence, citations),
     };
   }
 
@@ -970,10 +1243,13 @@ export class IngestService {
   ): ExtractedField<string[]> {
     const record = this.asRecord(input);
     const array = this.toStringArray(record.value).slice(0, 12);
+    const citations = this.normalizeCitations(record.citations, validCitations);
+    const confidence = this.normalizeConfidence(record.confidence);
     return {
       value: array,
-      confidence: this.normalizeConfidence(record.confidence),
-      citations: this.normalizeCitations(record.citations, validCitations),
+      confidence,
+      citations,
+      suggested: this.normalizeSuggested(record.suggested, confidence, citations),
     };
   }
 
@@ -982,20 +1258,32 @@ export class IngestService {
     validCitations: Set<string>,
   ): ExtractedField<Record<string, unknown>> {
     const record = this.asRecord(input);
+    const citations = this.normalizeCitations(record.citations, validCitations);
+    const confidence = this.normalizeConfidence(record.confidence);
     return {
       value: this.toObject(record.value),
-      confidence: this.normalizeConfidence(record.confidence),
-      citations: this.normalizeCitations(record.citations, validCitations),
+      confidence,
+      citations,
+      suggested: this.normalizeSuggested(record.suggested, confidence, citations),
     };
   }
 
   private normalizeArrayField(input: unknown, validCitations: Set<string>): ExtractedField<unknown[]> {
     const record = this.asRecord(input);
+    const citations = this.normalizeCitations(record.citations, validCitations);
+    const confidence = this.normalizeConfidence(record.confidence);
     return {
       value: Array.isArray(record.value) ? record.value.slice(0, 20) : [],
-      confidence: this.normalizeConfidence(record.confidence),
-      citations: this.normalizeCitations(record.citations, validCitations),
+      confidence,
+      citations,
+      suggested: this.normalizeSuggested(record.suggested, confidence, citations),
     };
+  }
+
+  private normalizeSuggested(value: unknown, confidence: number, citations: string[]) {
+    if (typeof value === 'boolean') return value;
+    if (citations.length === 0 && confidence < 0.7) return true;
+    return false;
   }
 
   private normalizeConfidence(value: unknown) {
@@ -1019,6 +1307,104 @@ export class IngestService {
       .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
       .filter((entry) => entry.length > 0 && validCitations.has(entry))
       .slice(0, 6);
+  }
+
+  private normalizeSalesPoliciesField(
+    field: ExtractedField<string[]>,
+  ): ExtractedField<string[]> {
+    const filtered = field.value
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+
+    const isWebsiteMetaOnly =
+      filtered.length > 0 &&
+      filtered.every((item) =>
+        /(privacy|cookie|cookies|wcag|accessibility|gdpr|data protection|tracking)/i.test(item),
+      );
+
+    if (filtered.length === 0 || isWebsiteMetaOnly) {
+      return {
+        value: SALES_POLICY_SUGGESTED_DEFAULTS,
+        confidence: 0.28,
+        citations: [],
+        suggested: true,
+      };
+    }
+
+    return field;
+  }
+
+  private ensureSuggestedArrayField(
+    field: ExtractedField<string[]>,
+    defaults: string[],
+  ): ExtractedField<string[]> {
+    if (field.value.length > 0) return field;
+    return {
+      value: defaults,
+      confidence: 0.26,
+      citations: [],
+      suggested: true,
+    };
+  }
+
+  private normalizeProductCandidate(
+    candidate: ProductExtractionResult['products'][number],
+    sources: SourceRef[],
+  ): ProductExtractionResult['products'][number] {
+    const sourceNames = new Set<string>();
+    for (const source of sources) {
+      const host = this.extractHost(source.uri);
+      if (host) {
+        sourceNames.add(host.replace(/^www\./, '').toLowerCase());
+      }
+      sourceNames.add(source.title.trim().toLowerCase());
+    }
+
+    const nameNormalized = candidate.name.value.trim();
+    const loweredName = nameNormalized.toLowerCase();
+    if (loweredName) {
+      for (const token of sourceNames) {
+        if (!token) continue;
+        if (loweredName === token || loweredName.includes(token)) {
+          candidate.name = {
+            value: '',
+            confidence: 0.2,
+            citations: [],
+            suggested: true,
+          };
+          break;
+        }
+      }
+    }
+
+    if (candidate.value_props.citations.length === 0 && candidate.value_props.value.length > 0) {
+      candidate.value_props = {
+        ...candidate.value_props,
+        value: candidate.value_props.value.map((line) => `Suggested (no citation): ${line}`),
+        suggested: true,
+      };
+    }
+
+    if (
+      candidate.differentiators.citations.length === 0 &&
+      candidate.differentiators.value.length > 0
+    ) {
+      candidate.differentiators = {
+        ...candidate.differentiators,
+        value: candidate.differentiators.value.map((line) => `Suggested (no citation): ${line}`),
+        suggested: true,
+      };
+    }
+
+    return candidate;
+  }
+
+  private extractHost(uri: string) {
+    try {
+      return new URL(uri).hostname;
+    } catch {
+      return '';
+    }
   }
 
   private async runJsonCompletion(input: { system: string; user: string }) {
@@ -1146,7 +1532,7 @@ export class IngestService {
       .limit(1);
 
     if (appendKnowledgeBase && appendixFromReview) {
-      const currentFaq = existing?.faq || GTAPHOTOPRO_COMPANY_PROFILE_DEFAULTS.faq;
+      const currentFaq = existing?.faq || EMPTY_COMPANY_PROFILE_DEFAULTS.faq;
       patch.faq = `${currentFaq}\n\nImported Knowledge\n${appendixFromReview}`.slice(0, 12000);
     }
 
@@ -1169,7 +1555,7 @@ export class IngestService {
           faq: existing.faq,
           doNotSay: existing.doNotSay,
         }
-      : GTAPHOTOPRO_COMPANY_PROFILE_DEFAULTS;
+      : EMPTY_COMPANY_PROFILE_DEFAULTS;
 
     const [saved] = await this.db
       .insert(schema.orgCompanyProfiles)

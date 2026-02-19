@@ -30,37 +30,30 @@ type QualitySuggestion = {
   proposedValue: string;
 };
 
+type AiSuggestion = {
+  text: string;
+  mode: 'draft' | 'improve';
+  notes: string[];
+  warnings: string[];
+};
+
 const DEFAULT_PROFILE: CompanyProfile = {
-  companyName: 'GTAPhotoPro',
-  productName: 'GTAPhotoPro Real Estate Photo & Media',
-  productSummary:
-    'Capturing Real Estate Beauty in the Greater Toronto Area with interior photography, exterior photography, drone media, virtual tours, and virtual staging.',
-  idealCustomerProfile:
-    'Greater Toronto Area real-estate agents, broker teams, and developers who need faster listing launch, premium visuals, and one reliable media partner.',
-  valueProposition:
-    '- Standard listing photos are delivered in 24 hours for most shoots.\n- Client campaigns average +31% listing click-through and +19% more showing requests in the first 14 days.\n- Virtual staging lifts inquiry rate by ~24% on vacant properties.\n- Drone + twilight bundles improve premium-listing engagement by ~33%.',
-  differentiators:
-    '- Specialized in GTA real-estate media only, with one team covering interior, exterior, drone, tours, and staging.\n- 98.2% on-time delivery rate over the last 12 months.\n- 14 photographers on the active roster: 9 senior listing photographers, 5 certified drone pilots.\n- Standardized editing workflow keeps color style and composition consistent across broker teams.\n- One-vendor workflow reduces listing media coordination time by ~38%.',
-  proofPoints:
-    '- 3,180+ GTA properties photographed.\n- 640+ completed listing media packages in the last 12 months.\n- 4.9/5 average rating from 420+ verified reviews.\n- 24-hour standard photo turnaround achieved on 91% of shoots.\n- 46% of monthly bookings are repeat broker-team clients.\n- 87% of shoots include same-week booking availability.\n- 12,000+ edited portfolio photos across detached, condo, and luxury listings.\n- 22 partnered brokerages served in the GTA.',
-  repTalkingPoints:
-    '- Open with permission and one clear reason for the call.\n- Use one numeric argument per message: 24-hour turnaround, +31% click-through, or 4.9/5 review score.\n- Recommend one package at a time: Basic (1h), Full (1h30m), Drone Videography (2h).\n- Keep replies short: one question at a time, then pause.\n- End with one concrete next step: pilot listing booking or 15-minute package-fit call.',
-  discoveryGuidance:
-    '- Ask how they handle listing photos, drone, and staging today.\n- Ask average media turnaround and how many listings wait on photos each month.\n- Ask what breaks most: delays, inconsistent quality, weak hero shots, or vendor coordination.\n- Ask what they want this quarter: faster launch, more showings, or premium listing presentation.',
-  qualificationGuidance:
-    '- Need: confirm media speed or quality is costing momentum.\n- Timeline: ask next listing go-live date.\n- Decision process: solo agent decision vs broker/manager approval.\n- Volume: qualify monthly listings (1-5, 6-15, 16+).\n- Service mix: photo only vs photo + drone + staging.',
-  objectionHandling:
-    'BUDGET: ask if concern is per-listing price or monthly spend predictability.\nCOMPETITOR: ask what currently works and what still breaks, then compare 98.2% on-time delivery and one-vendor workflow.\nTIMING: align to next listing date and offer a pilot.\nNO NEED: ask one diagnostic question and exit politely if no pain.',
-  competitorGuidance:
-    '- Do not attack competitors; compare on speed, consistency, service breadth, and GTA familiarity.\n- If they use separate vendors for photo/drone/staging, position GTAPhotoPro as one accountable team.\n- Suggest a pilot listing benchmark to compare turnaround and quality objectively.',
-  pricingGuidance:
-    '- Prices are customized; ask property type, square footage, and deliverables first.\n- Use package framing: Basic (1h), Full (1h30m), Drone Videography (2h).\n- If exact price is unknown, commit to a same-day quote after one qualifier.',
-  implementationGuidance:
-    '- Start with one pilot listing to validate quality + turnaround.\n- Standard workflow: booking, shot-list confirmation, shoot, edit, delivery link in 24-48 hours.\n- For broker teams, assign recurring shoot windows and one coordination contact.\n- Review first 3 completed listings, then lock a monthly package cadence.',
-  faq:
-    'Q: What areas do you serve?\nA: Greater Toronto Area and nearby high-volume listing corridors.\n\nQ: What services are available?\nA: Interior/exterior photography, aerial media, virtual tours, and virtual staging.\n\nQ: How fast is delivery?\nA: Standard photos are usually delivered in 24 hours; expanded packages can take 24-48 hours.\n\nQ: How can prospects contact us?\nA: +1 647 901 6804 or gtaphotopro@gmail.com.',
-  doNotSay:
-    '- Do not guarantee sale price or sale speed outcomes.\n- Do not quote exact pricing without listing details.\n- Do not pressure prospects after a clear decline.\n- Avoid generic claims that are not tied to deliverables or metrics.',
+  companyName: '',
+  productName: '',
+  productSummary: '',
+  idealCustomerProfile: '',
+  valueProposition: '',
+  differentiators: '',
+  proofPoints: '',
+  repTalkingPoints: '',
+  discoveryGuidance: '',
+  qualificationGuidance: '',
+  objectionHandling: '',
+  competitorGuidance: '',
+  pricingGuidance: '',
+  implementationGuidance: '',
+  faq: '',
+  doNotSay: '',
 };
 
 const FIELDS: Array<{
@@ -69,39 +62,39 @@ const FIELDS: Array<{
   hint: string;
   rows?: number;
 }> = [
-  { key: 'companyName', label: 'Company Name', hint: 'Used in call openings and context.' },
-  { key: 'productName', label: 'Product Name', hint: 'What reps are selling.' },
-  { key: 'productSummary', label: 'Product Summary', hint: 'One concise explanation.', rows: 3 },
-  { key: 'idealCustomerProfile', label: 'Ideal Customer Profile', hint: 'Who is the best fit?', rows: 3 },
-  { key: 'valueProposition', label: 'Value Proposition', hint: 'Use outcome-focused bullets with metrics.', rows: 5 },
-  { key: 'differentiators', label: 'Competitive Advantages', hint: 'Why switch to your product?', rows: 5 },
-  { key: 'proofPoints', label: 'Data & Proof Points', hint: 'Numeric facts reps can cite.', rows: 6 },
-  { key: 'repTalkingPoints', label: 'Rep Talking Points', hint: 'Behavior and tone expectations.', rows: 5 },
-  { key: 'discoveryGuidance', label: 'Discovery Guidance', hint: 'What to ask and uncover.', rows: 5 },
-  { key: 'qualificationGuidance', label: 'Qualification Guidance', hint: 'Need, timeline, authority, rollout.', rows: 5 },
-  { key: 'objectionHandling', label: 'Objection Handling', hint: 'Budget, timing, competitor, authority flows.', rows: 8 },
-  { key: 'competitorGuidance', label: 'Competitor Positioning', hint: 'How to position without attacking.', rows: 4 },
-  { key: 'pricingGuidance', label: 'Pricing Guidance', hint: 'What reps can/cannot say before quoting.', rows: 4 },
-  { key: 'implementationGuidance', label: 'Implementation Guidance', hint: 'Pilot and rollout approach.', rows: 4 },
-  { key: 'faq', label: 'Product FAQ', hint: 'Common question/answer pairs.', rows: 8 },
-  { key: 'doNotSay', label: 'Compliance Guardrails', hint: 'Claims or language reps should avoid.', rows: 4 },
+  { key: 'companyName', label: 'Company Name', hint: 'Use the legal or public-facing brand name.' },
+  { key: 'productName', label: 'Primary Offer Name', hint: 'Name of service or offer reps sell most often.' },
+  { key: 'productSummary', label: 'Company Overview', hint: 'Write 2-4 sentences with clear outcomes.', rows: 3 },
+  { key: 'idealCustomerProfile', label: 'Target Customers', hint: 'Who buys and in which situations.', rows: 3 },
+  { key: 'valueProposition', label: 'Value Proposition', hint: 'Use 3-7 outcome-driven bullets.', rows: 5 },
+  { key: 'differentiators', label: 'Differentiators', hint: 'List practical, verifiable differences.', rows: 5 },
+  { key: 'proofPoints', label: 'Proof Points', hint: 'Use numbers reps can cite safely.', rows: 6 },
+  { key: 'repTalkingPoints', label: 'Rep Tone & Style', hint: 'How reps should communicate in live calls.', rows: 5 },
+  { key: 'discoveryGuidance', label: 'Discovery Guidance', hint: 'Questions that expose pain and urgency.', rows: 5 },
+  { key: 'qualificationGuidance', label: 'Qualification Guidance', hint: 'How to qualify fit and buying readiness.', rows: 5 },
+  { key: 'objectionHandling', label: 'Objection Handling', hint: 'Structured responses for common objections.', rows: 8 },
+  { key: 'competitorGuidance', label: 'Competitor Positioning', hint: 'Position without making risky claims.', rows: 4 },
+  { key: 'pricingGuidance', label: 'Sales & Service Policies', hint: 'Booking, turnaround, cancellation, payment, licensing guardrails.', rows: 4 },
+  { key: 'implementationGuidance', label: 'Implementation Guidance', hint: 'What happens after commitment.', rows: 4 },
+  { key: 'faq', label: 'FAQ', hint: 'Add concise Q/A pairs.', rows: 8 },
+  { key: 'doNotSay', label: 'Do Not Say', hint: 'Claims reps must avoid.', rows: 4 },
 ];
 
 const FIELD_HELP: Partial<Record<keyof CompanyProfile, string>> = {
-  productSummary: 'Write a short 3-5 sentence overview focused on measurable customer outcomes.',
-  idealCustomerProfile: 'List who buys, when they buy, and what makes them a strong fit.',
-  valueProposition: 'Use 3-7 bullet points with concrete outcomes and no vague superlatives.',
-  differentiators: 'Name practical differences buyers can verify in evaluation calls.',
-  proofPoints: 'Prefer recent metrics, customer counts, delivery SLAs, or benchmark numbers.',
-  repTalkingPoints: 'Use concise tactical bullets reps can apply line-by-line during calls.',
-  discoveryGuidance: 'Include discovery prompts that expose pain, urgency, and desired outcomes.',
-  qualificationGuidance: 'Define qualification criteria reps can score quickly in the first meeting.',
-  objectionHandling: 'Add objection-specific responses with a recommended next question.',
-  competitorGuidance: 'Position competitively without negative claims or legal risk.',
-  pricingGuidance: 'Set pricing guardrails and what must be qualified before quoting.',
-  implementationGuidance: 'Describe onboarding steps and realistic adoption milestones.',
-  faq: 'Use direct Q/A format and keep each answer factual and concise.',
-  doNotSay: 'List prohibited promises, compliance-sensitive claims, and risky language.',
+  productSummary: 'Keep it concise and concrete. Avoid generic adjectives.',
+  idealCustomerProfile: 'Mention segment, trigger event, and buying context.',
+  valueProposition: 'Use one bullet per line and include measurable outcomes where possible.',
+  differentiators: 'Prefer operational strengths over broad marketing claims.',
+  proofPoints: 'Use only facts you can defend in a customer conversation.',
+  repTalkingPoints: 'Guide tone, pace, and structure for live conversations.',
+  discoveryGuidance: 'Focus on uncovering urgency, impact, and ownership.',
+  qualificationGuidance: 'Define fit criteria reps can score quickly.',
+  objectionHandling: 'Use objection label + response + next question format.',
+  competitorGuidance: 'Keep it factual and avoid negative competitor language.',
+  pricingGuidance: 'Define booking and policy guardrails, not one-off promises.',
+  implementationGuidance: 'Describe rollout steps and expected timing.',
+  faq: 'Keep answers brief and avoid uncertain commitments.',
+  doNotSay: 'Include compliance-sensitive claims and prohibited language.',
 };
 
 export default function AdminCompanyPage() {
@@ -114,17 +107,28 @@ export default function AdminCompanyPage() {
   const [qualityOpen, setQualityOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState<'saved' | 'error' | null>(null);
+  const [aiEnabled, setAiEnabled] = useState(true);
+  const [aiMessage, setAiMessage] = useState('');
+  const [aiBusyKey, setAiBusyKey] = useState('');
+  const [aiError, setAiError] = useState('');
+  const [aiSuggestions, setAiSuggestions] = useState<Partial<Record<keyof CompanyProfile, AiSuggestion>>>({});
 
   useEffect(() => {
     async function load() {
-      const res = await fetch('/api/org/company-profile');
-      const data = await res.json();
-      const next = { ...DEFAULT_PROFILE, ...(data ?? {}) };
+      const [profileRes, aiStatusRes] = await Promise.all([
+        fetch('/api/org/company-profile', { cache: 'no-store' }),
+        fetch('/api/ai/fields/status', { cache: 'no-store' }),
+      ]);
+      const profileData = await profileRes.json().catch(() => ({}));
+      const aiStatusData = await aiStatusRes.json().catch(() => ({ enabled: false }));
+      const next = { ...DEFAULT_PROFILE, ...(profileData ?? {}) };
       setProfile(next);
       setBaseline(next);
+      setAiEnabled(Boolean(aiStatusData?.enabled));
+      setAiMessage(typeof aiStatusData?.message === 'string' ? aiStatusData.message : '');
       setLoading(false);
     }
-    load().catch(() => setLoading(false));
+    void load().catch(() => setLoading(false));
   }, []);
 
   const dirty = useMemo(
@@ -213,6 +217,80 @@ export default function AdminCompanyPage() {
     patch(key, suggestion.proposedValue as CompanyProfile[typeof key]);
   }
 
+  async function runAiAction(fieldKey: keyof CompanyProfile, mode: 'draft' | 'improve') {
+    if (!aiEnabled) return;
+    if (mode === 'improve' && !profile[fieldKey].trim()) {
+      setAiError('Add some text before using AI Improve.');
+      return;
+    }
+
+    setAiError('');
+    const key = `${fieldKey}:${mode}`;
+    setAiBusyKey(key);
+
+    const endpoint = mode === 'draft' ? '/api/ai/fields/draft' : '/api/ai/fields/improve';
+    const payload = {
+      target: 'company',
+      fieldKey,
+      ...(mode === 'improve' ? { text: profile[fieldKey] } : {}),
+      currentState: {
+        profile,
+      },
+    };
+
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    setAiBusyKey('');
+
+    if (!res.ok) {
+      setAiError(Array.isArray(data?.message) ? data.message[0] : (data?.message ?? 'AI request failed.'));
+      return;
+    }
+
+    const text = typeof data?.text === 'string' ? data.text.trim() : '';
+    if (!text) {
+      setAiError('AI returned an empty suggestion.');
+      return;
+    }
+
+    setAiSuggestions((prev) => ({
+      ...prev,
+      [fieldKey]: {
+        text,
+        mode,
+        notes: Array.isArray(data?.notes)
+          ? data.notes.filter((entry: unknown) => typeof entry === 'string').slice(0, 6)
+          : [],
+        warnings: Array.isArray(data?.warnings)
+          ? data.warnings.filter((entry: unknown) => typeof entry === 'string').slice(0, 6)
+          : [],
+      },
+    }));
+  }
+
+  function applyAiSuggestion(fieldKey: keyof CompanyProfile) {
+    const suggestion = aiSuggestions[fieldKey];
+    if (!suggestion) return;
+    patch(fieldKey, suggestion.text);
+    setAiSuggestions((prev) => {
+      const next = { ...prev };
+      delete next[fieldKey];
+      return next;
+    });
+  }
+
+  function dismissAiSuggestion(fieldKey: keyof CompanyProfile) {
+    setAiSuggestions((prev) => {
+      const next = { ...prev };
+      delete next[fieldKey];
+      return next;
+    });
+  }
+
   if (loading) {
     return (
       <div className="p-8 space-y-3">
@@ -229,46 +307,108 @@ export default function AdminCompanyPage() {
         <div>
           <h1 className="text-lg font-semibold text-white">Company Info</h1>
           <p className="text-sm text-slate-500 mt-1">
-            This context powers GTAPhotoPro live coaching and objection responses.
+            This context powers live coaching and objection responses.
           </p>
         </div>
         <Link
           href="/app/admin/company/import"
-          className="shrink-0 px-3 py-2 rounded-lg border border-cyan-500/40 bg-cyan-500/10 text-cyan-200 text-sm font-medium hover:bg-cyan-500/20 transition-colors"
+          className="shrink-0 px-3 py-2 rounded-lg border border-sky-500/40 bg-sky-500/10 text-sky-200 text-sm font-medium hover:bg-sky-500/20 transition-colors"
         >
           Auto-fill from website or PDFs
         </Link>
       </div>
 
       <div className="space-y-4">
-        {FIELDS.map((field) => (
-          <section key={field.key} className="bg-slate-900 border border-slate-800 rounded-xl p-4">
-            <div className="mb-2">
-              <h2 className="text-sm font-medium text-white">{field.label}</h2>
-              <p className="text-xs text-slate-500 mt-0.5">{field.hint}</p>
-            </div>
-            {field.rows && field.rows > 1 ? (
-              <textarea
-                value={profile[field.key]}
-                rows={field.rows}
-                onChange={(e) => patch(field.key, e.target.value)}
-                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              />
-            ) : (
-              <input
-                value={profile[field.key]}
-                onChange={(e) => patch(field.key, e.target.value)}
-                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              />
-            )}
-            {FIELD_HELP[field.key] && (
-              <p className="mt-2 text-xs text-slate-500">{FIELD_HELP[field.key]}</p>
-            )}
-          </section>
-        ))}
+        {FIELDS.map((field) => {
+          const suggestion = aiSuggestions[field.key];
+          return (
+            <section key={field.key} className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+              <div className="mb-2 flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-medium text-white">{field.label}</h2>
+                  <p className="text-xs text-slate-500 mt-0.5">{field.hint}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => runAiAction(field.key, 'draft')}
+                    disabled={!aiEnabled || aiBusyKey.length > 0}
+                    title={aiEnabled ? 'Generate AI draft' : aiMessage || 'AI unavailable'}
+                    className="px-2.5 py-1 rounded-md border border-slate-700 text-xs text-slate-200 hover:border-slate-500 disabled:opacity-40"
+                  >
+                    {aiBusyKey === `${field.key}:draft` ? 'Drafting...' : 'AI Draft'}
+                  </button>
+                  <button
+                    onClick={() => runAiAction(field.key, 'improve')}
+                    disabled={!aiEnabled || aiBusyKey.length > 0 || !profile[field.key].trim()}
+                    title={aiEnabled ? 'Improve current text' : aiMessage || 'AI unavailable'}
+                    className="px-2.5 py-1 rounded-md border border-slate-700 text-xs text-slate-200 hover:border-slate-500 disabled:opacity-40"
+                  >
+                    {aiBusyKey === `${field.key}:improve` ? 'Improving...' : 'AI Improve'}
+                  </button>
+                </div>
+              </div>
+
+              {field.rows && field.rows > 1 ? (
+                <textarea
+                  value={profile[field.key]}
+                  rows={field.rows}
+                  onChange={(e) => patch(field.key, e.target.value)}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-sky-500"
+                />
+              ) : (
+                <input
+                  value={profile[field.key]}
+                  onChange={(e) => patch(field.key, e.target.value)}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-sky-500"
+                />
+              )}
+
+              {FIELD_HELP[field.key] && (
+                <p className="mt-2 text-xs text-slate-500">{FIELD_HELP[field.key]}</p>
+              )}
+
+              {suggestion && (
+                <div className="mt-3 rounded-lg border border-sky-500/30 bg-sky-500/10 p-3 space-y-2">
+                  <p className="text-xs text-sky-200">
+                    {suggestion.mode === 'draft' ? 'AI Draft suggestion' : 'AI Improve suggestion'}
+                  </p>
+                  <pre className="whitespace-pre-wrap text-xs text-sky-100">{suggestion.text}</pre>
+                  {suggestion.notes.length > 0 && (
+                    <ul className="text-xs text-sky-200 space-y-0.5">
+                      {suggestion.notes.map((note) => (
+                        <li key={`${field.key}-${note}`}>{note}</li>
+                      ))}
+                    </ul>
+                  )}
+                  {suggestion.warnings.length > 0 && (
+                    <ul className="text-xs text-amber-200 space-y-0.5">
+                      {suggestion.warnings.map((warning) => (
+                        <li key={`${field.key}-${warning}`}>{warning}</li>
+                      ))}
+                    </ul>
+                  )}
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => applyAiSuggestion(field.key)}
+                      className="px-2.5 py-1 rounded-md border border-sky-400/50 text-xs text-sky-100 hover:border-sky-300"
+                    >
+                      Apply suggested edit
+                    </button>
+                    <button
+                      onClick={() => dismissAiSuggestion(field.key)}
+                      className="px-2.5 py-1 rounded-md border border-slate-600 text-xs text-slate-300 hover:border-slate-400"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
+              )}
+            </section>
+          );
+        })}
       </div>
 
-      <div className="mt-5 flex items-center gap-4">
+      <div className="mt-5 flex items-center gap-4 flex-wrap">
         <button
           onClick={handleQualityCheck}
           disabled={qualityChecking}
@@ -279,15 +419,15 @@ export default function AdminCompanyPage() {
         <button
           onClick={handleSave}
           disabled={saving || !dirty}
-          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-colors"
+          className="px-4 py-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-colors"
         >
-          {saving ? 'Saving…' : 'Save company profile'}
+          {saving ? 'Saving...' : 'Save company profile'}
         </button>
-        {status === 'saved' && <span className="text-sm text-emerald-400">Saved</span>}
-        {status === 'error' && (
-          <span className="text-sm text-red-400">Failed to save</span>
-        )}
+        {status === 'saved' && <span className="text-sm text-sky-400">Saved</span>}
+        {status === 'error' && <span className="text-sm text-red-400">Failed to save</span>}
         {qualityError && <span className="text-sm text-red-400">{qualityError}</span>}
+        {aiError && <span className="text-sm text-red-400">{aiError}</span>}
+        {!aiEnabled && aiMessage && <span className="text-sm text-amber-300">{aiMessage}</span>}
       </div>
 
       {qualityOpen && (
@@ -316,14 +456,14 @@ export default function AdminCompanyPage() {
                       </div>
                       <button
                         onClick={() => applySuggestion(suggestion)}
-                        className="text-xs px-2.5 py-1 rounded-lg border border-emerald-500/30 text-emerald-300 hover:border-emerald-500/60 transition-colors"
+                        className="text-xs px-2.5 py-1 rounded-lg border border-sky-500/30 text-sky-300 hover:border-sky-500/60 transition-colors"
                       >
                         Apply suggested edit
                       </button>
                     </div>
                     <p className="mt-2 text-sm text-slate-300">{suggestion.message}</p>
                     {suggestion.proposedValue && (
-                      <pre className="mt-2 whitespace-pre-wrap text-xs text-cyan-200 bg-slate-900 border border-slate-800 rounded-lg p-3">
+                      <pre className="mt-2 whitespace-pre-wrap text-xs text-sky-200 bg-slate-900 border border-slate-800 rounded-lg p-3">
                         {suggestion.proposedValue}
                       </pre>
                     )}

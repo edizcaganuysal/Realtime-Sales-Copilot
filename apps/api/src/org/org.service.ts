@@ -3,7 +3,7 @@ import { and, asc, desc, eq } from 'drizzle-orm';
 import { DRIZZLE, DrizzleDb } from '../db/db.module';
 import * as schema from '../db/schema';
 import { UpdateOrgSettingsDto } from './dto/update-org-settings.dto';
-import { GTAPHOTOPRO_COMPANY_PROFILE_DEFAULTS } from './company-profile.defaults';
+import { EMPTY_COMPANY_PROFILE_DEFAULTS } from './company-profile.defaults';
 import { UpdateCompanyProfileDto } from './dto/update-company-profile.dto';
 import { SubscribePlanDto } from './dto/subscribe-plan.dto';
 import { AdjustCreditsDto } from './dto/adjust-credits.dto';
@@ -216,19 +216,6 @@ export class OrgService {
       .limit(1);
 
     if (existing) {
-      if (existing.companyName === 'SkyrocketX') {
-        const [migrated] = await this.db
-          .update(schema.orgCompanyProfiles)
-          .set({
-            ...GTAPHOTOPRO_COMPANY_PROFILE_DEFAULTS,
-            updatedAt: new Date(),
-          })
-          .where(eq(schema.orgCompanyProfiles.orgId, orgId))
-          .returning();
-        await this.ensureDemoAgent(orgId);
-        return migrated;
-      }
-
       await this.ensureDemoAgent(orgId);
       return existing;
     }
@@ -237,7 +224,7 @@ export class OrgService {
       .insert(schema.orgCompanyProfiles)
       .values({
         orgId,
-        ...GTAPHOTOPRO_COMPANY_PROFILE_DEFAULTS,
+        ...EMPTY_COMPANY_PROFILE_DEFAULTS,
       })
       .returning();
 
@@ -256,7 +243,7 @@ export class OrgService {
       .insert(schema.orgCompanyProfiles)
       .values({
         orgId,
-        ...GTAPHOTOPRO_COMPANY_PROFILE_DEFAULTS,
+        ...EMPTY_COMPANY_PROFILE_DEFAULTS,
         ...safeDto,
         updatedAt: new Date(),
       })

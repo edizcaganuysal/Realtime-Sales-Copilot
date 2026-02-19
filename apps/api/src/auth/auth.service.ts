@@ -12,6 +12,7 @@ import { eq } from 'drizzle-orm';
 import { DRIZZLE, DrizzleDb } from '../db/db.module';
 import * as schema from '../db/schema';
 import { SignupDto } from './dto/signup.dto';
+import { EMPTY_COMPANY_PROFILE_DEFAULTS } from '../org/company-profile.defaults';
 
 const FREE_PLAN_ID = 'free';
 const FREE_PLAN_NAME = 'Free';
@@ -84,6 +85,11 @@ export class AuthService {
           publisherPolicy: 'ADMIN_AND_MANAGERS',
           liveLayoutDefault: 'STANDARD',
           retentionDays: 90,
+        });
+
+        await tx.insert(schema.orgCompanyProfiles).values({
+          orgId: org.id,
+          ...EMPTY_COMPANY_PROFILE_DEFAULTS,
         });
 
         const [user] = await tx

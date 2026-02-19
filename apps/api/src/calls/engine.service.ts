@@ -6,7 +6,7 @@ import * as schema from '../db/schema';
 import { CallsGateway } from './calls.gateway';
 import { LlmService } from './llm.service';
 import { PROFESSIONAL_SALES_CALL_AGENT_PROMPT } from './professional-sales-agent.prompt';
-import { GTAPHOTOPRO_COMPANY_PROFILE_DEFAULTS } from '../org/company-profile.defaults';
+import { EMPTY_COMPANY_PROFILE_DEFAULTS } from '../org/company-profile.defaults';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -26,7 +26,7 @@ type CallContext = {
   productContext: ProductContext;
 };
 
-type CompanyProfile = typeof GTAPHOTOPRO_COMPANY_PROFILE_DEFAULTS;
+type CompanyProfile = typeof EMPTY_COMPANY_PROFILE_DEFAULTS;
 
 type TurnLine = { speaker: string; text: string; tsMs: number };
 
@@ -525,6 +525,183 @@ export class EngineService implements OnModuleDestroy {
     }
   }
 
+  async promptDebug(
+    orgId: string,
+    input: {
+      transcript: string;
+      agentId?: string;
+      products_mode?: 'ALL' | 'SELECTED';
+      selected_product_ids?: string[];
+      guidance_level?: 'MINIMAL' | 'STANDARD' | 'GUIDED';
+      notes?: string;
+    },
+  ) {
+    const transcript = input.transcript.trim();
+    if (!transcript) {
+      return {
+        output: {
+          primarySuggestion: '',
+          suggestions: [],
+          nudges: [],
+          cards: [],
+          objection: null,
+          sentiment: 'neutral',
+        },
+        systemPrompt: '',
+        userPrompt: '',
+        llmAvailable: this.llm.available,
+      };
+    }
+
+    const mode =
+      input.products_mode === ProductsMode.SELECTED
+        ? ProductsMode.SELECTED
+        : ProductsMode.ALL;
+    const selectedIds = Array.isArray(input.selected_product_ids)
+      ? Array.from(
+          new Set(
+            input.selected_product_ids
+              .map((id) => (typeof id === 'string' ? id.trim() : ''))
+              .filter((id) => id.length > 0),
+          ),
+        )
+      : [];
+
+    const [companyProfile, productContext, agentPrompt] = await Promise.all([
+      this.fetchCompanyProfile(orgId),
+      this.fetchProductContextForDebug(orgId, mode, selectedIds),
+      this.resolveDebugAgentPrompt(orgId, input.agentId),
+    ]);
+
+    const context: CallContext = {
+      callId: 'prompt-debug',
+      guidanceLevel: input.guidance_level ?? 'STANDARD',
+      agentPrompt,
+      notes: input.notes ?? null,
+      stages: FALLBACK_STAGES,
+      companyProfile,
+      productContext,
+    };
+    const currentStage = FALLBACK_STAGES[1] ?? FALLBACK_STAGES[0]!;
+    const stageList = FALLBACK_STAGES.map(
+      (s, i) => `${i + 1}. ${s.name}${s.goals ? ` — ${s.goals}` : ''}`,
+    ).join('\n');
+    const ragSnippets = this.retrieveCompanySnippets(companyProfile, transcript, null);
+    const systemPrompt = this.buildSystemPrompt(
+      context,
+      currentStage,
+      stageList,
+      currentStage.checklist,
+      ragSnippets,
+      1,
+    );
+    const lastProspectLine = this.extractLastProspectLine(transcript);
+    const userPrompt =
+      `Transcript:\n${transcript}\n\n` +
+      (lastProspectLine
+        ? `IMPORTANT — The prospect just said: "${lastProspectLine}"\nRespond directly.\n\n`
+        : '') +
+      'Provide the JSON coaching output now.';
+
+    if (!this.llm.available) {
+      const fallback = this.normalizeSuggestions(
+        [],
+        companyProfile,
+        productContext,
+        currentStage.name,
+        null,
+        1,
+        lastProspectLine,
+      );
+      return {
+        llmAvailable: false,
+        systemPrompt,
+        userPrompt,
+        output: {
+          primarySuggestion: fallback[0] ?? '',
+          suggestions: fallback,
+          nudges: [],
+          cards: this.buildOpeningContextCards(companyProfile, productContext),
+          objection: null,
+          sentiment: 'neutral',
+        },
+      };
+    }
+
+    try {
+      const raw = await this.llm.chatFast(systemPrompt, userPrompt);
+      const parsed = this.llm.parseJson<{
+        suggestions?: string[];
+        suggestion?: string;
+        nudges?: string[];
+        objection?: string | null;
+        sentiment?: 'positive' | 'neutral' | 'negative';
+        supportingData?: string[];
+      }>(raw, {});
+      const suggestions = this.normalizeSuggestions(
+        parsed.suggestions ?? (parsed.suggestion ? [parsed.suggestion] : []),
+        companyProfile,
+        productContext,
+        currentStage.name,
+        parsed.objection ?? null,
+        1,
+        lastProspectLine,
+      );
+      const nudges = (parsed.nudges ?? [])
+        .filter((item) => ALLOWED_NUDGES.includes(item))
+        .slice(0, 3);
+      const cards = (parsed.supportingData ?? [])
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .slice(0, 4);
+      const fallbackCards = this.buildOpeningContextCards(companyProfile, productContext);
+
+      return {
+        llmAvailable: true,
+        systemPrompt,
+        userPrompt,
+        raw,
+        output: {
+          primarySuggestion: suggestions[0] ?? '',
+          suggestions,
+          nudges,
+          cards: cards.length > 0 ? cards : fallbackCards,
+          objection: parsed.objection ?? null,
+          sentiment:
+            parsed.sentiment === 'positive' ||
+            parsed.sentiment === 'negative' ||
+            parsed.sentiment === 'neutral'
+              ? parsed.sentiment
+              : 'neutral',
+        },
+      };
+    } catch (error) {
+      const fallback = this.normalizeSuggestions(
+        [],
+        companyProfile,
+        productContext,
+        currentStage.name,
+        null,
+        1,
+        lastProspectLine,
+      );
+      return {
+        llmAvailable: false,
+        systemPrompt,
+        userPrompt,
+        error: error instanceof Error ? error.message : 'Prompt debug failed',
+        output: {
+          primarySuggestion: fallback[0] ?? '',
+          suggestions: fallback,
+          nudges: [],
+          cards: this.buildOpeningContextCards(companyProfile, productContext),
+          objection: null,
+          sentiment: 'neutral',
+        },
+      };
+    }
+  }
+
   async runPostCall(callId: string, notes: string | null, _playbookId: string | null) {
     this.logger.log(`Post-call analysis starting for call ${callId}`);
 
@@ -872,6 +1049,58 @@ export class EngineService implements OnModuleDestroy {
     };
   }
 
+  private async fetchProductContextForDebug(
+    orgId: string,
+    mode: ProductsMode,
+    selectedProductIds: string[],
+  ): Promise<ProductContext> {
+    const allProducts = await this.fetchOrgProducts(orgId);
+    const selectedSet = new Set(selectedProductIds);
+    const selectedProducts =
+      mode === ProductsMode.SELECTED
+        ? allProducts.filter((product) => selectedSet.has(product.id))
+        : [];
+
+    const baselineProducts =
+      mode === ProductsMode.SELECTED && selectedProducts.length > 0
+        ? selectedProducts
+        : allProducts;
+
+    return {
+      mode,
+      names: baselineProducts.map((product) => product.name),
+      summary: this.buildProductSummary(mode, baselineProducts),
+      snippets: this.buildProductSnippets(mode, baselineProducts),
+    };
+  }
+
+  private async resolveDebugAgentPrompt(orgId: string, agentId?: string) {
+    if (!agentId) return PROFESSIONAL_SALES_CALL_AGENT_PROMPT;
+    const [agent] = await this.db
+      .select({ prompt: schema.agents.prompt })
+      .from(schema.agents)
+      .where(and(eq(schema.agents.id, agentId), eq(schema.agents.orgId, orgId)))
+      .limit(1);
+    return agent?.prompt?.trim() ? agent.prompt : PROFESSIONAL_SALES_CALL_AGENT_PROMPT;
+  }
+
+  private extractLastProspectLine(transcript: string) {
+    const lines = transcript
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      const line = lines[i]!;
+      const match = line.match(
+        /^(prospect|customer|buyer|client|lead)\s*:\s*(.+)$/i,
+      );
+      if (match?.[2]) {
+        return match[2].trim();
+      }
+    }
+    return lines[lines.length - 1] ?? '';
+  }
+
   private async fetchCompanyProfile(orgId: string): Promise<CompanyProfile> {
     const [profile] = await this.db
       .select()
@@ -880,7 +1109,7 @@ export class EngineService implements OnModuleDestroy {
       .limit(1);
 
     if (!profile) {
-      return { ...GTAPHOTOPRO_COMPANY_PROFILE_DEFAULTS };
+      return { ...EMPTY_COMPANY_PROFILE_DEFAULTS };
     }
 
     return {
@@ -1126,7 +1355,6 @@ export class EngineService implements OnModuleDestroy {
   private didTurnCompleteChecklistItem(label: string, speaker: string, text: string): boolean {
     if (speaker !== 'REP') return false;
     const l = label.toLowerCase();
-    const t = text.toLowerCase();
     const isQuestion = text.includes('?');
 
     if (l.includes('introduce')) {
@@ -1210,7 +1438,7 @@ export class EngineService implements OnModuleDestroy {
     }
 
     // Emit 3 stage-aware fallback suggestions
-    const companyProfile = context?.companyProfile ?? GTAPHOTOPRO_COMPANY_PROFILE_DEFAULTS;
+    const companyProfile = context?.companyProfile ?? EMPTY_COMPANY_PROFILE_DEFAULTS;
     const productContext = context?.productContext ?? {
       mode: ProductsMode.ALL,
       names: [companyProfile.productName],
@@ -1766,7 +1994,7 @@ export class EngineService implements OnModuleDestroy {
     } else if (context.guidanceLevel === 'GUIDED') {
       nudgeRule = '- "nudges": 1-3 items from the allowed list\n';
     } else {
-      nudgeRule = '- "nudges": 0-2 items from the allowed list\n';
+      nudgeRule = '- "nudges": 0-3 items from the allowed list\n';
     }
 
     const checklistRule =
@@ -1796,8 +2024,12 @@ export class EngineService implements OnModuleDestroy {
       `Guidance: ${context.guidanceLevel}\n\n` +
       `Respond ONLY with a JSON object. Rules:\n` +
       `- "stage": current stage name\n` +
-      `- "suggestions": array of EXACTLY ${suggestionCount} short, spoken line${suggestionCount === 1 ? '' : 's'} the REP should say next.\n` +
+      `- "suggestions": array of EXACTLY ${suggestionCount} primary suggestion${suggestionCount === 1 ? '' : 's'} the REP should say next.\n` +
       `\n` +
+      `Output contract:\n` +
+      `- Return one primary suggestion in 1-2 sentences.\n` +
+      `- Return up to 3 nudges.\n` +
+      `- Do not hallucinate. If context lacks a fact, state uncertainty and ask a qualifier.\n\n` +
       `CRITICAL SUGGESTION RULES (follow these strictly):\n` +
       `1. READ THE LAST PROSPECT LINE CAREFULLY. Your suggestion MUST directly respond to what they said or asked.\n` +
       `2. If the prospect asked a QUESTION (pricing, features, timeline, etc.), your suggestion must ANSWER that specific question using data from context. Do NOT deflect or pivot to unrelated stats.\n` +
@@ -1806,7 +2038,7 @@ export class EngineService implements OnModuleDestroy {
       `5. If the prospect raised a CONCERN → acknowledge it directly, then address it with evidence.\n` +
       `6. If the prospect made a STATEMENT → respond to its content, then ask one diagnostic question.\n` +
       `7. NEVER respond with a generic statistic when the prospect asked a specific question.\n` +
-      `8. Keep each suggestion <= 20 words. One main point per suggestion.\n` +
+      `8. Keep each suggestion concise and practical. One main point per suggestion.\n` +
       `9. No filler intros ("Great question", "Totally fair", "Absolutely", "Thanks for sharing").\n` +
       `10. Include concrete details from context: numbers, timeframes, service names, packages.\n` +
       `11. If you lack data to answer their question, say so honestly and ask one qualifier.\n` +
@@ -1833,9 +2065,11 @@ export class EngineService implements OnModuleDestroy {
       this
         .splitToSnippets(company.proofPoints)
         .find((line) => /\d/.test(line)) ?? '24-hour turnaround available on standard listings.';
-    const productLabel = productContext.names[0] ?? company.productName;
+    const productLabel =
+      productContext.names[0] || company.productName || 'your service';
+    const companyName = company.companyName || 'our team';
     return [
-      `Hi, this is ${company.companyName} about ${productLabel}. Is now a bad time, or do you have 90 seconds? ${numericProof}`,
+      `Hi, this is ${companyName} about ${productLabel}. Is now a bad time, or do you have 90 seconds? ${numericProof}`,
     ];
   }
 
@@ -1844,11 +2078,14 @@ export class EngineService implements OnModuleDestroy {
     productContext: ProductContext,
   ): string[] {
     const proofLines = this.splitToSnippets(company.proofPoints).slice(0, 2);
+    const productName = company.productName || 'Service';
+    const productSummary = company.productSummary || 'No company summary added yet.';
+    const icp = company.idealCustomerProfile || 'No ICP added yet.';
     return [
-      `${company.productName}: ${company.productSummary}`,
+      `${productName}: ${productSummary}`,
       productContext.summary,
       ...proofLines,
-      `ICP: ${company.idealCustomerProfile}`,
+      `ICP: ${icp}`,
     ].slice(0, 4);
   }
 
@@ -1909,8 +2146,10 @@ export class EngineService implements OnModuleDestroy {
   ): string[] {
     const stage = stageName.toLowerCase();
     const last = lastProspectLine.toLowerCase();
-    const primaryProduct = productContext.names[0] ?? company.productName;
-    const productPitch = productContext.snippets[0] ?? `${primaryProduct} for ${company.idealCustomerProfile}.`;
+    const primaryProduct = productContext.names[0] || company.productName || 'your service';
+    const productPitch =
+      productContext.snippets[0] ??
+      `${primaryProduct} for ${company.idealCustomerProfile || 'your target customers'}.`;
     const proofs = this
       .splitToSnippets(company.proofPoints)
       .filter((line) => /\d/.test(line));
