@@ -58,9 +58,17 @@ type Nudge = {
   icon: 'pace' | 'talk' | 'question' | 'objection' | 'tone' | 'confirm';
 };
 
-type ContextCard = {
-  text: string;
-  objection: string | null;
+type LiveDisplaySettings = {
+  showStats: boolean;
+  showChecklist: boolean;
+  showTranscript: boolean;
+};
+
+const LIVE_SETTINGS_KEY = 'live_call_display_settings';
+const LIVE_SETTINGS_DEFAULTS: LiveDisplaySettings = {
+  showStats: true,
+  showChecklist: true,
+  showTranscript: true,
 };
 
 // ─── Timer ────────────────────────────────────────────────────────────────────
@@ -458,6 +466,7 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
   const [productsSaving, setProductsSaving] = useState(false);
   const [productsError, setProductsError] = useState('');
   const [creditsBalance, setCreditsBalance] = useState<number | null>(null);
+  const [displaySettings, setDisplaySettings] = useState<LiveDisplaySettings>(LIVE_SETTINGS_DEFAULTS);
 
   const socketRef = useRef<Socket | null>(null);
   const seqRef = useRef(0);
@@ -474,6 +483,21 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
   const isActive = callStatus !== 'INITIATED';
 
   const { micActive, mockReady } = useMockAudio(id, isMock, isActive);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(LIVE_SETTINGS_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Partial<LiveDisplaySettings>;
+      setDisplaySettings({
+        showStats: parsed.showStats ?? LIVE_SETTINGS_DEFAULTS.showStats,
+        showChecklist: parsed.showChecklist ?? LIVE_SETTINGS_DEFAULTS.showChecklist,
+        showTranscript: parsed.showTranscript ?? LIVE_SETTINGS_DEFAULTS.showTranscript,
+      });
+    } catch {
+      setDisplaySettings(LIVE_SETTINGS_DEFAULTS);
+    }
+  }, []);
 
   const requestSuggestionFallback = useCallback(async () => {
     if (!hasProspectTurnRef.current) return;
@@ -769,32 +793,32 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
   return (
     <div className="relative flex flex-col h-full bg-slate-950">
       {/* ─── Top bar ─────────────────────────────────────────────────── */}
-      <div className="shrink-0 flex items-center justify-between px-5 py-2 border-b border-slate-800/60 bg-slate-950">
-        <div className="flex items-center gap-3">
+      <div className="shrink-0 flex items-center justify-between gap-3 px-4 sm:px-5 py-2 border-b border-slate-800/60 bg-slate-950">
+        <div className="flex items-center gap-2.5 min-w-0">
           <div className={'w-2 h-2 rounded-full ' + (connected ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600')} />
           {isMock ? (
-            <span className="flex items-center gap-1.5 text-violet-400 font-mono text-sm"><Bot size={14} /> Practice</span>
+            <span className="flex items-center gap-1.5 text-violet-400 font-mono text-sm shrink-0"><Bot size={14} /> Practice</span>
           ) : (
-            <span className="text-white font-mono text-sm">{call.phoneTo}</span>
+            <span className="text-white font-mono text-sm max-w-[120px] sm:max-w-[200px] truncate">{call.phoneTo}</span>
           )}
-          <span className="text-slate-600 text-xs tabular-nums">{timer}</span>
+          <span className="text-slate-600 text-xs tabular-nums shrink-0">{timer}</span>
           {isMock && (
-            <span className={`flex items-center gap-1 text-xs ${micActive ? 'text-emerald-400' : 'text-red-400'}`}>
+            <span className={`hidden sm:flex items-center gap-1 text-xs shrink-0 ${micActive ? 'text-emerald-400' : 'text-red-400'}`}>
               {micActive ? <Mic size={12} /> : <MicOff size={12} />}
               {micActive ? (mockReady ? 'Live' : 'Connecting...') : 'No mic'}
             </span>
           )}
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 shrink-0">
             {productPills.slice(0, 2).map((label) => (
               <span
                 key={label}
-                className="text-[11px] px-2 py-0.5 rounded-full border border-cyan-500/30 bg-cyan-500/10 text-cyan-300"
+                className="hidden md:inline-flex text-[11px] px-2 py-0.5 rounded-full border border-cyan-500/30 bg-cyan-500/10 text-cyan-300 max-w-[130px] truncate"
               >
                 {label}
               </span>
             ))}
             {productPills.length > 2 && (
-              <span className="text-[11px] px-2 py-0.5 rounded-full border border-slate-700 text-slate-400">
+              <span className="hidden md:inline-flex text-[11px] px-2 py-0.5 rounded-full border border-slate-700 text-slate-400">
                 +{productPills.length - 2}
               </span>
             )}
@@ -803,13 +827,17 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
               onClick={openProductsDrawer}
               className="text-[11px] px-2 py-0.5 rounded-full border border-slate-700 hover:border-slate-500 text-slate-400 hover:text-slate-200 transition-colors"
             >
-              Change
+              Products
             </button>
           </div>
           <span className="text-[11px] px-2 py-0.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 text-emerald-300">
             {creditsLabel}
           </span>
-          <MiniStats stats={stats} />
+          {displaySettings.showStats && (
+            <div className="hidden lg:block">
+              <MiniStats stats={stats} />
+            </div>
+          )}
         </div>
         <button
           onClick={handleEnd}
@@ -962,19 +990,20 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
             </div>
 
             {/* Context cards (collapsed rail) */}
-            {(contextCards.length > 0 || objection) && (
+            {displaySettings.showChecklist && (contextCards.length > 0 || objection) && (
               <div className="w-full max-w-xl">
                 <ContextCards cards={contextCards} objection={objection} />
               </div>
             )}
           </div>
 
-          {/* Bottom: transcript drawer */}
-          <TranscriptDrawer
-            lines={transcript}
-            isOpen={transcriptOpen}
-            onToggle={() => setTranscriptOpen((o) => !o)}
-          />
+          {displaySettings.showTranscript && (
+            <TranscriptDrawer
+              lines={transcript}
+              isOpen={transcriptOpen}
+              onToggle={() => setTranscriptOpen((o) => !o)}
+            />
+          )}
         </div>
       )}
     </div>

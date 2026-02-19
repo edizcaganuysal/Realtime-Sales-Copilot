@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { CallMode } from '@live-sales-coach/shared';
 import { Phone, Bot, Plus, ChevronRight, Shield, Zap, Users, Crown, Smile, X, Pencil, Trash2 } from 'lucide-react';
 
@@ -63,6 +63,7 @@ const PERSONA_SELECTED: Record<string, string> = {
 
 export default function DialerPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [products, setProducts] = useState<ProductOption[]>([]);
   const [personas, setPersonas] = useState<PracticePersona[]>([]);
@@ -78,6 +79,20 @@ export default function DialerPage() {
   const [form, setForm] = useState({ phoneTo: '', agentId: '', notes: '' });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    const modeParam = searchParams.get('mode');
+    if (modeParam === 'practice' || modeParam === 'mock') {
+      setMode(CallMode.MOCK);
+    } else if (modeParam === 'outbound' || modeParam === 'real') {
+      setMode(CallMode.OUTBOUND);
+    }
+
+    const personaParam = searchParams.get('persona');
+    if (personaParam) {
+      setSelectedPersonaId(personaParam);
+    }
+  }, [searchParams]);
 
   const loadPersonas = useCallback(async () => {
     try {
