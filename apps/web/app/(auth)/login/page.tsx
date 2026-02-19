@@ -1,14 +1,21 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  const configError =
+    searchParams.get('config') === 'missing-jwt-secret' ||
+    searchParams.get('config') === 'missing-api-base-url'
+      ? 'Service configuration is incomplete. Please contact support.'
+      : '';
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -49,6 +56,11 @@ export default function LoginPage() {
       </div>
 
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-8">
+        {configError && (
+          <p className="mb-4 text-amber-300 text-sm bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">
+            {configError}
+          </p>
+        )}
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-sm text-slate-300 mb-1.5">Email</label>

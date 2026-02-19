@@ -1,9 +1,14 @@
 import { cookies } from 'next/headers';
 import type { MeResponse } from '@live-sales-coach/shared';
+import { getApiBaseUrl, getFriendlyConfigMessage } from '@/lib/server-env';
 
-const API = process.env['NEXT_PUBLIC_API_URL'] ?? 'http://localhost:3001';
+const API = getApiBaseUrl();
 
 async function apiFetch<T>(path: string): Promise<T> {
+  if (!API) {
+    throw new Error(getFriendlyConfigMessage());
+  }
+
   const cookieStore = await cookies();
   const token = cookieStore.get('access_token')?.value;
   const res = await fetch(`${API}${path}`, {

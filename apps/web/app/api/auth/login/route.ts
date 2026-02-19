@@ -1,8 +1,13 @@
 import { NextResponse } from 'next/server';
+import { getApiBaseUrl, getFriendlyConfigMessage } from '@/lib/server-env';
 
-const API = process.env['NEXT_PUBLIC_API_URL'] ?? 'http://localhost:3001';
+const API = getApiBaseUrl();
 
 export async function POST(request: Request) {
+  if (!API) {
+    return NextResponse.json({ message: getFriendlyConfigMessage() }, { status: 500 });
+  }
+
   const body = await request.json();
 
   const res = await fetch(`${API}/auth/login`, {

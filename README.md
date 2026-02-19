@@ -156,11 +156,12 @@ call_suggestions · call_summaries
 | `PORT`                  | API port                             | `3001`                      |
 | `DATABASE_URL`          | PostgreSQL connection string         | `postgresql://...`          |
 | `REDIS_URL`             | Redis connection string              | `redis://:pass@localhost:6379` |
+| `WEB_ORIGIN`            | Allowed web origin(s), comma-separated | `https://web.up.railway.app` |
 | `JWT_SECRET`            | JWT signing secret                   | `a-long-random-secret`      |
 | `JWT_EXPIRES_IN`        | JWT expiry                           | `7d`                        |
 | `TWILIO_ACCOUNT_SID`    | Twilio Account SID                   | `ACxxx...`                  |
 | `TWILIO_AUTH_TOKEN`     | Twilio Auth Token                    | `xxx...`                    |
-| `TWILIO_PHONE_NUMBER`   | Outbound caller ID                   | `+15551234567`              |
+| `TWILIO_FROM_NUMBER`    | Outbound caller ID                   | `+15551234567`              |
 | `TWILIO_TWIML_APP_SID`  | TwiML App SID                        | `APxxx...`                  |
 | `TWILIO_WEBHOOK_BASE_URL` | Public base URL (ngrok in dev)     | `https://xyz.ngrok.io`      |
 | `STT_PROVIDER`          | Speech-to-text provider              | `deepgram`                  |
@@ -176,7 +177,8 @@ call_suggestions · call_summaries
 
 | Variable                | Description                | Example                  |
 | ----------------------- | -------------------------- | ------------------------ |
-| `NEXT_PUBLIC_API_URL`   | API base URL               | `http://localhost:3001`  |
+| `APP_BASE_URL`          | Web base URL               | `https://web.up.railway.app` |
+| `API_BASE_URL`          | API base URL               | `https://api.up.railway.app` |
 | `NEXT_PUBLIC_WS_URL`    | WebSocket URL              | `ws://localhost:3001`    |
 | `NEXT_PUBLIC_APP_NAME`  | Display name               | `Live Sales Coach`       |
 
@@ -204,6 +206,26 @@ pnpm type-check
 # Stop infra
 docker compose -f infra/docker-compose.yml down
 ```
+
+---
+
+## Deployment Checklist
+
+1. Create two Railway services from this repo.
+2. Set root directory to `apps/api` for API service and `apps/web` for web service.
+3. Add env vars.
+4. Deploy API first, then deploy web.
+5. Set Twilio webhooks:
+   - TwiML URL: `https://<api-domain>/calls/twiml?callId={CALL_ID}`
+   - Status URL: `https://<api-domain>/calls/webhook/status`
+   - Media Stream URL: `wss://<api-domain>/media-stream`
+6. Run smoke tests:
+   - `curl https://<api-domain>/health`
+   - Open `https://<web-domain>/login`
+   - Log in and confirm `/app/home` loads
+   - Start a mock call and confirm live suggestions load
+
+See `DEPLOYMENT.md` for full Railway setup.
 
 ---
 

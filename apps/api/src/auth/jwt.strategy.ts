@@ -3,6 +3,7 @@ import { PassportStrategy } from '@nestjs/passport';
 import { Strategy, ExtractJwt } from 'passport-jwt';
 import type { Request } from 'express';
 import type { JwtPayload } from '@live-sales-coach/shared';
+import { requireEnv } from '../config/env';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -13,7 +14,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         ExtractJwt.fromAuthHeaderAsBearerToken(),
       ]),
       ignoreExpiration: false,
-      secretOrKey: process.env['JWT_SECRET']!,
+      secretOrKey: requireEnv('JWT_SECRET'),
     });
   }
 

@@ -1,9 +1,14 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
+import { getApiBaseUrl, getFriendlyConfigMessage } from '@/lib/server-env';
 
-const API = process.env['NEXT_PUBLIC_API_URL'] ?? 'http://localhost:3001';
+const API = getApiBaseUrl();
 
 export async function GET() {
+  if (!API) {
+    return NextResponse.json({ message: getFriendlyConfigMessage() }, { status: 500 });
+  }
+
   const store = await cookies();
   const token = store.get('access_token')?.value ?? '';
   const res = await fetch(`${API}/auth/me`, {

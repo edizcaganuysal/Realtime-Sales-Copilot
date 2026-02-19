@@ -2,6 +2,7 @@ import { Global, Module } from '@nestjs/common';
 import { Pool } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import * as schema from './schema';
+import { requireEnv } from '../config/env';
 
 export const DRIZZLE = 'DRIZZLE';
 
@@ -13,11 +14,12 @@ export type DrizzleDb = ReturnType<typeof drizzle<typeof schema>>;
     {
       provide: DRIZZLE,
       useFactory: (): DrizzleDb => {
+        const databaseUrl = requireEnv('DATABASE_URL');
         const pool = new Pool({
-          connectionString: process.env['DATABASE_URL'],
+          connectionString: databaseUrl,
           ssl:
             process.env['DATABASE_SSL'] === 'true' ||
-            process.env['DATABASE_URL']?.includes('.supabase.co')
+            databaseUrl.includes('.supabase.co')
               ? { rejectUnauthorized: false }
               : undefined,
         });

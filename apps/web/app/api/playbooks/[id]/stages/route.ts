@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 
-const API = process.env['NEXT_PUBLIC_API_URL'] ?? 'http://localhost:3001';
+const API = process.env['API_BASE_URL'] ?? process.env['NEXT_PUBLIC_API_URL'];
 
 async function token() {
   const store = await cookies();

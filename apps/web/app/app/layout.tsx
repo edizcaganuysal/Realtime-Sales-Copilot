@@ -6,7 +6,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   let me;
   try {
     me = await getMe();
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('Service configuration is incomplete')) {
+      redirect('/login?config=missing-api-base-url');
+    }
     redirect('/login');
   }
 

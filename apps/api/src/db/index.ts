@@ -1,12 +1,15 @@
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import * as schema from './schema';
+import { requireEnv } from '../config/env';
+
+const databaseUrl = requireEnv('DATABASE_URL');
 
 const pool = new Pool({
-  connectionString: process.env['DATABASE_URL'],
+  connectionString: databaseUrl,
   ssl:
     process.env['DATABASE_SSL'] === 'true' ||
-    process.env['DATABASE_URL']?.includes('.supabase.co')
+    databaseUrl.includes('.supabase.co')
       ? { rejectUnauthorized: false }
       : undefined,
 });
