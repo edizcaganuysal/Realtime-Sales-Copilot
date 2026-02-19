@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 
 type CompanyProfile = {
@@ -19,6 +20,14 @@ type CompanyProfile = {
   implementationGuidance: string;
   faq: string;
   doNotSay: string;
+};
+
+type QualitySuggestion = {
+  id: string;
+  field: string;
+  title: string;
+  message: string;
+  proposedValue: string;
 };
 
 const DEFAULT_PROFILE: CompanyProfile = {
@@ -78,10 +87,31 @@ const FIELDS: Array<{
   { key: 'doNotSay', label: 'Compliance Guardrails', hint: 'Claims or language reps should avoid.', rows: 4 },
 ];
 
+const FIELD_HELP: Partial<Record<keyof CompanyProfile, string>> = {
+  productSummary: 'Write a short 3-5 sentence overview focused on measurable customer outcomes.',
+  idealCustomerProfile: 'List who buys, when they buy, and what makes them a strong fit.',
+  valueProposition: 'Use 3-7 bullet points with concrete outcomes and no vague superlatives.',
+  differentiators: 'Name practical differences buyers can verify in evaluation calls.',
+  proofPoints: 'Prefer recent metrics, customer counts, delivery SLAs, or benchmark numbers.',
+  repTalkingPoints: 'Use concise tactical bullets reps can apply line-by-line during calls.',
+  discoveryGuidance: 'Include discovery prompts that expose pain, urgency, and desired outcomes.',
+  qualificationGuidance: 'Define qualification criteria reps can score quickly in the first meeting.',
+  objectionHandling: 'Add objection-specific responses with a recommended next question.',
+  competitorGuidance: 'Position competitively without negative claims or legal risk.',
+  pricingGuidance: 'Set pricing guardrails and what must be qualified before quoting.',
+  implementationGuidance: 'Describe onboarding steps and realistic adoption milestones.',
+  faq: 'Use direct Q/A format and keep each answer factual and concise.',
+  doNotSay: 'List prohibited promises, compliance-sensitive claims, and risky language.',
+};
+
 export default function AdminCompanyPage() {
   const [profile, setProfile] = useState<CompanyProfile>(DEFAULT_PROFILE);
   const [baseline, setBaseline] = useState<CompanyProfile>(DEFAULT_PROFILE);
   const [saving, setSaving] = useState(false);
+  const [qualityChecking, setQualityChecking] = useState(false);
+  const [qualitySuggestions, setQualitySuggestions] = useState<QualitySuggestion[]>([]);
+  const [qualityError, setQualityError] = useState('');
+  const [qualityOpen, setQualityOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState<'saved' | 'error' | null>(null);
 
@@ -127,6 +157,62 @@ export default function AdminCompanyPage() {
     setTimeout(() => setStatus(null), 3000);
   }
 
+  function toFieldKey(raw: string): keyof CompanyProfile | null {
+    const normalized = raw.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+    const map: Record<string, keyof CompanyProfile> = {
+      companyname: 'companyName',
+      productname: 'productName',
+      productsummary: 'productSummary',
+      idealcustomerprofile: 'idealCustomerProfile',
+      valueproposition: 'valueProposition',
+      differentiators: 'differentiators',
+      proofpoints: 'proofPoints',
+      reptalkingpoints: 'repTalkingPoints',
+      discoveryguidance: 'discoveryGuidance',
+      qualificationguidance: 'qualificationGuidance',
+      objectionhandling: 'objectionHandling',
+      competitorguidance: 'competitorGuidance',
+      pricingguidance: 'pricingGuidance',
+      implementationguidance: 'implementationGuidance',
+      faq: 'faq',
+      donotsay: 'doNotSay',
+    };
+    return map[normalized] ?? null;
+  }
+
+  async function handleQualityCheck() {
+    setQualityChecking(true);
+    setQualityError('');
+    const res = await fetch('/api/quality/company', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(profile),
+    });
+    const data = await res.json().catch(() => ({}));
+    setQualityChecking(false);
+    if (!res.ok) {
+      setQualityError(Array.isArray(data?.message) ? data.message[0] : (data?.message ?? 'Quality check failed'));
+      return;
+    }
+    const suggestions = Array.isArray(data?.suggestions) ? data.suggestions : [];
+    setQualitySuggestions(
+      suggestions.map((entry: Record<string, unknown>, index: number) => ({
+        id: typeof entry.id === 'string' && entry.id ? entry.id : `suggestion_${index + 1}`,
+        field: typeof entry.field === 'string' ? entry.field : 'general',
+        title: typeof entry.title === 'string' ? entry.title : 'Improve quality',
+        message: typeof entry.message === 'string' ? entry.message : '',
+        proposedValue: typeof entry.proposedValue === 'string' ? entry.proposedValue : '',
+      })),
+    );
+    setQualityOpen(true);
+  }
+
+  function applySuggestion(suggestion: QualitySuggestion) {
+    const key = toFieldKey(suggestion.field);
+    if (!key || !suggestion.proposedValue.trim()) return;
+    patch(key, suggestion.proposedValue as CompanyProfile[typeof key]);
+  }
+
   if (loading) {
     return (
       <div className="p-8 space-y-3">
@@ -139,11 +225,19 @@ export default function AdminCompanyPage() {
 
   return (
     <div className="p-8 max-w-5xl">
-      <div className="mb-6">
-        <h1 className="text-lg font-semibold text-white">Company Info</h1>
-        <p className="text-sm text-slate-500 mt-1">
-          This context powers GTAPhotoPro live coaching and objection responses.
-        </p>
+      <div className="mb-6 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-lg font-semibold text-white">Company Info</h1>
+          <p className="text-sm text-slate-500 mt-1">
+            This context powers GTAPhotoPro live coaching and objection responses.
+          </p>
+        </div>
+        <Link
+          href="/app/admin/company/import"
+          className="shrink-0 px-3 py-2 rounded-lg border border-cyan-500/40 bg-cyan-500/10 text-cyan-200 text-sm font-medium hover:bg-cyan-500/20 transition-colors"
+        >
+          Auto-fill from website or PDFs
+        </Link>
       </div>
 
       <div className="space-y-4">
@@ -167,11 +261,21 @@ export default function AdminCompanyPage() {
                 className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
             )}
+            {FIELD_HELP[field.key] && (
+              <p className="mt-2 text-xs text-slate-500">{FIELD_HELP[field.key]}</p>
+            )}
           </section>
         ))}
       </div>
 
       <div className="mt-5 flex items-center gap-4">
+        <button
+          onClick={handleQualityCheck}
+          disabled={qualityChecking}
+          className="px-4 py-2 border border-slate-700 hover:border-slate-500 disabled:opacity-40 text-slate-200 text-sm font-medium rounded-lg transition-colors"
+        >
+          {qualityChecking ? 'Running quality check...' : 'Quality check'}
+        </button>
         <button
           onClick={handleSave}
           disabled={saving || !dirty}
@@ -183,7 +287,53 @@ export default function AdminCompanyPage() {
         {status === 'error' && (
           <span className="text-sm text-red-400">Failed to save</span>
         )}
+        {qualityError && <span className="text-sm text-red-400">{qualityError}</span>}
       </div>
+
+      {qualityOpen && (
+        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
+          <div className="w-full max-w-3xl bg-slate-900 border border-slate-800 rounded-2xl p-5 max-h-[92vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-white font-semibold text-base">Quality suggestions</h3>
+              <button
+                onClick={() => setQualityOpen(false)}
+                className="text-slate-400 hover:text-white text-sm"
+              >
+                Close
+              </button>
+            </div>
+
+            {qualitySuggestions.length === 0 ? (
+              <p className="text-sm text-slate-400">No suggestions returned.</p>
+            ) : (
+              <div className="space-y-3">
+                {qualitySuggestions.map((suggestion) => (
+                  <div key={suggestion.id} className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="text-sm font-medium text-white">{suggestion.title}</p>
+                        <p className="text-xs text-slate-500 mt-0.5">{suggestion.field}</p>
+                      </div>
+                      <button
+                        onClick={() => applySuggestion(suggestion)}
+                        className="text-xs px-2.5 py-1 rounded-lg border border-emerald-500/30 text-emerald-300 hover:border-emerald-500/60 transition-colors"
+                      >
+                        Apply suggested edit
+                      </button>
+                    </div>
+                    <p className="mt-2 text-sm text-slate-300">{suggestion.message}</p>
+                    {suggestion.proposedValue && (
+                      <pre className="mt-2 whitespace-pre-wrap text-xs text-cyan-200 bg-slate-900 border border-slate-800 rounded-lg p-3">
+                        {suggestion.proposedValue}
+                      </pre>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

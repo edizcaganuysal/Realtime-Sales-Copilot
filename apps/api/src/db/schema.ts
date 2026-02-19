@@ -189,6 +189,37 @@ export const fineTuneRequests = pgTable('fine_tune_requests', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
+export const ingestionJobs = pgTable('ingestion_jobs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id')
+    .notNull()
+    .references(() => orgs.id, { onDelete: 'cascade' }),
+  createdByUserId: uuid('created_by_user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  target: text('target').notNull(),
+  sourceType: text('source_type').notNull(),
+  status: text('status').default('queued').notNull(),
+  input: jsonb('input').default({}).notNull(),
+  result: jsonb('result').default({}),
+  error: text('error'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const ingestionAssets = pgTable('ingestion_assets', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  jobId: uuid('job_id')
+    .notNull()
+    .references(() => ingestionJobs.id, { onDelete: 'cascade' }),
+  kind: text('kind').notNull(),
+  uri: text('uri').notNull(),
+  title: text('title'),
+  contentText: text('content_text'),
+  contentSha: text('content_sha'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const calls = pgTable('calls', {
   id: uuid('id').primaryKey().defaultRandom(),
   orgId: uuid('org_id')
