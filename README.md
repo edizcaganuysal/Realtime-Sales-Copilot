@@ -1,4 +1,4 @@
-# Live Sales Coach
+# Sales AI
 
 A web-first, multi-tenant B2B sales coaching platform. AI listens to outbound calls in real time and gives reps clean, focused guidance.
 
@@ -180,7 +180,7 @@ call_suggestions · call_summaries
 | `APP_BASE_URL`          | Web base URL               | `https://web.up.railway.app` |
 | `API_BASE_URL`          | API base URL               | `https://api.up.railway.app` |
 | `NEXT_PUBLIC_WS_URL`    | WebSocket URL              | `ws://localhost:3001`    |
-| `NEXT_PUBLIC_APP_NAME`  | Display name               | `Live Sales Coach`       |
+| `NEXT_PUBLIC_APP_NAME`  | Display name               | `Sales AI`               |
 
 ---
 

@@ -9,8 +9,9 @@ import { AgentsModule } from './agents/agents.module';
 import { CallsModule } from './calls/calls.module';
 import { SalesRequestsModule } from './sales-requests/sales-requests.module';
 import { ProductsModule } from './products/products.module';
+import { RequestsModule } from './requests/requests.module';
 
 @Module({
-  imports: [DbModule, HealthModule, AuthModule, OrgModule, UsersModule, PlaybooksModule, AgentsModule, CallsModule, SalesRequestsModule, ProductsModule],
+  imports: [DbModule, HealthModule, AuthModule, OrgModule, UsersModule, PlaybooksModule, AgentsModule, CallsModule, SalesRequestsModule, ProductsModule, RequestsModule],
 })
 export class AppModule {}
