@@ -303,6 +303,17 @@ export class CallsController {
     });
   }
 
+  @Post(':id/suggestions/consumed')
+  @HttpCode(200)
+  async markSuggestionConsumed(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ) {
+    await this.callsService.get(user, id);
+    this.engineService.markPrimaryConsumed(id);
+    return { ok: true };
+  }
+
   @Post('prompt-debug')
   @Roles(Role.ADMIN)
   @HttpCode(200)

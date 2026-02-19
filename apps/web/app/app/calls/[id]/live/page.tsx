@@ -34,6 +34,8 @@ type CallData = {
   phoneTo: string;
   mode: string;
   status: string;
+  callType?: string;
+  preparedOpenerText?: string | null;
   startedAt: string | null;
   productsMode?: 'ALL' | 'SELECTED';
   selectedProducts?: ProductRef[];
@@ -261,8 +263,8 @@ const NUDGE_LABELS: Record<string, string> = {
 
 function parseNudges(raw: string[]): string[] {
   const picked: string[] = [];
-  for (const key of raw) {
-    const label = NUDGE_LABELS[key];
+  for (const item of raw) {
+    const label = NUDGE_LABELS[item] ?? item.trim();
     if (!label) continue;
     if (picked.includes(label)) continue;
     picked.push(label);
@@ -304,6 +306,7 @@ export default function LiveCallPage({
   const [transcript, setTranscript] = useState<TranscriptLine[]>([]);
   const [partialProspectText, setPartialProspectText] = useState('');
   const [suggestion, setSuggestion] = useState<string | null>(null);
+  const [listeningMode, setListeningMode] = useState(false);
   const [nudges, setNudges] = useState<string[]>([]);
   const [momentTag, setMomentTag] = useState('Opening');
   const [prospectSpeaking, setProspectSpeaking] = useState(false);
@@ -363,7 +366,7 @@ export default function LiveCallPage({
   const productPills =
     call?.productsMode === 'SELECTED' && selectedProducts.length > 0
       ? selectedProducts.map((product) => product.name)
-      : ['All products'];
+      : ['All offerings'];
 
   const topNudges = nudges.slice(0, 3);
 
@@ -402,6 +405,10 @@ export default function LiveCallPage({
       if (!active) return;
       setCall(data);
       setCallStatus(data.status ?? 'INITIATED');
+      if (typeof data.preparedOpenerText === 'string' && data.preparedOpenerText.trim().length > 0) {
+        setSuggestion(data.preparedOpenerText.trim());
+        setListeningMode(false);
+      }
       const mode = data.productsMode === 'SELECTED' ? 'SELECTED' : 'ALL';
       setProductsModeDraft(mode);
       setSelectedProductIdsDraft(
@@ -485,6 +492,9 @@ export default function LiveCallPage({
 
       if (data.speaker === 'PROSPECT') {
         setPartialProspectText('');
+      } else if (data.speaker === 'REP') {
+        setListeningMode(true);
+        setSuggestion(null);
       }
     });
 
@@ -494,6 +504,7 @@ export default function LiveCallPage({
         pendingPrimaryRef.current = data.text;
         return;
       }
+      setListeningMode(false);
       setSuggestion(data.text);
     });
 
@@ -505,6 +516,7 @@ export default function LiveCallPage({
         return;
       }
       if (!suggestionRef.current) {
+        setListeningMode(false);
         setSuggestion(first);
       }
     });
@@ -541,9 +553,15 @@ export default function LiveCallPage({
       setProspectSpeaking(data.speaking);
       prospectSpeakingRef.current = data.speaking;
       if (!data.speaking && pendingPrimaryRef.current) {
+        setListeningMode(false);
         setSuggestion(pendingPrimaryRef.current);
         pendingPrimaryRef.current = null;
       }
+    });
+
+    socket.on('engine.primary_consumed', () => {
+      setListeningMode(true);
+      setSuggestion(null);
     });
 
     socket.on('engine.debug', (data: DebugPayload) => {
@@ -581,6 +599,7 @@ export default function LiveCallPage({
       if (prospectSpeakingRef.current) {
         pendingPrimaryRef.current = next;
       } else {
+        setListeningMode(false);
         setSuggestion(next);
       }
     }
@@ -617,6 +636,12 @@ export default function LiveCallPage({
     setSuggestion(shortenSuggestion(suggestion));
   }, [suggestion]);
 
+  const handleMarkAsSaid = useCallback(async () => {
+    setListeningMode(true);
+    setSuggestion(null);
+    await fetch(`/api/calls/${id}/suggestions/consumed`, { method: 'POST' });
+  }, [id]);
+
   const openProductsDrawer = useCallback(() => {
     const mode = call?.productsMode === 'SELECTED' ? 'SELECTED' : 'ALL';
     const selected = Array.isArray(call?.selectedProducts)
@@ -639,7 +664,7 @@ export default function LiveCallPage({
 
   const saveProducts = useCallback(async () => {
     if (productsModeDraft === 'SELECTED' && selectedProductIdsDraft.length === 0) {
-      setProductsError('Select at least one product or use All products.');
+      setProductsError('Select at least one offering or use All offerings.');
       return;
     }
 
@@ -661,7 +686,7 @@ export default function LiveCallPage({
       setProductsError(
         typeof data === 'object' && data && 'message' in data && data.message
           ? data.message
-          : 'Failed to save products',
+          : 'Failed to save offerings',
       );
       return;
     }
@@ -738,7 +763,7 @@ export default function LiveCallPage({
               onClick={openProductsDrawer}
               className="rounded-full border border-slate-700 px-2 py-0.5 text-[11px] text-slate-400 transition-colors hover:border-slate-500 hover:text-slate-200"
             >
-              Products
+              Offerings
             </button>
           </div>
           <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] text-emerald-200">
@@ -808,7 +833,7 @@ export default function LiveCallPage({
                 <span className="text-[11px] font-semibold uppercase tracking-widest text-sky-400">
                   Primary next line
                 </span>
-                {prospectSpeaking && (
+                {(prospectSpeaking || listeningMode) && (
                   <span className="rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[10px] text-sky-300">
                     Listening
                   </span>
@@ -838,10 +863,17 @@ export default function LiveCallPage({
                 >
                   Shorten
                 </button>
+                <button
+                  type="button"
+                  onClick={() => void handleMarkAsSaid()}
+                  className="rounded border border-slate-700 px-2 py-1 text-[11px] text-slate-300 transition-colors hover:border-slate-500 hover:text-white"
+                >
+                  Mark as said
+                </button>
               </div>
             </div>
             <p className="min-h-[66px] text-lg font-medium leading-relaxed text-white">
-              {suggestion ?? 'Preparing your opening line...'}
+              {listeningMode ? 'Listening...' : suggestion ?? 'Preparing your opening line...'}
             </p>
           </div>
 
@@ -937,7 +969,7 @@ export default function LiveCallPage({
       {productDrawerOpen && (
         <div className="absolute right-4 top-14 z-40 w-80 rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
           <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
-            <h3 className="text-sm font-semibold text-white">Products</h3>
+            <h3 className="text-sm font-semibold text-white">Offerings</h3>
             <button
               type="button"
               onClick={() => setProductDrawerOpen(false)}
@@ -957,19 +989,19 @@ export default function LiveCallPage({
                     : 'border-slate-700 bg-slate-800 text-slate-400'
                 }`}
               >
-                All products
+                All offerings
               </button>
-              <button
-                type="button"
-                onClick={() => setProductsModeDraft('SELECTED')}
+                <button
+                  type="button"
+                  onClick={() => setProductsModeDraft('SELECTED')}
                 className={`flex-1 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors ${
                   productsModeDraft === 'SELECTED'
                     ? 'border-sky-500/40 bg-sky-500/10 text-sky-200'
                     : 'border-slate-700 bg-slate-800 text-slate-400'
                 }`}
-              >
-                Selected
-              </button>
+                >
+                  Selected offerings
+                </button>
             </div>
 
             {productsModeDraft === 'SELECTED' && (
@@ -978,11 +1010,11 @@ export default function LiveCallPage({
                   value={productSearch}
                   onChange={(event) => setProductSearch(event.target.value)}
                   className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white outline-none focus:border-sky-500/50"
-                  placeholder="Search products..."
+                  placeholder="Search offerings..."
                 />
                 <div className="max-h-44 space-y-1 overflow-y-auto pr-1">
                   {filteredProducts.length === 0 ? (
-                    <p className="py-2 text-xs text-slate-500">No products found.</p>
+                    <p className="py-2 text-xs text-slate-500">No offerings found.</p>
                   ) : (
                     filteredProducts.map((product) => {
                       const selected = selectedProductIdsDraft.includes(product.id);
@@ -1049,6 +1081,7 @@ export default function LiveCallPage({
                   if (prospectSpeakingRef.current) {
                     pendingPrimaryRef.current = option;
                   } else {
+                    setListeningMode(false);
                     setSuggestion(option);
                   }
                   setMoreOptionsOpen(false);

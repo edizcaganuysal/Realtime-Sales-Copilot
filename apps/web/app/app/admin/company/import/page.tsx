@@ -473,7 +473,7 @@ export default function CompanyImportPage() {
           </p>
         </div>
         <Link
-          href="/app/admin/company"
+          href="/app/admin/context"
           className="text-sm px-3 py-2 rounded-lg border border-slate-700 text-slate-300 hover:text-white hover:border-slate-500 transition-colors"
         >
           Back to company profile
@@ -813,7 +813,7 @@ export default function CompanyImportPage() {
             </button>
             {applied && (
               <button
-                onClick={() => router.push('/app/admin/company')}
+                onClick={() => router.push('/app/admin/context')}
                 className="px-4 py-2 text-sm rounded-lg border border-sky-500/40 bg-sky-500/10 text-sky-200"
               >
                 Applied. Back to company profile

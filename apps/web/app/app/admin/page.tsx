@@ -9,9 +9,9 @@ const QUICK_LINKS = [
     icon: Users,
   },
   {
-    href: '/app/admin/products',
-    title: 'Products',
-    description: 'Manage product context used across agents and calls.',
+    href: '/app/admin/context/offerings',
+    title: 'Offerings',
+    description: 'Manage offerings context used across agents and calls.',
     icon: Package,
   },
   {
@@ -54,7 +54,7 @@ export default function AdminPage() {
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="rounded-lg bg-slate-800 p-1.5 text-cyan-300">
+                    <span className="rounded-lg bg-slate-800 p-1.5 text-sky-300">
                       <Icon size={14} />
                     </span>
                     <p className="text-sm font-semibold text-white">{item.title}</p>

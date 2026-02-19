@@ -31,6 +31,10 @@ export class CreateCallDto {
   notes?: string;
 
   @IsOptional()
+  @IsIn(['cold_outbound', 'follow_up', 'discovery'])
+  call_type?: string;
+
+  @IsOptional()
   @IsString()
   practicePersonaId?: string;
 

@@ -5,16 +5,21 @@ import * as schema from '../db/schema';
 import { UpdateOrgSettingsDto } from './dto/update-org-settings.dto';
 import { EMPTY_COMPANY_PROFILE_DEFAULTS } from './company-profile.defaults';
 import { UpdateCompanyProfileDto } from './dto/update-company-profile.dto';
+import { UpdateSalesContextDto } from './dto/update-sales-context.dto';
 import { SubscribePlanDto } from './dto/subscribe-plan.dto';
 import { AdjustCreditsDto } from './dto/adjust-credits.dto';
-import {
-  GTAPHOTOPRO_DEMO_AGENT_NAME,
-  GTAPHOTOPRO_DEMO_AGENT_PROMPT,
-} from '../agents/gtaphotopro-demo.agent';
 
 @Injectable()
 export class OrgService {
   constructor(@Inject(DRIZZLE) private readonly db: DrizzleDb) {}
+
+  private normalizeTextArray(value: unknown, limit = 24) {
+    if (!Array.isArray(value)) return [];
+    return value
+      .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+      .filter((entry) => entry.length > 0)
+      .slice(0, limit);
+  }
 
   async listPlans() {
     return this.db
@@ -216,7 +221,6 @@ export class OrgService {
       .limit(1);
 
     if (existing) {
-      await this.ensureDemoAgent(orgId);
       return existing;
     }
 
@@ -228,7 +232,6 @@ export class OrgService {
       })
       .returning();
 
-    await this.ensureDemoAgent(orgId);
     return inserted;
   }
 
@@ -256,50 +259,111 @@ export class OrgService {
       })
       .returning();
 
-    await this.ensureDemoAgent(orgId);
     return updated;
   }
 
-  private async ensureDemoAgent(orgId: string) {
+  async getSalesContext(orgId: string) {
     const [existing] = await this.db
       .select()
-      .from(schema.agents)
-      .where(
-        and(
-          eq(schema.agents.orgId, orgId),
-          eq(schema.agents.scope, 'ORG'),
-          eq(schema.agents.name, GTAPHOTOPRO_DEMO_AGENT_NAME),
-        ),
-      )
+      .from(schema.salesContext)
+      .where(eq(schema.salesContext.orgId, orgId))
       .limit(1);
 
-    const desiredConfig = {
-      maxSuggestionTokens: 120,
-      nudgesEnabled: false,
-      alternativeCount: 3,
-      style: 'specific-numeric',
-    };
-
-    if (!existing) {
-      await this.db.insert(schema.agents).values({
-        orgId,
-        ownerUserId: null,
-        scope: 'ORG',
-        status: 'APPROVED',
-        name: GTAPHOTOPRO_DEMO_AGENT_NAME,
-        prompt: GTAPHOTOPRO_DEMO_AGENT_PROMPT,
-        configJson: desiredConfig,
-      });
-      return;
+    if (existing) {
+      return existing;
     }
 
-    await this.db
-      .update(schema.agents)
-      .set({
-        prompt: GTAPHOTOPRO_DEMO_AGENT_PROMPT,
-        status: 'APPROVED',
-        configJson: desiredConfig,
+    const [inserted] = await this.db
+      .insert(schema.salesContext)
+      .values({
+        orgId,
       })
-      .where(eq(schema.agents.id, existing.id));
+      .onConflictDoNothing()
+      .returning();
+
+    if (inserted) {
+      return inserted;
+    }
+
+    const [created] = await this.db
+      .select()
+      .from(schema.salesContext)
+      .where(eq(schema.salesContext.orgId, orgId))
+      .limit(1);
+
+    return (
+      created ?? {
+        orgId,
+        companyName: null,
+        whatWeSell: null,
+        offerCategory: null,
+        targetCustomer: null,
+        targetRoles: [],
+        industries: [],
+        disqualifiers: [],
+        proofPoints: [],
+        allowedClaims: [],
+        forbiddenClaims: [],
+        salesPolicies: [],
+        escalationRules: [],
+        nextSteps: [],
+        schedulingLink: null,
+        competitors: [],
+        positioningRules: [],
+        discoveryQuestions: [],
+        qualificationRubric: [],
+        knowledgeAppendix: null,
+        updatedAt: new Date(),
+      }
+    );
+  }
+
+  async updateSalesContext(orgId: string, dto: UpdateSalesContextDto) {
+    const patch: Partial<typeof schema.salesContext.$inferInsert> = {};
+
+    if (dto.companyName !== undefined) patch.companyName = dto.companyName.trim();
+    if (dto.whatWeSell !== undefined) patch.whatWeSell = dto.whatWeSell.trim();
+    if (dto.offerCategory !== undefined) patch.offerCategory = dto.offerCategory.trim();
+    if (dto.targetCustomer !== undefined) patch.targetCustomer = dto.targetCustomer.trim();
+    if (dto.targetRoles !== undefined) patch.targetRoles = this.normalizeTextArray(dto.targetRoles);
+    if (dto.industries !== undefined) patch.industries = this.normalizeTextArray(dto.industries);
+    if (dto.disqualifiers !== undefined) patch.disqualifiers = this.normalizeTextArray(dto.disqualifiers);
+    if (dto.proofPoints !== undefined) patch.proofPoints = this.normalizeTextArray(dto.proofPoints);
+    if (dto.allowedClaims !== undefined) patch.allowedClaims = this.normalizeTextArray(dto.allowedClaims);
+    if (dto.forbiddenClaims !== undefined) {
+      patch.forbiddenClaims = this.normalizeTextArray(dto.forbiddenClaims);
+    }
+    if (dto.salesPolicies !== undefined) patch.salesPolicies = this.normalizeTextArray(dto.salesPolicies);
+    if (dto.escalationRules !== undefined) {
+      patch.escalationRules = this.normalizeTextArray(dto.escalationRules);
+    }
+    if (dto.nextSteps !== undefined) patch.nextSteps = this.normalizeTextArray(dto.nextSteps);
+    if (dto.schedulingLink !== undefined) patch.schedulingLink = dto.schedulingLink.trim();
+    if (dto.competitors !== undefined) patch.competitors = this.normalizeTextArray(dto.competitors);
+    if (dto.positioningRules !== undefined) {
+      patch.positioningRules = this.normalizeTextArray(dto.positioningRules);
+    }
+    if (dto.discoveryQuestions !== undefined) {
+      patch.discoveryQuestions = this.normalizeTextArray(dto.discoveryQuestions);
+    }
+    if (dto.qualificationRubric !== undefined) {
+      patch.qualificationRubric = this.normalizeTextArray(dto.qualificationRubric);
+    }
+    if (dto.knowledgeAppendix !== undefined) patch.knowledgeAppendix = dto.knowledgeAppendix.trim();
+    patch.updatedAt = new Date();
+
+    const [updated] = await this.db
+      .insert(schema.salesContext)
+      .values({
+        orgId,
+        ...patch,
+      })
+      .onConflictDoUpdate({
+        target: schema.salesContext.orgId,
+        set: patch,
+      })
+      .returning();
+
+    return updated;
   }
 }

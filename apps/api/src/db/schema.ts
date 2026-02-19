@@ -78,6 +78,32 @@ export const orgCompanyProfiles = pgTable('org_company_profiles', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
+export const salesContext = pgTable('sales_context', {
+  orgId: uuid('org_id')
+    .primaryKey()
+    .references(() => orgs.id, { onDelete: 'cascade' }),
+  companyName: text('company_name'),
+  whatWeSell: text('what_we_sell'),
+  offerCategory: text('offer_category'),
+  targetCustomer: text('target_customer'),
+  targetRoles: jsonb('target_roles').default([]).notNull(),
+  industries: jsonb('industries').default([]).notNull(),
+  disqualifiers: jsonb('disqualifiers').default([]).notNull(),
+  proofPoints: jsonb('proof_points').default([]).notNull(),
+  allowedClaims: jsonb('allowed_claims').default([]).notNull(),
+  forbiddenClaims: jsonb('forbidden_claims').default([]).notNull(),
+  salesPolicies: jsonb('sales_policies').default([]).notNull(),
+  escalationRules: jsonb('escalation_rules').default([]).notNull(),
+  nextSteps: jsonb('next_steps').default([]).notNull(),
+  schedulingLink: text('scheduling_link'),
+  competitors: jsonb('competitors').default([]).notNull(),
+  positioningRules: jsonb('positioning_rules').default([]).notNull(),
+  discoveryQuestions: jsonb('discovery_questions').default([]).notNull(),
+  qualificationRubric: jsonb('qualification_rubric').default([]).notNull(),
+  knowledgeAppendix: text('knowledge_appendix'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
   orgId: uuid('org_id')
@@ -123,6 +149,9 @@ export const agents = pgTable('agents', {
   status: agentStatusEnum('status').default('DRAFT').notNull(),
   name: text('name').notNull(),
   prompt: text('prompt').notNull(),
+  useDefaultTemplate: boolean('use_default_template').default(true).notNull(),
+  promptDelta: text('prompt_delta').default('').notNull(),
+  fullPromptOverride: text('full_prompt_override'),
   configJson: jsonb('config_json').default({}).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
@@ -246,6 +275,7 @@ export const calls = pgTable('calls', {
   agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'set null' }),
   playbookId: uuid('playbook_id').references(() => playbooks.id, { onDelete: 'set null' }),
   mode: text('mode').notNull().default('OUTBOUND'),
+  callType: text('call_type').default('cold_outbound').notNull(),
   guidanceLevel: guidanceLevelEnum('guidance_level').default('STANDARD').notNull(),
   layoutPreset: liveLayoutEnum('layout_preset').default('STANDARD').notNull(),
   productsMode: text('products_mode').default('ALL').notNull(),
@@ -253,6 +283,11 @@ export const calls = pgTable('calls', {
   phoneTo: text('phone_to').notNull(),
   contactJson: jsonb('contact_json').default({}).notNull(),
   notes: text('notes'),
+  preparedOpenerText: text('prepared_opener_text'),
+  preparedOpenerGeneratedAt: timestamp('prepared_opener_generated_at', {
+    withTimezone: true,
+  }),
+  coachMemory: jsonb('coach_memory').default({}).notNull(),
   startedAt: timestamp('started_at', { withTimezone: true }),
   endedAt: timestamp('ended_at', { withTimezone: true }),
   twilioCallSid: text('twilio_call_sid'),

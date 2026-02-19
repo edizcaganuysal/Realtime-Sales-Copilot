@@ -475,7 +475,7 @@ export default function ProductImportPage() {
     const data = await res.json().catch(() => ({}));
     setApplying(false);
     if (!res.ok) {
-      setError(Array.isArray(data?.message) ? data.message[0] : (data?.message ?? 'Failed to apply products.'));
+      setError(Array.isArray(data?.message) ? data.message[0] : (data?.message ?? 'Failed to apply offerings.'));
       return;
     }
     setApplied(true);
@@ -497,16 +497,16 @@ export default function ProductImportPage() {
     <div className="p-8 max-w-6xl space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold text-white">Import Products</h1>
+          <h1 className="text-xl font-semibold text-white">Import Offerings</h1>
           <p className="text-sm text-slate-500 mt-1">
-            Detect offering candidates, review evidence, and create only approved products.
+            Detect offering candidates, review evidence, and create only approved offerings.
           </p>
         </div>
         <Link
-          href="/app/admin/products"
+          href="/app/admin/context/offerings"
           className="text-sm px-3 py-2 rounded-lg border border-slate-700 text-slate-300 hover:text-white hover:border-slate-500 transition-colors"
         >
-          Back to products
+          Back to offerings
         </Link>
       </div>
 
@@ -1053,14 +1053,14 @@ export default function ProductImportPage() {
               disabled={applying || products.length === 0}
               className="px-4 py-2 text-sm font-medium rounded-lg bg-sky-600 hover:bg-sky-500 text-white disabled:opacity-50"
             >
-              {applying ? 'Applying...' : 'Create selected products'}
+              {applying ? 'Applying...' : 'Create selected offerings'}
             </button>
             {applied && (
               <button
-                onClick={() => router.push('/app/admin/products')}
+                onClick={() => router.push('/app/admin/context/offerings')}
                 className="px-4 py-2 text-sm rounded-lg border border-sky-500/40 bg-sky-500/10 text-sky-200"
               >
-                Applied. Back to products
+                Applied. Back to offerings
               </button>
             )}
             {aiError && <span className="text-sm text-red-300">{aiError}</span>}

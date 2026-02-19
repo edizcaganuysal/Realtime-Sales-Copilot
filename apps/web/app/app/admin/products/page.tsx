@@ -439,9 +439,9 @@ export default function AdminProductsPage() {
     <div className="p-8 max-w-6xl">
       <div className="flex items-start justify-between gap-4 mb-6">
         <div>
-          <h1 className="text-lg font-semibold text-white">Products</h1>
+          <h1 className="text-lg font-semibold text-white">Offerings</h1>
           <p className="text-sm text-slate-500 mt-1">
-            Save product context once so agents can use it by default.
+            Save offering context once so agents can use it by default.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -455,7 +455,7 @@ export default function AdminProductsPage() {
             onClick={openCreate}
             className="px-3 py-2 text-sm font-medium rounded-lg bg-sky-600 hover:bg-sky-500 text-white transition-colors"
           >
-            New product
+            New offering
           </button>
         </div>
       </div>
@@ -474,7 +474,7 @@ export default function AdminProductsPage() {
         </div>
       ) : sortedProducts.length === 0 ? (
         <div className="bg-slate-900 border border-slate-800 rounded-xl px-6 py-10 text-center">
-          <p className="text-slate-500 text-sm">No products yet.</p>
+          <p className="text-slate-500 text-sm">No offerings yet.</p>
         </div>
       ) : (
         <div className="grid gap-3">
@@ -537,7 +537,7 @@ export default function AdminProductsPage() {
           <div className="w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-2xl p-5 max-h-[92vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-white font-semibold text-base">
-                {editing ? 'Edit product' : 'Create product'}
+                {editing ? 'Edit offering' : 'Create offering'}
               </h3>
               <button
                 onClick={() => {
@@ -560,7 +560,7 @@ export default function AdminProductsPage() {
                   className={INPUT}
                   value={form.name}
                   onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
-                  placeholder="Product name"
+                  placeholder="Offering name"
                 />
                 <p className="text-[11px] text-slate-600 mt-1">
                   Keep product name short and recognizable for reps and buyers.
@@ -775,7 +775,7 @@ export default function AdminProductsPage() {
                 disabled={saving}
                 className="flex-1 py-2 text-sm text-white bg-sky-600 hover:bg-sky-500 disabled:opacity-50 rounded-lg transition-colors"
               >
-                {saving ? 'Saving...' : editing ? 'Save changes' : 'Create product'}
+                  {saving ? 'Saving...' : editing ? 'Save changes' : 'Create offering'}
               </button>
             </div>
 

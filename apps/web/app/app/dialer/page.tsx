@@ -216,7 +216,7 @@ export default function DialerPage() {
     setError('');
 
     if (!isMock && !allProducts && selectedProductIds.length === 0) {
-      setError('Select at least one product or keep All products enabled.');
+      setError('Select at least one offering or keep All offerings enabled.');
       setSubmitting(false);
       return;
     }
@@ -407,7 +407,7 @@ export default function DialerPage() {
         {!isMock && (
           <div className="space-y-2.5">
             <div className="flex items-center justify-between gap-3">
-              <label className="block text-xs text-slate-400">Products</label>
+              <label className="block text-xs text-slate-400">Offerings</label>
               <button
                 type="button"
                 onClick={() => setAllProducts((prev) => !prev)}
@@ -420,7 +420,7 @@ export default function DialerPage() {
                 <span
                   className={`w-1.5 h-1.5 rounded-full ${allProducts ? 'bg-sky-400' : 'bg-slate-400'}`}
                 />
-                {allProducts ? 'All products' : 'Selected products'}
+                {allProducts ? 'All offerings' : 'Selected offerings'}
               </button>
             </div>
 
@@ -428,13 +428,13 @@ export default function DialerPage() {
               <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 space-y-2.5">
                 <input
                   className={INPUT}
-                  placeholder="Search products..."
+                  placeholder="Search offerings..."
                   value={productSearch}
                   onChange={(e) => setProductSearch(e.target.value)}
                 />
                 <div className="max-h-44 overflow-y-auto space-y-1.5 pr-1">
                   {filteredProducts.length === 0 ? (
-                    <p className="text-xs text-slate-600 py-2">No products found.</p>
+                    <p className="text-xs text-slate-600 py-2">No offerings found.</p>
                   ) : (
                     filteredProducts.map((product) => {
                       const selected = selectedProductIds.includes(product.id);

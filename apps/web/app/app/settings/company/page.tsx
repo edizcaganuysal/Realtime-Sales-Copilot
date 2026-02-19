@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
 
 export default function LegacyCompanySettingsRedirect() {
-  redirect('/app/admin/company');
+  redirect('/app/admin/context');
 }
