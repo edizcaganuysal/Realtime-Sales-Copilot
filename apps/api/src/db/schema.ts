@@ -53,6 +53,30 @@ export const orgSettings = pgTable('org_settings', {
   retentionDays: integer('retention_days').default(90).notNull(),
 });
 
+export const orgCompanyProfiles = pgTable('org_company_profiles', {
+  orgId: uuid('org_id')
+    .primaryKey()
+    .references(() => orgs.id, { onDelete: 'cascade' }),
+  companyName: text('company_name').notNull(),
+  productName: text('product_name').notNull(),
+  productSummary: text('product_summary').notNull(),
+  idealCustomerProfile: text('ideal_customer_profile').notNull(),
+  valueProposition: text('value_proposition').notNull(),
+  differentiators: text('differentiators').notNull(),
+  proofPoints: text('proof_points').notNull(),
+  repTalkingPoints: text('rep_talking_points').notNull(),
+  discoveryGuidance: text('discovery_guidance').notNull(),
+  qualificationGuidance: text('qualification_guidance').notNull(),
+  objectionHandling: text('objection_handling').notNull(),
+  competitorGuidance: text('competitor_guidance').notNull(),
+  pricingGuidance: text('pricing_guidance').notNull(),
+  implementationGuidance: text('implementation_guidance').notNull(),
+  faq: text('faq').notNull(),
+  doNotSay: text('do_not_say').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
   orgId: uuid('org_id')

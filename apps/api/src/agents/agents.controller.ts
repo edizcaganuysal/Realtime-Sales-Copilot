@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { AgentScope, AgentStatus, Role } from '@live-sales-coach/shared';
 import type { JwtPayload } from '@live-sales-coach/shared';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -36,6 +36,11 @@ export class AgentsController {
     @Body() dto: UpdateAgentDto,
   ) {
     return this.agentsService.update(user, id, dto);
+  }
+
+  @Delete(':id')
+  remove(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.agentsService.remove(user, id);
   }
 
   @Post(':id/submit')

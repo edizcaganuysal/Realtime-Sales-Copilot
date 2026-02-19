@@ -30,19 +30,23 @@ export class CallsService {
     const layoutPreset = dto.layoutPreset ?? (orgSettings.liveLayoutDefault as LiveLayout);
     const guidanceLevel = dto.guidanceLevel ?? GuidanceLevel.STANDARD;
 
+    const contactJson: Record<string, unknown> = {};
+    if (dto.practicePersonaId) contactJson.practicePersonaId = dto.practicePersonaId;
+    if (dto.customPersonaPrompt) contactJson.customPersonaPrompt = dto.customPersonaPrompt;
+
     const [call] = await this.db
       .insert(schema.calls)
       .values({
         orgId: user.orgId,
         userId: user.sub,
         agentId: dto.agentId ?? null,
-        playbookId: dto.playbookId ?? null,
+        playbookId: null,
+        mode: dto.mode ?? 'OUTBOUND',
         guidanceLevel,
         layoutPreset,
         phoneTo: dto.phoneTo,
+        contactJson,
         notes: dto.notes ?? null,
-        // When Twilio is configured, the call starts as INITIATED and transitions
-        // to IN_PROGRESS via the status webhook. Without Twilio it's immediately active.
         status: 'INITIATED',
         startedAt: new Date(),
       })

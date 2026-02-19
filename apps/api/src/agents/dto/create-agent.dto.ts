@@ -1,4 +1,4 @@
-import { IsEnum, IsOptional, IsString, MinLength, MaxLength } from 'class-validator';
+import { IsEnum, IsObject, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { AgentScope } from '@live-sales-coach/shared';
 
 export class CreateAgentDto {
@@ -14,4 +14,8 @@ export class CreateAgentDto {
   @IsOptional()
   @IsEnum(AgentScope)
   scope?: AgentScope;
+
+  @IsOptional()
+  @IsObject()
+  configJson?: Record<string, unknown>;
 }

@@ -19,6 +19,24 @@ function makeContext(stages: ReturnType<typeof makeStage>[]) {
     agentPrompt: 'Be helpful.',
     notes: null,
     stages,
+    companyProfile: {
+      companyName: 'TestCo',
+      productName: 'TestProduct',
+      productSummary: 'A test product.',
+      idealCustomerProfile: 'Test ICP.',
+      valueProposition: 'Test value.',
+      differentiators: 'Test differentiators.',
+      proofPoints: 'Test proof points.',
+      repTalkingPoints: 'Test talking points.',
+      discoveryGuidance: 'Test discovery.',
+      qualificationGuidance: 'Test qualification.',
+      objectionHandling: 'Test objection handling.',
+      competitorGuidance: 'Test competitor guidance.',
+      pricingGuidance: 'Test pricing.',
+      implementationGuidance: 'Test implementation.',
+      faq: 'Test FAQ.',
+      doNotSay: 'Test do not say.',
+    },
   };
 }
 
@@ -135,9 +153,8 @@ describe('EngineService — stage hysteresis', () => {
     // Vote for Solution Fit (idx 2) while at Opening (idx 0)
     applyVote(state, 'Solution Fit');
     applyVote(state, 'Solution Fit');
-    // Should advance to Solution Fit (idx 2), not clamped to 1
-    // The engine allows any forward jump as long as 2 consecutive votes agree
-    expect(state.currentStageIdx).toBe(2);
+    // New behavior: stage progression is linear (no skipping).
+    expect(state.currentStageIdx).toBe(1);
   });
 
   it('resets vote count after advancing', () => {
@@ -177,19 +194,19 @@ describe('EngineService — getAlternatives stub fallback', () => {
     engine = new EngineService(mocks.gateway, mocks.llm, mocks.db);
   });
 
-  it('returns 2 stub alternatives when LLM is not available', async () => {
+  it('returns 1 stub alternative when LLM is not available', async () => {
     const result = await engine.getAlternatives('no-engine-call');
-    expect(result.texts).toHaveLength(2);
+    expect(result.texts).toHaveLength(1);
     expect(typeof result.texts[0]).toBe('string');
   });
 
-  it('emits each alternative via gateway', async () => {
+  it('emits alternatives via gateway as engine.suggestions', async () => {
     await engine.getAlternatives('no-engine-call');
-    expect(mocks.gateway.emitToCall).toHaveBeenCalledTimes(2);
+    expect(mocks.gateway.emitToCall).toHaveBeenCalledTimes(1);
     expect(mocks.gateway.emitToCall).toHaveBeenCalledWith(
       'no-engine-call',
-      'engine.primary_suggestion',
-      expect.objectContaining({ text: expect.any(String) }),
+      'engine.suggestions',
+      expect.objectContaining({ suggestions: expect.any(Array) }),
     );
   });
 });

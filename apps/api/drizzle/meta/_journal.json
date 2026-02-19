@@ -8,6 +8,13 @@
       "when": 1771333295948,
       "tag": "0000_dark_anita_blake",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1771463316856,
+      "tag": "0001_redundant_dark_beast",
+      "breakpoints": true
     }
   ]
 }

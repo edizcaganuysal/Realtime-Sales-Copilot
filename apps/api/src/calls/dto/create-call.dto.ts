@@ -1,7 +1,11 @@
 import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
-import { GuidanceLevel, LiveLayout } from '@live-sales-coach/shared';
+import { CallMode, GuidanceLevel, LiveLayout } from '@live-sales-coach/shared';
 
 export class CreateCallDto {
+  @IsOptional()
+  @IsEnum(CallMode)
+  mode?: CallMode;
+
   @IsString()
   @MaxLength(30)
   phoneTo!: string;
@@ -25,4 +29,12 @@ export class CreateCallDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @IsOptional()
+  @IsString()
+  practicePersonaId?: string;
+
+  @IsOptional()
+  @IsString()
+  customPersonaPrompt?: string;
 }

@@ -33,6 +33,9 @@ type SummaryData = {
     strengths: string[];
     improvements: string[];
     score: number | null;
+    nextActions?: string[];
+    nextBestLines?: string[];
+    risks?: string[];
   };
   checklistResultsJson: Record<string, boolean>;
 } | null;
@@ -237,6 +240,42 @@ export default function CallReviewPage({ params }: { params: Promise<{ id: strin
                       {summary.coachingJson.improvements.map((imp, i) => (
                         <li key={i} className="text-xs text-slate-400 flex items-start gap-1.5">
                           <span className="text-amber-500 mt-0.5">→</span> {imp}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {(summary.coachingJson.nextActions?.length ?? 0) > 0 && (
+                  <div>
+                    <p className="text-xs text-cyan-400 uppercase tracking-wider mb-2">Next actions</p>
+                    <ul className="space-y-1">
+                      {summary.coachingJson.nextActions!.map((action, i) => (
+                        <li key={i} className="text-xs text-slate-400 flex items-start gap-1.5">
+                          <span className="text-cyan-500 mt-0.5">•</span> {action}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {(summary.coachingJson.nextBestLines?.length ?? 0) > 0 && (
+                  <div>
+                    <p className="text-xs text-violet-400 uppercase tracking-wider mb-2">Next best lines</p>
+                    <ul className="space-y-1">
+                      {summary.coachingJson.nextBestLines!.map((line, i) => (
+                        <li key={i} className="text-xs text-slate-300 flex items-start gap-1.5">
+                          <span className="text-violet-500 mt-0.5">{i + 1}.</span> "{line}"
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {(summary.coachingJson.risks?.length ?? 0) > 0 && (
+                  <div>
+                    <p className="text-xs text-rose-400 uppercase tracking-wider mb-2">Risks</p>
+                    <ul className="space-y-1">
+                      {summary.coachingJson.risks!.map((risk, i) => (
+                        <li key={i} className="text-xs text-slate-400 flex items-start gap-1.5">
+                          <span className="text-rose-500 mt-0.5">!</span> {risk}
                         </li>
                       ))}
                     </ul>

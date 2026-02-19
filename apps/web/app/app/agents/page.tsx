@@ -107,6 +107,12 @@ export default function AgentsPage() {
     if (res.ok) await loadAgents();
   }
 
+  async function handleDeleteAgent(agentId: string, name: string) {
+    if (!confirm(`Delete "${name}"?`)) return;
+    const res = await fetch('/api/agents/' + agentId, { method: 'DELETE' });
+    if (res.ok) await loadAgents();
+  }
+
   const isRep = me?.user.role === Role.REP;
   const canCreate = !isRep || (me?.orgSettings.allowRepAgentCreation ?? true);
   const TABS: { id: Tab; label: string }[] = [
@@ -160,9 +166,25 @@ export default function AgentsPage() {
                     <>
                       <button onClick={() => openEdit(agent)} className="text-xs text-slate-400 hover:text-white transition-colors">Edit</button>
                       <button onClick={() => handleSubmitAgent(agent.id)} className="text-xs px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-colors">Submit</button>
+                      <button
+                        onClick={() => handleDeleteAgent(agent.id, agent.name)}
+                        className="text-xs px-2.5 py-1 border border-red-500/30 hover:border-red-500/60 text-red-400 rounded-lg transition-colors"
+                      >
+                        Delete
+                      </button>
                     </>
                   )}
-                  {agent.status === AgentStatus.PENDING_APPROVAL && <span className="text-xs text-slate-500">Awaiting review</span>}
+                  {agent.status === AgentStatus.PENDING_APPROVAL && (
+                    <>
+                      <span className="text-xs text-slate-500">Awaiting review</span>
+                      <button
+                        onClick={() => handleDeleteAgent(agent.id, agent.name)}
+                        className="text-xs px-2.5 py-1 border border-red-500/30 hover:border-red-500/60 text-red-400 rounded-lg transition-colors"
+                      >
+                        Delete
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             </div>
