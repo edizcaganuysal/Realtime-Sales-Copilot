@@ -10,12 +10,6 @@ type Plan = {
   isActive: boolean;
 };
 
-type MeResponse = {
-  user: {
-    role: 'ADMIN' | 'MANAGER' | 'REP';
-  };
-};
-
 function formatCredits(value: number) {
   return new Intl.NumberFormat('en-US').format(value);
 }
@@ -23,11 +17,10 @@ function formatCredits(value: number) {
 export default function PlanOnboardingPage() {
   const router = useRouter();
   const [plans, setPlans] = useState<Plan[]>([]);
-  const [selectedPlanId, setSelectedPlanId] = useState<string>('');
+  const [selectedPlanId, setSelectedPlanId] = useState('');
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
-  const [role, setRole] = useState<'ADMIN' | 'MANAGER' | 'REP' | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -36,17 +29,12 @@ export default function PlanOnboardingPage() {
       setLoading(true);
       setError('');
 
-      const [meRes, plansRes, subscriptionRes] = await Promise.all([
-        fetch('/api/auth/me', { cache: 'no-store' }),
+      const [plansRes, subscriptionRes] = await Promise.all([
         fetch('/api/plans', { cache: 'no-store' }),
         fetch('/api/org/subscription', { cache: 'no-store' }),
       ]);
 
       if (!active) return;
-
-      const meData = await meRes.json().catch(() => null);
-      const currentRole = meData?.user?.role ?? null;
-      setRole(currentRole);
 
       if (subscriptionRes.ok) {
         router.replace('/app/home');
@@ -95,7 +83,7 @@ export default function PlanOnboardingPage() {
     setSubmitting(false);
 
     if (!res.ok) {
-      setError(Array.isArray(data?.message) ? data.message[0] : (data?.message ?? 'Failed to subscribe'));
+      setError(Array.isArray(data?.message) ? data.message[0] : (data?.message ?? 'Failed to apply plan'));
       return;
     }
 
@@ -106,25 +94,8 @@ export default function PlanOnboardingPage() {
     return (
       <div className="p-8 max-w-5xl space-y-3">
         {[...Array(3)].map((_, i) => (
-          <div key={i} className="h-40 rounded-2xl border border-slate-800 bg-slate-900 animate-pulse" />
+          <div key={i} className="h-40 animate-pulse rounded-2xl border border-slate-800 bg-slate-900" />
         ))}
-      </div>
-    );
-  }
-
-  if (role !== 'ADMIN') {
-    return (
-      <div className="p-8 max-w-xl">
-        <h1 className="text-xl font-semibold text-white">Plan setup is admin-only</h1>
-        <p className="mt-2 text-sm text-slate-400">
-          Ask an admin to choose a plan for this organization.
-        </p>
-        <button
-          onClick={() => router.replace('/app/home')}
-          className="mt-4 px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-sm"
-        >
-          Back to Home
-        </button>
       </div>
     );
   }
@@ -133,8 +104,8 @@ export default function PlanOnboardingPage() {
     <div className="p-8 max-w-6xl">
       <div className="mb-6">
         <h1 className="text-2xl font-semibold text-white">Choose your plan</h1>
-        <p className="text-sm text-slate-400 mt-1">
-          All tiers include the same features. Higher tiers include more monthly credits.
+        <p className="mt-1 text-sm text-slate-400">
+          Features are identical across tiers. Credits change by plan.
         </p>
       </div>
 
@@ -159,13 +130,8 @@ export default function PlanOnboardingPage() {
               }`}
             >
               <p className="text-base font-semibold text-white">{plan.name}</p>
-              <p className="mt-3 text-2xl font-bold text-sky-300">
-                {formatCredits(plan.monthlyCredits)}
-              </p>
+              <p className="mt-3 text-2xl font-bold text-sky-300">{formatCredits(plan.monthlyCredits)}</p>
               <p className="mt-1 text-xs uppercase tracking-wider text-slate-500">credits / month</p>
-              <p className="mt-4 text-sm text-slate-400">
-                Identical feature access. Monthly credits scale with plan tier.
-              </p>
             </button>
           );
         })}
@@ -175,7 +141,7 @@ export default function PlanOnboardingPage() {
         <button
           onClick={handleConfirm}
           disabled={submitting || !selectedPlanId}
-          className="px-5 py-2.5 rounded-lg bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-sm font-medium"
+          className="rounded-lg bg-sky-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-50"
         >
           {submitting ? 'Applying plan...' : 'Confirm plan'}
         </button>

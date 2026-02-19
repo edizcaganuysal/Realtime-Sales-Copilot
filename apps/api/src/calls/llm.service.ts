@@ -4,8 +4,11 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 export class LlmService implements OnModuleInit {
   private readonly logger = new Logger(LlmService.name);
 
-  private readonly provider = (process.env['LLM_PROVIDER'] ?? '').toLowerCase();
-  private readonly apiKey = process.env['LLM_API_KEY'] ?? '';
+  private readonly provider = (
+    process.env['LLM_PROVIDER'] ??
+    (process.env['OPENAI_API_KEY'] ? 'openai' : '')
+  ).toLowerCase();
+  private readonly apiKey = process.env['LLM_API_KEY'] ?? process.env['OPENAI_API_KEY'] ?? '';
   readonly model = process.env['LLM_MODEL'] ?? 'gpt-4o';
   private readonly baseUrl = process.env['LLM_BASE_URL'] || undefined;
 

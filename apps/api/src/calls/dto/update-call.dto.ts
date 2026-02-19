@@ -1,4 +1,4 @@
-import { IsArray, IsIn, IsOptional, IsString, IsUUID } from 'class-validator';
+import { IsArray, IsIn, IsInt, IsOptional, IsString, IsUUID } from 'class-validator';
 import { ProductsMode } from '@live-sales-coach/shared';
 
 export class UpdateCallDto {
@@ -14,4 +14,12 @@ export class UpdateCallDto {
   @IsArray()
   @IsUUID('4', { each: true })
   selected_product_ids?: string[];
+
+  @IsOptional()
+  @IsIn(['won', 'lost', 'follow_up', 'unknown'])
+  outcome?: 'won' | 'lost' | 'follow_up' | 'unknown';
+
+  @IsOptional()
+  @IsInt()
+  deal_value?: number | null;
 }

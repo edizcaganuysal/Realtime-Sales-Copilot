@@ -1,7 +1,6 @@
 import { redirect } from 'next/navigation';
 import { Sidebar } from '@/components/sidebar';
 import { getMe } from '@/lib/api';
-import { SubscriptionGate } from '@/components/subscription-gate';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   let me;
@@ -16,7 +15,6 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="flex h-screen bg-slate-950 text-white overflow-hidden">
-      <SubscriptionGate role={me.user.role} />
       <Sidebar me={me} />
       <main className="flex-1 overflow-y-auto">{children}</main>
     </div>
