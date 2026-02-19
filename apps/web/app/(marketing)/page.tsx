@@ -28,7 +28,7 @@ export default function HomePage() {
               Coach every rep live, without adding manager overhead.
             </h1>
             <p className="mt-5 max-w-xl text-lg leading-relaxed text-slate-600">
-              Live Sales Coach listens to sales conversations in real time and gives clean, contextual guidance so reps stay sharp and consistent.
+              Sales AI listens to sales conversations in real time and gives clean, contextual guidance so reps stay sharp and consistent.
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-3">
               <Link

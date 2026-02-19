@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
+import { useEffect, useState } from 'react';
 import {
   Home,
   Phone,
@@ -15,6 +16,8 @@ import {
   Building2,
   Package,
   CreditCard,
+  ClipboardList,
+  BrainCircuit,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { MeResponse } from '@live-sales-coach/shared';
@@ -30,6 +33,8 @@ const NAV = [
 
 const ADMIN_NAV = [
   { href: '/app/admin/governance', label: 'Manage', icon: ShieldCheck },
+  { href: '/app/admin/ai', label: 'AI', icon: BrainCircuit },
+  { href: '/app/admin/requests', label: 'Requests', icon: ClipboardList },
   { href: '/app/admin/company', label: 'Company', icon: Building2 },
   { href: '/app/admin/products', label: 'Products', icon: Package },
   { href: '/app/billing', label: 'Billing', icon: CreditCard },
@@ -45,6 +50,31 @@ export function Sidebar({ me }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const isPrivileged = me.user.role === 'ADMIN' || me.user.role === 'MANAGER';
+  const [creditsBalance, setCreditsBalance] = useState<number | null>(null);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadCredits() {
+      const res = await fetch('/api/org/credits', { cache: 'no-store' });
+      if (!active || !res.ok) return;
+      const data = await res.json().catch(() => null);
+      if (!active) return;
+      if (typeof data?.balance === 'number') {
+        setCreditsBalance(data.balance);
+      }
+    }
+
+    void loadCredits();
+    const intervalId = setInterval(() => {
+      void loadCredits();
+    }, 30000);
+
+    return () => {
+      active = false;
+      clearInterval(intervalId);
+    };
+  }, []);
 
   async function handleLogout() {
     await fetch('/api/auth/logout', { method: 'POST' });
@@ -56,9 +86,18 @@ export function Sidebar({ me }: SidebarProps) {
     <aside className="flex flex-col w-60 shrink-0 bg-slate-900 border-r border-slate-800 h-screen sticky top-0">
       <div className="flex items-center gap-2 px-5 py-4 border-b border-slate-800">
         <div className="w-7 h-7 rounded-md bg-emerald-500 flex items-center justify-center">
-          <span className="text-white font-bold text-xs">L</span>
+          <span className="text-white font-bold text-xs">S</span>
         </div>
-        <span className="text-white font-semibold text-sm">Live Sales Coach</span>
+        <span className="text-white font-semibold text-sm">Sales AI</span>
+      </div>
+
+      <div className="px-4 py-3 border-b border-slate-800">
+        <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2">
+          <p className="text-[11px] uppercase tracking-wider text-emerald-300">Credits balance</p>
+          <p className="text-sm font-semibold text-emerald-200">
+            {creditsBalance === null ? '--' : new Intl.NumberFormat('en-US').format(creditsBalance)}
+          </p>
+        </div>
       </div>
 
       <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">

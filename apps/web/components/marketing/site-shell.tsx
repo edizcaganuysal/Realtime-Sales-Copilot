@@ -14,9 +14,9 @@ export function SiteShell({ children }: { children: React.ReactNode }) {
         <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between px-4 sm:px-6 lg:px-8">
           <Link href="/" className="flex items-center gap-2">
             <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500 text-xs font-bold text-white">
-              L
+              S
             </span>
-            <span className="text-sm font-semibold tracking-tight text-slate-900">Live Sales Coach</span>
+            <span className="text-sm font-semibold tracking-tight text-slate-900">Sales AI</span>
           </Link>
 
           <nav className="hidden items-center gap-6 md:flex">
@@ -58,7 +58,7 @@ export function SiteShell({ children }: { children: React.ReactNode }) {
 
       <footer className="border-t border-slate-200 bg-white">
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-3 px-4 py-8 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
-          <p>Live Sales Coach</p>
+          <p>Sales AI</p>
           <div className="flex flex-wrap items-center gap-4">
             <Link href="/product" className="hover:text-slate-900">Product</Link>
             <Link href="/pricing" className="hover:text-slate-900">Pricing</Link>

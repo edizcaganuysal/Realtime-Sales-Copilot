@@ -174,6 +174,21 @@ export const creditLedger = pgTable('credit_ledger', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
+export const fineTuneRequests = pgTable('fine_tune_requests', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id')
+    .notNull()
+    .references(() => orgs.id, { onDelete: 'cascade' }),
+  requestedByUserId: uuid('requested_by_user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  dataSources: jsonb('data_sources').default([]).notNull(),
+  complianceNotes: text('compliance_notes'),
+  notes: text('notes'),
+  status: text('status').default('new').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const calls = pgTable('calls', {
   id: uuid('id').primaryKey().defaultRandom(),
   orgId: uuid('org_id')

@@ -1,5 +1,5 @@
 -- =============================================================================
--- Live Sales Coach — Full schema + seed for Supabase SQL Editor
+-- Sales AI — Full schema + seed for Supabase SQL Editor
 -- Paste this entire file into: Supabase Dashboard → SQL Editor → Run
 -- =============================================================================
 

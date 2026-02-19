@@ -65,7 +65,7 @@ Required:
 Optional:
 
 - `NEXT_PUBLIC_WS_URL=wss://<your-api-domain>`
-- `NEXT_PUBLIC_APP_NAME=Live Sales Coach`
+- `NEXT_PUBLIC_APP_NAME=Sales AI`
 
 Notes:
 
@@ -124,4 +124,3 @@ Expected: `401` without token.
 5. CORS validation:
 
 - In browser devtools from web domain, confirm API requests to API domain succeed without CORS errors.
-

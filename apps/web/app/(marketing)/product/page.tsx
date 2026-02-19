@@ -25,7 +25,7 @@ export default function ProductPage() {
       <div className="max-w-3xl">
         <h1 className="text-4xl font-bold tracking-tight text-slate-900">Product</h1>
         <p className="mt-4 text-lg leading-relaxed text-slate-600">
-          Live Sales Coach gives reps a focused in-call assistant and gives managers a repeatable coaching system across every conversation.
+          Sales AI gives reps a focused in-call assistant and gives managers a repeatable coaching system across every conversation.
         </p>
       </div>
 

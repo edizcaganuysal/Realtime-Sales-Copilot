@@ -39,9 +39,13 @@ export default function AgentsPage() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [showRequestModal, setShowRequestModal] = useState(false);
   const [editAgent, setEditAgent] = useState<Agent | null>(null);
   const [form, setForm] = useState({ name: '', prompt: '', scope: AgentScope.PERSONAL });
+  const [requestForm, setRequestForm] = useState({ useCase: '', notes: '' });
   const [submitting, setSubmitting] = useState(false);
+  const [requestSubmitting, setRequestSubmitting] = useState(false);
+  const [requestSuccess, setRequestSuccess] = useState('');
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -113,8 +117,33 @@ export default function AgentsPage() {
     if (res.ok) await loadAgents();
   }
 
+  async function handleSubmitCustomAgentRequest(e: React.FormEvent) {
+    e.preventDefault();
+    setRequestSubmitting(true);
+    setError('');
+    const res = await fetch('/api/requests/custom-agent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        use_case: requestForm.useCase,
+        notes: requestForm.notes,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setRequestSubmitting(false);
+    if (!res.ok) {
+      setError(Array.isArray(data?.message) ? data.message[0] : (data?.message ?? 'Failed to submit request'));
+      return;
+    }
+    setShowRequestModal(false);
+    setRequestForm({ useCase: '', notes: '' });
+    setRequestSuccess('Custom agent build request submitted.');
+    setTimeout(() => setRequestSuccess(''), 3000);
+  }
+
   const isRep = me?.user.role === Role.REP;
   const canCreate = !isRep || (me?.orgSettings.allowRepAgentCreation ?? true);
+  const canRequestCustomAgent = me?.user.role === Role.ADMIN || me?.user.role === Role.MANAGER;
   const TABS: { id: Tab; label: string }[] = [
     { id: 'company', label: 'Company' },
     { id: 'mine', label: 'My agents' },
@@ -125,12 +154,31 @@ export default function AgentsPage() {
     <div className="p-8 max-w-4xl">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-lg font-semibold text-white">Agents</h1>
-        {canCreate && (
-          <button onClick={openCreate} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium rounded-lg transition-colors">
-            <Plus size={14} /> New agent
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {canRequestCustomAgent && (
+            <button
+              onClick={() => {
+                setError('');
+                setShowRequestModal(true);
+              }}
+              className="px-3 py-1.5 border border-cyan-500/40 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-200 text-sm font-medium rounded-lg transition-colors"
+            >
+              Request custom agent build
+            </button>
+          )}
+          {canCreate && (
+            <button onClick={openCreate} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium rounded-lg transition-colors">
+              <Plus size={14} /> New agent
+            </button>
+          )}
+        </div>
       </div>
+
+      {requestSuccess && (
+        <div className="mb-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
+          {requestSuccess}
+        </div>
+      )}
 
       <div className="flex gap-1 mb-5 bg-slate-900 border border-slate-800 rounded-xl p-1 w-fit">
         {TABS.map((t) => (
@@ -223,6 +271,47 @@ export default function AgentsPage() {
                   {submitting ? 'Saving…' : editAgent ? 'Save changes' : 'Create agent'}
                 </button>
                 <button type="button" onClick={() => setShowModal(false)} className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-medium rounded-lg transition-colors">Cancel</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showRequestModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl w-full max-w-lg p-6">
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="text-base font-semibold text-white">Request custom agent build</h2>
+              <button onClick={() => setShowRequestModal(false)} className="text-slate-500 hover:text-white"><X size={18} /></button>
+            </div>
+            <form onSubmit={handleSubmitCustomAgentRequest} className="space-y-4">
+              <div>
+                <label className="block text-xs text-slate-400 mb-1.5">Use case</label>
+                <input
+                  maxLength={120}
+                  className={INPUT}
+                  value={requestForm.useCase}
+                  onChange={(e) => setRequestForm((prev) => ({ ...prev, useCase: e.target.value }))}
+                  placeholder="What should this agent specialize in?"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1.5">Notes</label>
+                <textarea
+                  rows={5}
+                  maxLength={2000}
+                  className={INPUT + ' resize-none'}
+                  value={requestForm.notes}
+                  onChange={(e) => setRequestForm((prev) => ({ ...prev, notes: e.target.value }))}
+                  placeholder="Context, workflows, target outcomes, and constraints."
+                />
+              </div>
+              {error && <p className="text-red-400 text-sm">{error}</p>}
+              <div className="flex gap-3 pt-1">
+                <button type="submit" disabled={requestSubmitting} className="flex-1 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors">
+                  {requestSubmitting ? 'Submitting...' : 'Submit request'}
+                </button>
+                <button type="button" onClick={() => setShowRequestModal(false)} className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-medium rounded-lg transition-colors">Cancel</button>
               </div>
             </form>
           </div>

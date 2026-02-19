@@ -48,9 +48,9 @@ export default function LoginPage() {
       <div className="text-center mb-8">
         <div className="inline-flex items-center gap-2 mb-2">
           <div className="w-8 h-8 rounded-lg bg-emerald-500 flex items-center justify-center">
-            <span className="text-white font-bold text-sm">L</span>
+            <span className="text-white font-bold text-sm">S</span>
           </div>
-          <span className="text-white font-semibold text-lg">Live Sales Coach</span>
+          <span className="text-white font-semibold text-lg">Sales AI</span>
         </div>
         <p className="text-slate-400 text-sm">Sign in to your workspace</p>
       </div>
