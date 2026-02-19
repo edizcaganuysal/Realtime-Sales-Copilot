@@ -30,6 +30,7 @@ create index if not exists credit_ledger_org_created_idx
 
 insert into public.plans (id, name, monthly_credits, is_active)
 values
+  ('free', 'Free', 1000, true),
   ('starter', 'Starter', 50000, true),
   ('pro', 'Pro', 150000, true),
   ('business', 'Business', 400000, true)

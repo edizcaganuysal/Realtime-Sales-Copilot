@@ -1,7 +1,11 @@
+import { SiteShell } from '@/components/marketing/site-shell';
+
 export default function AuthLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
-      {children}
-    </div>
+    <SiteShell>
+      <div className="min-h-[calc(100vh-8rem)] flex items-center justify-center p-4">
+        {children}
+      </div>
+    </SiteShell>
   );
 }
