@@ -1,6 +1,7 @@
 import {
   pgTable,
   pgEnum,
+  primaryKey,
   uuid,
   text,
   boolean,
@@ -126,6 +127,22 @@ export const agents = pgTable('agents', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
+export const products = pgTable('products', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id')
+    .notNull()
+    .references(() => orgs.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  elevatorPitch: text('elevator_pitch'),
+  valueProps: jsonb('value_props').default([]).notNull(),
+  differentiators: jsonb('differentiators').default([]).notNull(),
+  pricingRules: jsonb('pricing_rules').default({}).notNull(),
+  dontSay: jsonb('dont_say').default([]).notNull(),
+  faqs: jsonb('faqs').default([]).notNull(),
+  objections: jsonb('objections').default([]).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const calls = pgTable('calls', {
   id: uuid('id').primaryKey().defaultRandom(),
   orgId: uuid('org_id')
@@ -139,6 +156,7 @@ export const calls = pgTable('calls', {
   mode: text('mode').notNull().default('OUTBOUND'),
   guidanceLevel: guidanceLevelEnum('guidance_level').default('STANDARD').notNull(),
   layoutPreset: liveLayoutEnum('layout_preset').default('STANDARD').notNull(),
+  productsMode: text('products_mode').default('ALL').notNull(),
   status: text('status').default('INITIATED').notNull(),
   phoneTo: text('phone_to').notNull(),
   contactJson: jsonb('contact_json').default({}).notNull(),
@@ -147,6 +165,21 @@ export const calls = pgTable('calls', {
   endedAt: timestamp('ended_at', { withTimezone: true }),
   twilioCallSid: text('twilio_call_sid'),
 });
+
+export const callProducts = pgTable(
+  'call_products',
+  {
+    callId: uuid('call_id')
+      .notNull()
+      .references(() => calls.id, { onDelete: 'cascade' }),
+    productId: uuid('product_id')
+      .notNull()
+      .references(() => products.id, { onDelete: 'cascade' }),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.callId, table.productId] }),
+  }),
+);
 
 export const callTranscript = pgTable('call_transcript', {
   id: uuid('id').primaryKey().defaultRandom(),

@@ -8,8 +8,9 @@ import { PlaybooksModule } from './playbooks/playbooks.module';
 import { AgentsModule } from './agents/agents.module';
 import { CallsModule } from './calls/calls.module';
 import { SalesRequestsModule } from './sales-requests/sales-requests.module';
+import { ProductsModule } from './products/products.module';
 
 @Module({
-  imports: [DbModule, HealthModule, AuthModule, OrgModule, UsersModule, PlaybooksModule, AgentsModule, CallsModule, SalesRequestsModule],
+  imports: [DbModule, HealthModule, AuthModule, OrgModule, UsersModule, PlaybooksModule, AgentsModule, CallsModule, SalesRequestsModule, ProductsModule],
 })
 export class AppModule {}

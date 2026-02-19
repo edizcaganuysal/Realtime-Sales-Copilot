@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { and, asc, eq } from 'drizzle-orm';
+import { ProductsMode } from '@live-sales-coach/shared';
 import { DRIZZLE, DrizzleDb } from '../db/db.module';
 import * as schema from '../db/schema';
 import { CallsGateway } from './calls.gateway';
@@ -22,11 +23,31 @@ type CallContext = {
   notes: string | null;
   stages: StageInfo[];
   companyProfile: CompanyProfile;
+  productContext: ProductContext;
 };
 
 type CompanyProfile = typeof GTAPHOTOPRO_COMPANY_PROFILE_DEFAULTS;
 
 type TurnLine = { speaker: string; text: string; tsMs: number };
+
+type ProductContext = {
+  mode: ProductsMode;
+  names: string[];
+  summary: string;
+  snippets: string[];
+};
+
+type ProductRecord = {
+  id: string;
+  name: string;
+  elevatorPitch: string | null;
+  valueProps: unknown;
+  differentiators: unknown;
+  pricingRules: unknown;
+  dontSay: unknown;
+  faqs: unknown;
+  objections: unknown;
+};
 
 type CallStats = {
   repTurns: number;
@@ -314,6 +335,12 @@ export class EngineService implements OnModuleDestroy {
     this.logger.log(`Engine started — call ${callId}, stubTranscript=${stubTranscript}`);
   }
 
+  async refreshContext(callId: string) {
+    const state = this.engines.get(callId);
+    if (!state || state.cancelled || !state.context) return;
+    await this.refreshDynamicContext(callId, state, true);
+  }
+
   /**
    * Push a final transcript line. Triggers LLM immediately when PROSPECT finishes.
    * When PROSPECT starts talking, signals UI to dim suggestions.
@@ -423,6 +450,7 @@ export class EngineService implements OnModuleDestroy {
       state?.context
         ? this.buildStageFallbackSuggestions(
             state.context.companyProfile,
+            state.context.productContext,
             state.context.stages[state.currentStageIdx]?.name ?? 'Opening',
             state.stats.objectionDetected,
           ).slice(0, desiredCount)
@@ -476,6 +504,7 @@ export class EngineService implements OnModuleDestroy {
       const texts = this.normalizeSuggestions(
         parsed.suggestions ?? [],
         context.companyProfile,
+        context.productContext,
         currentStage?.name ?? 'Opening',
         state.stats.objectionDetected,
         desiredCount,
@@ -536,37 +565,12 @@ export class EngineService implements OnModuleDestroy {
   // ── Private: context loading ────────────────────────────────────────────────
 
   private async loadContext(callId: string, state: EngineState) {
-    const [call] = await this.db
-      .select()
-      .from(schema.calls)
-      .where(eq(schema.calls.id, callId))
-      .limit(1);
+    const call = await this.refreshDynamicContext(callId, state, false);
+    if (!call || state.cancelled || !state.context) return;
 
-    if (!call || state.cancelled) return;
-
-    let agentPrompt = PROFESSIONAL_SALES_CALL_AGENT_PROMPT;
-    if (call.agentId) {
-      const [agent] = await this.db
-        .select()
-        .from(schema.agents)
-        .where(eq(schema.agents.id, call.agentId))
-        .limit(1);
-      if (agent) agentPrompt = agent.prompt;
-    }
-
-    const stages: StageInfo[] = FALLBACK_STAGES;
-    const companyProfile = await this.fetchCompanyProfile(call.orgId);
-
-    if (state.cancelled) return;
-
-    state.context = {
-      callId,
-      guidanceLevel: call.guidanceLevel,
-      agentPrompt,
-      notes: call.notes ?? null,
-      stages,
-      companyProfile,
-    };
+    const stages: StageInfo[] = state.context.stages;
+    const companyProfile = state.context.companyProfile;
+    const productContext = state.context.productContext;
 
     const firstChecklist = stages[0]?.checklist ?? [];
     if (firstChecklist.length) {
@@ -582,8 +586,8 @@ export class EngineService implements OnModuleDestroy {
 
     // Emit opening suggestions immediately + delayed re-emit to handle race condition
     // (browser may not have joined the socket room yet)
-    const openingSuggestions = this.buildOpeningSuggestions(companyProfile);
-    const openingCards = this.buildOpeningContextCards(companyProfile);
+    const openingSuggestions = this.buildOpeningSuggestions(companyProfile, productContext);
+    const openingCards = this.buildOpeningContextCards(companyProfile, productContext);
     const emitOpening = () => {
       if (state.cancelled || state.transcriptBuffer.length > 0) return;
       this.gateway.emitToCall(callId, 'engine.suggestions', {
@@ -604,6 +608,268 @@ export class EngineService implements OnModuleDestroy {
     this.logger.log(
       `Engine context loaded — call ${callId}, ${stages.length} stages, guidance: ${call.guidanceLevel}`,
     );
+  }
+
+  private async refreshDynamicContext(
+    callId: string,
+    state: EngineState,
+    emitContextCards: boolean,
+  ) {
+    const [call] = await this.db
+      .select()
+      .from(schema.calls)
+      .where(eq(schema.calls.id, callId))
+      .limit(1);
+
+    if (!call || state.cancelled) return null;
+
+    let agentPrompt = state.context?.agentPrompt ?? PROFESSIONAL_SALES_CALL_AGENT_PROMPT;
+    if (call.agentId) {
+      const [agent] = await this.db
+        .select({ prompt: schema.agents.prompt })
+        .from(schema.agents)
+        .where(eq(schema.agents.id, call.agentId))
+        .limit(1);
+      if (agent?.prompt) {
+        agentPrompt = agent.prompt;
+      }
+    }
+
+    const [companyProfile, productContext] = await Promise.all([
+      this.fetchCompanyProfile(call.orgId),
+      this.fetchProductContext(call.orgId, call.id, call.productsMode),
+    ]);
+
+    if (state.cancelled) return null;
+
+    state.context = {
+      callId,
+      guidanceLevel: call.guidanceLevel,
+      agentPrompt,
+      notes: call.notes ?? null,
+      stages: state.context?.stages ?? FALLBACK_STAGES,
+      companyProfile,
+      productContext,
+    };
+
+    if (emitContextCards) {
+      this.gateway.emitToCall(callId, 'engine.context_cards', {
+        cards: this.buildOpeningContextCards(companyProfile, productContext),
+        objection: state.stats.objectionDetected,
+      });
+    }
+
+    return call;
+  }
+
+  private parseStringArray(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    return value
+      .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+      .filter((entry) => entry.length > 0)
+      .slice(0, 40);
+  }
+
+  private valueToOneLine(value: unknown): string {
+    if (typeof value === 'string') return value.trim();
+    if (Array.isArray(value)) {
+      return value
+        .map((entry) => this.valueToOneLine(entry))
+        .filter((entry) => entry.length > 0)
+        .join('; ');
+    }
+    if (value && typeof value === 'object') {
+      return Object.entries(value as Record<string, unknown>)
+        .map(([key, entry]) => `${key}: ${this.valueToOneLine(entry)}`)
+        .filter((entry) => entry.length > 0)
+        .join('; ');
+    }
+    return '';
+  }
+
+  private compactText(text: string, max = 180): string {
+    const normalized = text.replace(/\s+/g, ' ').trim();
+    if (normalized.length <= max) return normalized;
+    return `${normalized.slice(0, max - 1).trimEnd()}...`;
+  }
+
+  private buildProductSummary(mode: ProductsMode, products: ProductRecord[]): string {
+    if (products.length === 0) {
+      return 'No product records are configured for this org.';
+    }
+
+    const names = products.map((product) => product.name).slice(0, 8);
+    const namesText =
+      products.length > names.length
+        ? `${names.join(', ')} +${products.length - names.length} more`
+        : names.join(', ');
+    const topProps = products
+      .flatMap((product) =>
+        this.parseStringArray(product.valueProps)
+          .slice(0, 2)
+          .map((prop) => `${product.name}: ${prop}`),
+      )
+      .slice(0, 4)
+      .join(' | ');
+    const scope = mode === ProductsMode.SELECTED ? 'Selected products' : 'All products';
+    if (!topProps) return `${scope}: ${namesText}.`;
+    return `${scope}: ${namesText}. Key value points: ${this.compactText(topProps, 280)}`;
+  }
+
+  private buildProductSnippets(mode: ProductsMode, products: ProductRecord[]): string[] {
+    if (products.length === 0) {
+      return ['No product-specific content is available. Use company profile context only.'];
+    }
+
+    const scoped = products.slice(0, mode === ProductsMode.SELECTED ? 6 : 8);
+    const snippets: string[] = [];
+
+    for (const product of scoped) {
+      if (product.elevatorPitch?.trim()) {
+        snippets.push(`${product.name} pitch: ${this.compactText(product.elevatorPitch, 180)}`);
+      }
+
+      const valueProps = this.parseStringArray(product.valueProps).slice(0, 3);
+      if (valueProps.length > 0) {
+        snippets.push(`${product.name} value props: ${this.compactText(valueProps.join('; '), 200)}`);
+      }
+
+      const differentiators = this.parseStringArray(product.differentiators).slice(0, 2);
+      if (differentiators.length > 0) {
+        snippets.push(
+          `${product.name} differentiators: ${this.compactText(differentiators.join('; '), 200)}`,
+        );
+      }
+
+      const pricing = this.valueToOneLine(product.pricingRules);
+      if (pricing.length > 0) {
+        snippets.push(`${product.name} pricing rules: ${this.compactText(pricing, 200)}`);
+      }
+
+      const faqs = this.toProductFaqSnippets(product.faqs, product.name);
+      snippets.push(...faqs);
+
+      const objections = this.toProductObjectionSnippets(product.objections, product.name);
+      snippets.push(...objections);
+
+      const dontSay = this.parseStringArray(product.dontSay).slice(0, 2);
+      if (dontSay.length > 0) {
+        snippets.push(`${product.name} do-not-say: ${this.compactText(dontSay.join('; '), 180)}`);
+      }
+    }
+
+    return snippets.slice(0, 18);
+  }
+
+  private toProductFaqSnippets(value: unknown, productName: string): string[] {
+    if (!Array.isArray(value)) return [];
+    const snippets: string[] = [];
+    for (const entry of value.slice(0, 4)) {
+      if (typeof entry === 'string') {
+        const cleaned = entry.trim();
+        if (cleaned.length > 0) snippets.push(`${productName} FAQ: ${this.compactText(cleaned, 180)}`);
+        continue;
+      }
+      if (entry && typeof entry === 'object') {
+        const row = entry as Record<string, unknown>;
+        const question = this.valueToOneLine(row.question ?? row.q ?? '');
+        const answer = this.valueToOneLine(row.answer ?? row.a ?? '');
+        const line = [question ? `Q: ${question}` : '', answer ? `A: ${answer}` : '']
+          .filter((part) => part.length > 0)
+          .join(' ');
+        if (line.length > 0) snippets.push(`${productName} FAQ: ${this.compactText(line, 180)}`);
+      }
+    }
+    return snippets;
+  }
+
+  private toProductObjectionSnippets(value: unknown, productName: string): string[] {
+    if (!Array.isArray(value)) return [];
+    const snippets: string[] = [];
+    for (const entry of value.slice(0, 4)) {
+      if (typeof entry === 'string') {
+        const cleaned = entry.trim();
+        if (cleaned.length > 0) snippets.push(`${productName} objection: ${this.compactText(cleaned, 180)}`);
+        continue;
+      }
+      if (entry && typeof entry === 'object') {
+        const row = entry as Record<string, unknown>;
+        const objection = this.valueToOneLine(row.objection ?? row.type ?? row.label ?? '');
+        const response = this.valueToOneLine(row.response ?? row.answer ?? row.guidance ?? '');
+        const line = [objection ? `Objection: ${objection}` : '', response ? `Response: ${response}` : '']
+          .filter((part) => part.length > 0)
+          .join(' ');
+        if (line.length > 0) {
+          snippets.push(`${productName} objection handling: ${this.compactText(line, 190)}`);
+        }
+      }
+    }
+    return snippets;
+  }
+
+  private async fetchOrgProducts(orgId: string): Promise<ProductRecord[]> {
+    return this.db
+      .select({
+        id: schema.products.id,
+        name: schema.products.name,
+        elevatorPitch: schema.products.elevatorPitch,
+        valueProps: schema.products.valueProps,
+        differentiators: schema.products.differentiators,
+        pricingRules: schema.products.pricingRules,
+        dontSay: schema.products.dontSay,
+        faqs: schema.products.faqs,
+        objections: schema.products.objections,
+      })
+      .from(schema.products)
+      .where(eq(schema.products.orgId, orgId))
+      .orderBy(asc(schema.products.name));
+  }
+
+  private async fetchSelectedProducts(orgId: string, callId: string): Promise<ProductRecord[]> {
+    return this.db
+      .select({
+        id: schema.products.id,
+        name: schema.products.name,
+        elevatorPitch: schema.products.elevatorPitch,
+        valueProps: schema.products.valueProps,
+        differentiators: schema.products.differentiators,
+        pricingRules: schema.products.pricingRules,
+        dontSay: schema.products.dontSay,
+        faqs: schema.products.faqs,
+        objections: schema.products.objections,
+      })
+      .from(schema.callProducts)
+      .innerJoin(schema.products, eq(schema.callProducts.productId, schema.products.id))
+      .where(and(eq(schema.callProducts.callId, callId), eq(schema.products.orgId, orgId)))
+      .orderBy(asc(schema.products.name));
+  }
+
+  private async fetchProductContext(
+    orgId: string,
+    callId: string,
+    productsModeRaw: string | null | undefined,
+  ): Promise<ProductContext> {
+    const productsMode =
+      productsModeRaw === ProductsMode.SELECTED ? ProductsMode.SELECTED : ProductsMode.ALL;
+
+    const [allProducts, selectedProducts] = await Promise.all([
+      this.fetchOrgProducts(orgId),
+      productsMode === ProductsMode.SELECTED
+        ? this.fetchSelectedProducts(orgId, callId)
+        : Promise.resolve([]),
+    ]);
+
+    const baselineProducts =
+      productsMode === ProductsMode.SELECTED && selectedProducts.length > 0
+        ? selectedProducts
+        : allProducts;
+
+    return {
+      mode: productsMode,
+      names: baselineProducts.map((product) => product.name),
+      summary: this.buildProductSummary(productsMode, baselineProducts),
+      snippets: this.buildProductSnippets(productsMode, baselineProducts),
+    };
   }
 
   private async fetchCompanyProfile(orgId: string): Promise<CompanyProfile> {
@@ -730,6 +996,7 @@ export class EngineService implements OnModuleDestroy {
       const normalizedSuggestions = this.normalizeSuggestions(
         suggestions,
         context.companyProfile,
+        context.productContext,
         stageForPrompt.name,
         parsed.objection ?? state.stats.objectionDetected,
         desiredCount,
@@ -743,10 +1010,13 @@ export class EngineService implements OnModuleDestroy {
       const fallbackData = ragSnippets
         .slice(0, 4)
         .map((s) => `${FIELD_LABELS[s.field]}: ${s.text}`);
+      const productFallback = context.productContext.snippets.slice(0, 3);
+      const cardsFromContext = supportingData.length > 0 ? supportingData : fallbackData;
+      const cards = [...cardsFromContext, ...productFallback].slice(0, 4);
       const tickPayload: EngineTickPayload = {
         suggestions: normalizedSuggestions,
         nudges,
-        cards: supportingData.length > 0 ? supportingData : fallbackData,
+        cards,
         objection: parsed.objection ?? state.stats.objectionDetected ?? null,
         sentiment:
           parsed.sentiment === 'positive' ||
@@ -941,9 +1211,16 @@ export class EngineService implements OnModuleDestroy {
 
     // Emit 3 stage-aware fallback suggestions
     const companyProfile = context?.companyProfile ?? GTAPHOTOPRO_COMPANY_PROFILE_DEFAULTS;
+    const productContext = context?.productContext ?? {
+      mode: ProductsMode.ALL,
+      names: [companyProfile.productName],
+      summary: '',
+      snippets: [],
+    };
     const stageName = stages[state.currentStageIdx]?.name ?? 'Opening';
     const suggestions = this.buildStageFallbackSuggestions(
       companyProfile,
+      productContext,
       stageName,
       state.stats.objectionDetected,
     ).slice(0, desiredCount);
@@ -957,7 +1234,7 @@ export class EngineService implements OnModuleDestroy {
     });
     this.gateway.emitToCall(callId, 'engine.prospect_speaking', { speaking: false });
     this.gateway.emitToCall(callId, 'engine.context_cards', {
-      cards: this.buildOpeningContextCards(companyProfile),
+      cards: this.buildOpeningContextCards(companyProfile, productContext),
       objection: state.stats.objectionDetected,
     });
 
@@ -1467,6 +1744,21 @@ export class EngineService implements OnModuleDestroy {
             .map((s, i) => `${i + 1}. [${FIELD_LABELS[s.field]}] ${s.text}`)
             .join('\n')
         : 'No additional snippets retrieved.';
+    const productModeLabel =
+      context.productContext.mode === ProductsMode.SELECTED ? 'SELECTED' : 'ALL';
+    const productNames =
+      context.productContext.names.length > 0
+        ? context.productContext.names.join(', ')
+        : 'No products configured';
+    const productSummary =
+      context.productContext.summary || 'No product summary is currently available.';
+    const productSnippetSection =
+      context.productContext.snippets.length > 0
+        ? context.productContext.snippets
+            .slice(0, 12)
+            .map((line, index) => `${index + 1}. ${line}`)
+            .join('\n')
+        : 'No product snippets available.';
 
     let nudgeRule: string;
     if (context.guidanceLevel === 'MINIMAL') {
@@ -1491,6 +1783,11 @@ export class EngineService implements OnModuleDestroy {
       `- Product summary: ${company.productSummary}\n` +
       `- ICP: ${company.idealCustomerProfile}\n` +
       `- Differentiators:\n${company.differentiators}\n\n` +
+      `Product context baseline:\n` +
+      `- Mode: ${productModeLabel}\n` +
+      `- Product names: ${productNames}\n` +
+      `- Summary: ${productSummary}\n` +
+      `- Product snippets:\n${productSnippetSection}\n\n` +
       `Retrieved context snippets for this exact moment:\n${ragSection}\n\n` +
       `Additional coach persona guidance: ${extraAgentGuidance}\n\n` +
       `Default call stages:\n${list}\n\n` +
@@ -1515,6 +1812,7 @@ export class EngineService implements OnModuleDestroy {
       `11. If you lack data to answer their question, say so honestly and ask one qualifier.\n` +
       `12. Never invent pricing, guarantees, logos, or statistics not in context.\n` +
       `13. Output in English only.\n` +
+      `14. Use product context baseline in every suggestion. If product mode is SELECTED, prioritize only selected products.\n` +
       `\n` +
       `- "supportingData": up to 4 concise factual bullets the rep can cite from the provided company context.\n` +
       `- "objection": if prospect raised an objection, one of: BUDGET, COMPETITOR, TIMING, NO_NEED, AUTHORITY, or null\n` +
@@ -1527,20 +1825,28 @@ export class EngineService implements OnModuleDestroy {
     );
   }
 
-  private buildOpeningSuggestions(company: CompanyProfile): string[] {
+  private buildOpeningSuggestions(
+    company: CompanyProfile,
+    productContext: ProductContext,
+  ): string[] {
     const numericProof =
       this
         .splitToSnippets(company.proofPoints)
         .find((line) => /\d/.test(line)) ?? '24-hour turnaround available on standard listings.';
+    const productLabel = productContext.names[0] ?? company.productName;
     return [
-      `Hi, this is ${company.companyName}. Is now a bad time, or do you have 90 seconds? ${numericProof}`,
+      `Hi, this is ${company.companyName} about ${productLabel}. Is now a bad time, or do you have 90 seconds? ${numericProof}`,
     ];
   }
 
-  private buildOpeningContextCards(company: CompanyProfile): string[] {
+  private buildOpeningContextCards(
+    company: CompanyProfile,
+    productContext: ProductContext,
+  ): string[] {
     const proofLines = this.splitToSnippets(company.proofPoints).slice(0, 2);
     return [
       `${company.productName}: ${company.productSummary}`,
+      productContext.summary,
       ...proofLines,
       `ICP: ${company.idealCustomerProfile}`,
     ].slice(0, 4);
@@ -1549,6 +1855,7 @@ export class EngineService implements OnModuleDestroy {
   private normalizeSuggestions(
     rawSuggestions: string[],
     company: CompanyProfile,
+    productContext: ProductContext,
     stageName: string,
     objection: string | null,
     desiredCount: 1 | 3 = 3,
@@ -1556,6 +1863,7 @@ export class EngineService implements OnModuleDestroy {
   ): string[] {
     const stageFallbacks = this.buildStageFallbackSuggestions(
       company,
+      productContext,
       stageName,
       objection,
       lastProspectLine,
@@ -1594,12 +1902,15 @@ export class EngineService implements OnModuleDestroy {
 
   private buildStageFallbackSuggestions(
     company: CompanyProfile,
+    productContext: ProductContext,
     stageName: string,
     objection: string | null,
     lastProspectLine = '',
   ): string[] {
     const stage = stageName.toLowerCase();
     const last = lastProspectLine.toLowerCase();
+    const primaryProduct = productContext.names[0] ?? company.productName;
+    const productPitch = productContext.snippets[0] ?? `${primaryProduct} for ${company.idealCustomerProfile}.`;
     const proofs = this
       .splitToSnippets(company.proofPoints)
       .filter((line) => /\d/.test(line));
@@ -1611,7 +1922,7 @@ export class EngineService implements OnModuleDestroy {
 
     if (/price|pricing|cost|budget|package/.test(last)) {
       return [
-        'Pricing depends on property type and package scope; share one listing and I can send an exact quote today.',
+        `Pricing for ${primaryProduct} depends on property type and package scope; share one listing and I can send an exact quote today.`,
       ];
     }
     if (/revision|adjust|changes|edit/.test(last)) {
@@ -1621,7 +1932,7 @@ export class EngineService implements OnModuleDestroy {
     }
     if (/what kind|which service|services|media|what do you provide/.test(last)) {
       return [
-        'We cover interior, exterior, drone, virtual tours, and virtual staging with one team, reducing coordination time by about 38%.',
+        `For ${primaryProduct}, we cover interior, exterior, drone, virtual tours, and virtual staging with one team, reducing coordination time by about 38%.`,
       ];
     }
     if (/quality|consistent|how do you ensure/.test(last)) {
@@ -1637,9 +1948,9 @@ export class EngineService implements OnModuleDestroy {
 
     if (stage.includes('opening')) {
       return [
-        `Hi, this is ${company.companyName}. Is now a bad time, or do you have 90 seconds?`,
+        `Hi, this is ${company.companyName} about ${primaryProduct}. Is now a bad time, or do you have 90 seconds?`,
         `Quick context: ${proofA}`,
-        'Can I ask 2 quick questions about listing photo turnaround and showing volume?',
+        `Can I ask 2 quick questions to see if ${primaryProduct} fits your listing workflow?`,
       ];
     }
 
@@ -1653,8 +1964,8 @@ export class EngineService implements OnModuleDestroy {
 
     if (stage.includes('solution') || stage.includes('pitch') || stage.includes('fit')) {
       return [
-        `You mentioned speed and consistency; ${proofA}`,
-        `We handle photo, drone, and staging in one workflow; ${proofC}`,
+        `You mentioned speed and consistency; ${productPitch}`,
+        `We handle outcomes with one accountable workflow; ${proofC}`,
         'Would starting with 1 pilot listing this week be a practical next step?',
       ];
     }

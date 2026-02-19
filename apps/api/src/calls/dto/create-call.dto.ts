@@ -1,5 +1,5 @@
-import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
-import { CallMode, GuidanceLevel, LiveLayout } from '@live-sales-coach/shared';
+import { IsArray, IsEnum, IsIn, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { CallMode, GuidanceLevel, LiveLayout, ProductsMode } from '@live-sales-coach/shared';
 
 export class CreateCallDto {
   @IsOptional()
@@ -37,4 +37,13 @@ export class CreateCallDto {
   @IsOptional()
   @IsString()
   customPersonaPrompt?: string;
+
+  @IsOptional()
+  @IsIn([ProductsMode.ALL, ProductsMode.SELECTED])
+  products_mode?: ProductsMode;
+
+  @IsOptional()
+  @IsArray()
+  @IsUUID('4', { each: true })
+  selected_product_ids?: string[];
 }

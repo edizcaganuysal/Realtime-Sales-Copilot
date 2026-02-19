@@ -1,11 +1,12 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { CallMode } from '@live-sales-coach/shared';
 import { Phone, Bot, Plus, ChevronRight, Shield, Zap, Users, Crown, Smile, X, Pencil, Trash2 } from 'lucide-react';
 
 type Agent = { id: string; name: string };
+type ProductOption = { id: string; name: string; elevatorPitch?: string | null };
 type PracticePersona = {
   id: string;
   name: string;
@@ -63,8 +64,12 @@ const PERSONA_SELECTED: Record<string, string> = {
 export default function DialerPage() {
   const router = useRouter();
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [products, setProducts] = useState<ProductOption[]>([]);
   const [personas, setPersonas] = useState<PracticePersona[]>([]);
   const [mode, setMode] = useState<CallMode>(CallMode.OUTBOUND);
+  const [allProducts, setAllProducts] = useState(true);
+  const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
+  const [productSearch, setProductSearch] = useState('');
   const [selectedPersonaId, setSelectedPersonaId] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [editingPersonaId, setEditingPersonaId] = useState<string | null>(null);
@@ -87,9 +92,11 @@ export default function DialerPage() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    fetch('/api/agents?scope=ORG&status=APPROVED')
-      .then((r) => r.json())
-      .then((agentsData) => {
+    Promise.all([
+      fetch('/api/agents?scope=ORG&status=APPROVED').then((r) => r.json()),
+      fetch('/api/products').then((r) => r.json()),
+    ])
+      .then(([agentsData, productsData]) => {
         const safeAgents = Array.isArray(agentsData) ? agentsData : [];
         setAgents(safeAgents);
         setForm((f) => {
@@ -98,9 +105,30 @@ export default function DialerPage() {
           );
           return { ...f, agentId: f.agentId || preferredAgent?.id || '' };
         });
+
+        const safeProducts = Array.isArray(productsData) ? productsData : [];
+        setProducts(safeProducts);
+      })
+      .catch(() => {
+        setProducts([]);
       });
     loadPersonas();
   }, [loadPersonas]);
+
+  const filteredProducts = useMemo(() => {
+    const q = productSearch.trim().toLowerCase();
+    if (!q) return products;
+    return products.filter((product) => {
+      const target = `${product.name} ${product.elevatorPitch ?? ''}`.toLowerCase();
+      return target.includes(q);
+    });
+  }, [products, productSearch]);
+
+  function toggleProductSelection(id: string) {
+    setSelectedProductIds((prev) =>
+      prev.includes(id) ? prev.filter((value) => value !== id) : [...prev, id],
+    );
+  }
 
   function openCreateModal() {
     setEditingPersonaId(null);
@@ -170,7 +198,13 @@ export default function DialerPage() {
     setSubmitting(true);
     setError('');
 
-    const body: Record<string, string> = {
+    if (!isMock && !allProducts && selectedProductIds.length === 0) {
+      setError('Select at least one product or keep All products enabled.');
+      setSubmitting(false);
+      return;
+    }
+
+    const body: Record<string, unknown> = {
       phoneTo: mode === CallMode.MOCK ? 'MOCK' : form.phoneTo,
       mode,
     };
@@ -179,6 +213,10 @@ export default function DialerPage() {
 
     if (mode === CallMode.MOCK && selectedPersonaId) {
       body.practicePersonaId = selectedPersonaId;
+    }
+    body.products_mode = allProducts ? 'ALL' : 'SELECTED';
+    if (!allProducts) {
+      body.selected_product_ids = selectedProductIds;
     }
 
     const res = await fetch('/api/calls', {
@@ -341,6 +379,74 @@ export default function DialerPage() {
               value={form.phoneTo}
               onChange={(e) => setForm({ ...form, phoneTo: e.target.value })}
             />
+          </div>
+        )}
+
+        {!isMock && (
+          <div className="space-y-2.5">
+            <div className="flex items-center justify-between gap-3">
+              <label className="block text-xs text-slate-400">Products</label>
+              <button
+                type="button"
+                onClick={() => setAllProducts((prev) => !prev)}
+                className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-full border text-xs font-medium transition-colors ${
+                  allProducts
+                    ? 'border-emerald-500/40 text-emerald-300 bg-emerald-500/10'
+                    : 'border-slate-600 text-slate-300 bg-slate-800'
+                }`}
+              >
+                <span
+                  className={`w-1.5 h-1.5 rounded-full ${allProducts ? 'bg-emerald-400' : 'bg-slate-400'}`}
+                />
+                {allProducts ? 'All products' : 'Selected products'}
+              </button>
+            </div>
+
+            {!allProducts && (
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 space-y-2.5">
+                <input
+                  className={INPUT}
+                  placeholder="Search products..."
+                  value={productSearch}
+                  onChange={(e) => setProductSearch(e.target.value)}
+                />
+                <div className="max-h-44 overflow-y-auto space-y-1.5 pr-1">
+                  {filteredProducts.length === 0 ? (
+                    <p className="text-xs text-slate-600 py-2">No products found.</p>
+                  ) : (
+                    filteredProducts.map((product) => {
+                      const selected = selectedProductIds.includes(product.id);
+                      return (
+                        <button
+                          key={product.id}
+                          type="button"
+                          onClick={() => toggleProductSelection(product.id)}
+                          className={`w-full text-left px-3 py-2 rounded-lg border transition-colors ${
+                            selected
+                              ? 'border-emerald-500/40 bg-emerald-500/10'
+                              : 'border-slate-700 hover:border-slate-500 bg-slate-800/60'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-sm text-white">{product.name}</span>
+                            <span
+                              className={`text-[10px] px-1.5 py-0.5 rounded ${selected ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-700 text-slate-400'}`}
+                            >
+                              {selected ? 'Selected' : 'Pick'}
+                            </span>
+                          </div>
+                          {product.elevatorPitch && (
+                            <p className="text-xs text-slate-500 mt-1 line-clamp-2">
+                              {product.elevatorPitch}
+                            </p>
+                          )}
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
