@@ -47,6 +47,26 @@ type CompanyExtractionResult = {
   kind: 'COMPANY';
   sources: Array<{ id: string; title: string; uri: string }>;
   fields: {
+    company_name: ExtractedField<string>;
+    what_we_sell: ExtractedField<string>;
+    how_it_works: ExtractedField<string>;
+    offer_category: ExtractedField<string>;
+    target_customer: ExtractedField<string>;
+    target_roles: ExtractedField<string[]>;
+    industries: ExtractedField<string[]>;
+    buying_triggers: ExtractedField<string[]>;
+    disqualifiers: ExtractedField<string[]>;
+    global_value_props: ExtractedField<string[]>;
+    proof_points: ExtractedField<string[]>;
+    case_studies: ExtractedField<string[]>;
+    allowed_claims: ExtractedField<string[]>;
+    sales_policies: ExtractedField<string[]>;
+    competitors: ExtractedField<string[]>;
+    positioning_rules: ExtractedField<string[]>;
+    discovery_questions: ExtractedField<string[]>;
+    qualification_rubric: ExtractedField<string[]>;
+    next_steps: ExtractedField<string[]>;
+    knowledge_appendix: ExtractedField<string>;
     company_overview: ExtractedField<string>;
     target_customers: ExtractedField<string>;
     value_props: ExtractedField<string[]>;
@@ -816,6 +836,21 @@ export class IngestService {
     const queue: Array<{ url: string; depth: number; priority: number }> = [
       { url: startUrl, depth: 0, priority: 1000 },
     ];
+    const sitemapUrls = await this.fetchSitemapUrls(
+      base,
+      input.config.focus,
+      input.includePaths,
+      input.excludePaths,
+    );
+    for (const sitemapUrl of sitemapUrls) {
+      if (sitemapUrl === startUrl) continue;
+      const parsed = new URL(sitemapUrl);
+      queue.push({
+        url: sitemapUrl,
+        depth: 1,
+        priority: this.rankPath(parsed.pathname, input.config.focus) + 30,
+      });
+    }
     const visited = new Set<string>();
     const assets: CrawledAsset[] = [];
     let totalChars = 0;
@@ -877,6 +912,109 @@ export class IngestService {
       throw new BadRequestException('No readable pages were extracted from the website.');
     }
     return { assets, totalChars, note };
+  }
+
+  private async fetchSitemapUrls(
+    base: URL,
+    focus: IngestFocus,
+    includePaths: string[],
+    excludePaths: string[],
+  ) {
+    const hostBase = `${base.protocol}//${base.host}`;
+    const sitemapCandidates = [`${hostBase}/sitemap.xml`, `${hostBase}/sitemap_index.xml`];
+    const seen = new Set<string>();
+    const pages: Array<{ url: string; score: number }> = [];
+
+    for (const sitemapUrl of sitemapCandidates) {
+      const xml = await this.fetchTextUrl(sitemapUrl);
+      if (!xml) continue;
+      const locs = this.extractSitemapLocs(xml);
+      const nested: string[] = [];
+      for (const loc of locs) {
+        if (loc.toLowerCase().endsWith('.xml')) {
+          nested.push(loc);
+          continue;
+        }
+        this.pushRankedSitemapPage(loc, base, includePaths, excludePaths, focus, seen, pages);
+      }
+
+      for (const nestedLoc of nested.slice(0, 4)) {
+        const nestedXml = await this.fetchTextUrl(nestedLoc);
+        if (!nestedXml) continue;
+        const nestedLocs = this.extractSitemapLocs(nestedXml);
+        for (const loc of nestedLocs) {
+          if (loc.toLowerCase().endsWith('.xml')) continue;
+          this.pushRankedSitemapPage(loc, base, includePaths, excludePaths, focus, seen, pages);
+        }
+      }
+    }
+
+    return pages
+      .sort((a, b) => b.score - a.score)
+      .slice(0, WEBSITE_MAX_PAGES_HARD_CAP)
+      .map((entry) => entry.url);
+  }
+
+  private pushRankedSitemapPage(
+    rawUrl: string,
+    base: URL,
+    includePaths: string[],
+    excludePaths: string[],
+    focus: IngestFocus,
+    seen: Set<string>,
+    pages: Array<{ url: string; score: number }>,
+  ) {
+    let parsed: URL;
+    try {
+      parsed = new URL(rawUrl);
+    } catch {
+      return;
+    }
+    if (!['http:', 'https:'].includes(parsed.protocol)) return;
+    if (parsed.hostname !== base.hostname) return;
+    parsed.hash = '';
+    parsed.search = '';
+    if (/\.(jpg|jpeg|png|webp|gif|svg|pdf|zip|mp4|mp3)$/i.test(parsed.pathname)) return;
+    if (!this.pathAllowed(parsed.pathname, includePaths, excludePaths)) return;
+    const normalized = parsed.toString();
+    if (seen.has(normalized)) return;
+    seen.add(normalized);
+    pages.push({
+      url: normalized,
+      score: this.rankPath(parsed.pathname, focus),
+    });
+  }
+
+  private extractSitemapLocs(xml: string) {
+    const urls: string[] = [];
+    const locRegex = /<loc>([^<]+)<\/loc>/gi;
+    let match: RegExpExecArray | null;
+    while ((match = locRegex.exec(xml)) !== null) {
+      const url = this.compactWhitespace(this.decodeHtml((match[1] || '').trim()));
+      if (!url) continue;
+      urls.push(url);
+      if (urls.length >= 400) break;
+    }
+    return urls;
+  }
+
+  private async fetchTextUrl(url: string) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 9000);
+    try {
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: {
+          'User-Agent': 'SalesAI-IngestionBot/1.0',
+        },
+      });
+      if (!response.ok) return '';
+      return await response.text();
+    } catch {
+      return '';
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private async fetchHtml(url: string) {
@@ -1141,11 +1279,12 @@ export class IngestService {
         'You are a sales enablement analyst. Extract concise company messaging with confidence and citations from sources. Do not fabricate claims.',
       user:
         'Given these sources, produce JSON with key fields. Schema:\n' +
-        '{ "fields": { "company_overview": {"value": string, "confidence": number, "citations": string[], "suggested": boolean}, "target_customers": {"value": string, "confidence": number, "citations": string[], "suggested": boolean}, "value_props": {"value": string[], "confidence": number, "citations": string[], "suggested": boolean}, "tone_style": {"value": string, "confidence": number, "citations": string[], "suggested": boolean}, "compliance_and_policies": {"value": string[], "confidence": number, "citations": string[], "suggested": boolean}, "forbidden_claims": {"value": string[], "confidence": number, "citations": string[], "suggested": boolean}, "competitor_positioning": {"value": string[], "confidence": number, "citations": string[], "suggested": boolean}, "escalation_rules": {"value": string[], "confidence": number, "citations": string[], "suggested": boolean}, "knowledge_base_appendix": {"value": string, "confidence": number, "citations": string[], "suggested": boolean} } }\n' +
+        '{ \"fields\": { \"company_name\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"what_we_sell\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"how_it_works\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"offer_category\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"target_customer\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"target_roles\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"industries\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"buying_triggers\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"disqualifiers\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"global_value_props\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"proof_points\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"case_studies\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"allowed_claims\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"sales_policies\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"forbidden_claims\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"competitors\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"positioning_rules\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"escalation_rules\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"discovery_questions\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"qualification_rubric\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"next_steps\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"knowledge_appendix\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"company_overview\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"target_customers\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"value_props\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"tone_style\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"compliance_and_policies\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"competitor_positioning\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"knowledge_base_appendix\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean} } }\n' +
         'Rules:\n' +
         '- compliance_and_policies means SALES & SERVICE POLICIES only: booking process, turnaround time, reschedule/cancellation, deposits/payment expectations, licensing/usage rights, service area/travel fees, on-site privacy expectations.\n' +
         '- Do not use privacy policy, WCAG, cookie, or generic legal site content as compliance_and_policies unless it directly impacts sales/service delivery.\n' +
         '- If no reliable evidence exists for competitor_positioning or escalation_rules, provide practical suggested defaults with low confidence, suggested=true, and citations=[].\n' +
+        '- Prefer extracting concrete service packages and delivery process details when present.\n' +
         '- Keep text concise and citations must be source IDs like S1.\n' +
         this.renderSources(sources),
     });
@@ -1169,6 +1308,28 @@ export class IngestService {
       kind: 'COMPANY',
       sources: sources.map((source) => ({ id: source.id, title: source.title, uri: source.uri })),
       fields: {
+        company_name: this.normalizeStringField(fields.company_name, valid),
+        what_we_sell: this.normalizeStringField(fields.what_we_sell, valid),
+        how_it_works: this.normalizeStringField(fields.how_it_works, valid),
+        offer_category: this.normalizeStringField(fields.offer_category, valid),
+        target_customer: this.normalizeStringField(fields.target_customer, valid),
+        target_roles: this.normalizeStringArrayField(fields.target_roles, valid),
+        industries: this.normalizeStringArrayField(fields.industries, valid),
+        buying_triggers: this.normalizeStringArrayField(fields.buying_triggers, valid),
+        disqualifiers: this.normalizeStringArrayField(fields.disqualifiers, valid),
+        global_value_props: this.normalizeStringArrayField(fields.global_value_props, valid),
+        proof_points: this.normalizeStringArrayField(fields.proof_points, valid),
+        case_studies: this.normalizeStringArrayField(fields.case_studies, valid),
+        allowed_claims: this.normalizeStringArrayField(fields.allowed_claims, valid),
+        sales_policies: this.normalizeSalesPoliciesField(
+          this.normalizeStringArrayField(fields.sales_policies, valid),
+        ),
+        competitors: this.normalizeStringArrayField(fields.competitors, valid),
+        positioning_rules: this.normalizeStringArrayField(fields.positioning_rules, valid),
+        discovery_questions: this.normalizeStringArrayField(fields.discovery_questions, valid),
+        qualification_rubric: this.normalizeStringArrayField(fields.qualification_rubric, valid),
+        next_steps: this.normalizeStringArrayField(fields.next_steps, valid),
+        knowledge_appendix: this.normalizeStringField(fields.knowledge_appendix, valid),
         company_overview: this.normalizeStringField(fields.company_overview, valid),
         target_customers: this.normalizeStringField(fields.target_customers, valid),
         value_props: this.normalizeStringArrayField(fields.value_props, valid),
@@ -1498,6 +1659,23 @@ export class IngestService {
       const field = this.asRecord(company[key]);
       return this.toStringArray(field.value);
     };
+    const readTextCandidate = (keys: string[]) => {
+      for (const key of keys) {
+        if (!readAccepted(key)) continue;
+        const value = readValue(key) || readExtractedText(key);
+        if (value) return value;
+      }
+      return '';
+    };
+    const readListCandidate = (keys: string[]) => {
+      for (const key of keys) {
+        if (!readAccepted(key)) continue;
+        const value = readValue(key);
+        const list = value ? this.splitLines(value) : readExtractedList(key);
+        if (list.length > 0) return list;
+      }
+      return [];
+    };
 
     const patch: Partial<typeof schema.orgCompanyProfiles.$inferInsert> = {};
     if (readAccepted('company_overview')) {
@@ -1547,6 +1725,76 @@ export class IngestService {
         : readExtractedList('escalation_rules');
       if (list.length > 0) patch.objectionHandling = list.map((item) => `- ${item}`).join('\n');
     }
+
+    const salesPatch: Partial<typeof schema.salesContext.$inferInsert> = {};
+    const companyName = readTextCandidate(['company_name']);
+    if (companyName) salesPatch.companyName = companyName;
+
+    const whatWeSell = readTextCandidate(['what_we_sell', 'company_overview']);
+    if (whatWeSell) salesPatch.whatWeSell = whatWeSell;
+
+    const howItWorks = readTextCandidate(['how_it_works', 'tone_style']);
+    if (howItWorks) salesPatch.howItWorks = howItWorks;
+
+    const offerCategory = readTextCandidate(['offer_category']).toLowerCase();
+    if (['service', 'software', 'marketplace', 'other'].includes(offerCategory)) {
+      salesPatch.offerCategory = offerCategory;
+    }
+
+    const targetCustomer = readTextCandidate(['target_customer', 'target_customers']);
+    if (targetCustomer) salesPatch.targetCustomer = targetCustomer;
+
+    const targetRoles = readListCandidate(['target_roles']);
+    if (targetRoles.length > 0) salesPatch.targetRoles = targetRoles;
+
+    const industries = readListCandidate(['industries']);
+    if (industries.length > 0) salesPatch.industries = industries;
+
+    const buyingTriggers = readListCandidate(['buying_triggers']);
+    if (buyingTriggers.length > 0) salesPatch.buyingTriggers = buyingTriggers;
+
+    const disqualifiers = readListCandidate(['disqualifiers']);
+    if (disqualifiers.length > 0) salesPatch.disqualifiers = disqualifiers;
+
+    const globalValueProps = readListCandidate(['global_value_props', 'value_props']);
+    if (globalValueProps.length > 0) salesPatch.globalValueProps = globalValueProps;
+
+    const proofPoints = readListCandidate(['proof_points']);
+    if (proofPoints.length > 0) salesPatch.proofPoints = proofPoints;
+
+    const caseStudies = readListCandidate(['case_studies']);
+    if (caseStudies.length > 0) salesPatch.caseStudies = caseStudies;
+
+    const allowedClaims = readListCandidate(['allowed_claims']);
+    if (allowedClaims.length > 0) salesPatch.allowedClaims = allowedClaims;
+
+    const forbiddenClaims = readListCandidate(['forbidden_claims']);
+    if (forbiddenClaims.length > 0) salesPatch.forbiddenClaims = forbiddenClaims;
+
+    const salesPolicies = readListCandidate(['sales_policies', 'compliance_and_policies']);
+    if (salesPolicies.length > 0) salesPatch.salesPolicies = salesPolicies;
+
+    const escalationRules = readListCandidate(['escalation_rules']);
+    if (escalationRules.length > 0) salesPatch.escalationRules = escalationRules;
+
+    const nextSteps = readListCandidate(['next_steps']);
+    if (nextSteps.length > 0) salesPatch.nextSteps = nextSteps;
+
+    const competitors = readListCandidate(['competitors']);
+    if (competitors.length > 0) salesPatch.competitors = competitors;
+
+    const positioningRules = readListCandidate(['positioning_rules', 'competitor_positioning']);
+    if (positioningRules.length > 0) salesPatch.positioningRules = positioningRules;
+
+    const discoveryQuestions = readListCandidate(['discovery_questions']);
+    if (discoveryQuestions.length > 0) salesPatch.discoveryQuestions = discoveryQuestions;
+
+    const qualificationRubric = readListCandidate(['qualification_rubric']);
+    if (qualificationRubric.length > 0) salesPatch.qualificationRubric = qualificationRubric;
+
+    const knowledgeAppendix = readTextCandidate(['knowledge_appendix', 'knowledge_base_appendix']);
+    if (knowledgeAppendix) salesPatch.knowledgeAppendix = knowledgeAppendix;
+    salesPatch.updatedAt = new Date();
 
     const appendixFromReview =
       readValue('knowledge_base_appendix') || readExtractedText('knowledge_base_appendix');
@@ -1600,8 +1848,48 @@ export class IngestService {
       })
       .returning();
 
+    const [savedContext] = await this.db
+      .insert(schema.salesContext)
+      .values({
+        orgId,
+        ...salesPatch,
+      })
+      .onConflictDoUpdate({
+        target: schema.salesContext.orgId,
+        set: salesPatch,
+      })
+      .returning();
+
+    const offeringEntries = Array.isArray(bodyCompany.offerings) ? bodyCompany.offerings : [];
+    const createdOfferings: Array<{ id: string; name: string }> = [];
+    for (const item of offeringEntries.slice(0, 12)) {
+      const entry = this.asRecord(item);
+      const create = this.readBoolean(entry.create, false);
+      if (!create) continue;
+      const name = this.readString(entry.name, 160);
+      const valueProps = this.toStringArray(entry.value_props).slice(0, 30);
+      if (!name || valueProps.length < 3) continue;
+      const [inserted] = await this.db
+        .insert(schema.products)
+        .values({
+          orgId,
+          name,
+          elevatorPitch: this.readString(entry.elevator_pitch, 1200) || null,
+          valueProps,
+          differentiators: this.toStringArray(entry.differentiators).slice(0, 30),
+          pricingRules: this.toObject(entry.pricing_rules),
+          dontSay: this.toStringArray(entry.dont_say).slice(0, 30),
+          faqs: Array.isArray(entry.faqs) ? entry.faqs.slice(0, 30) : [],
+          objections: Array.isArray(entry.objections) ? entry.objections.slice(0, 30) : [],
+        })
+        .returning({ id: schema.products.id, name: schema.products.name });
+      createdOfferings.push(inserted);
+    }
+
     return {
       profile: saved,
+      salesContext: savedContext,
+      createdOfferings,
       changedFields: Object.keys(patch),
     };
   }

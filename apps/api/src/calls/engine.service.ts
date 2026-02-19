@@ -1555,6 +1555,8 @@ export class EngineService implements OnModuleDestroy {
       .join('\n');
 
     const scProof = this.parseStringArray(salesContext?.proofPoints);
+    const scCaseStudies = this.parseStringArray(salesContext?.caseStudies);
+    const scGlobalValueProps = this.parseStringArray(salesContext?.globalValueProps);
     const scAllowedClaims = this.parseStringArray(salesContext?.allowedClaims);
     const scForbiddenClaims = this.parseStringArray(salesContext?.forbiddenClaims);
     const scSalesPolicies = this.parseStringArray(salesContext?.salesPolicies);
@@ -1565,8 +1567,10 @@ export class EngineService implements OnModuleDestroy {
     const scQual = this.parseStringArray(salesContext?.qualificationRubric);
     const scRoles = this.parseStringArray(salesContext?.targetRoles);
     const scIndustries = this.parseStringArray(salesContext?.industries);
+    const scBuyingTriggers = this.parseStringArray(salesContext?.buyingTriggers);
     const scDisqualifiers = this.parseStringArray(salesContext?.disqualifiers);
     const scNextSteps = this.parseStringArray(salesContext?.nextSteps);
+    const scHowItWorks = salesContext?.howItWorks?.trim() || '';
 
     const mappedFromSalesContext: CompanyProfile = {
       companyName: salesContext?.companyName?.trim() || legacyProfile?.companyName || '',
@@ -1583,14 +1587,22 @@ export class EngineService implements OnModuleDestroy {
         salesContext?.targetCustomer?.trim() || '',
         scRoles.length > 0 ? `Roles: ${scRoles.join(', ')}` : '',
         scIndustries.length > 0 ? `Industries: ${scIndustries.join(', ')}` : '',
+        scBuyingTriggers.length > 0 ? `Buying triggers: ${scBuyingTriggers.join(', ')}` : '',
         scDisqualifiers.length > 0 ? `Disqualifiers: ${scDisqualifiers.join(', ')}` : '',
       ]
         .filter((line) => line.length > 0)
         .join('\n'),
-      valueProposition: valueProps || legacyProfile?.valueProposition || '',
+      valueProposition:
+        [...scGlobalValueProps, ...valueProps.split('\n').filter((line) => line.trim().length > 0)]
+          .filter((line) => line.trim().length > 0)
+          .slice(0, 12)
+          .join('\n') || legacyProfile?.valueProposition || '',
       differentiators: diffs || legacyProfile?.differentiators || '',
       proofPoints:
-        scProof.join('\n') || legacyProfile?.proofPoints || '',
+        [...scProof, ...scCaseStudies]
+          .filter((line) => line.trim().length > 0)
+          .slice(0, 18)
+          .join('\n') || legacyProfile?.proofPoints || '',
       repTalkingPoints:
         scNextSteps.join('\n') || legacyProfile?.repTalkingPoints || '',
       discoveryGuidance:
@@ -1613,7 +1625,9 @@ export class EngineService implements OnModuleDestroy {
         .filter((line) => line.length > 0)
         .join('\n') || legacyProfile?.pricingGuidance || '',
       implementationGuidance:
-        scNextSteps.join('\n') || legacyProfile?.implementationGuidance || '',
+        [scHowItWorks, ...scNextSteps].filter((line) => line.trim().length > 0).join('\n') ||
+        legacyProfile?.implementationGuidance ||
+        '',
       faq: faqLines || legacyProfile?.faq || '',
       doNotSay:
         [...scForbiddenClaims, ...dontSay.split('\n').filter((line) => line.trim().length > 0)]
@@ -2621,12 +2635,13 @@ export class EngineService implements OnModuleDestroy {
       `Proof points:\n${company.proofPoints || 'None'}\n` +
       `Value props:\n${company.valueProposition || 'None'}\n` +
       `Differentiators:\n${company.differentiators || 'None'}\n` +
-      `Sales policies:\n${salesPolicies}\n` +
+      `How we work / delivery:\n${company.implementationGuidance || 'None'}\n` +
+      `Allowed claims and policies:\n${salesPolicies}\n` +
       `Forbidden claims:\n${forbiddenClaims}\n` +
       `Discovery guidance:\n${company.discoveryGuidance || 'None'}\n` +
       `Qualification guidance:\n${company.qualificationGuidance || 'None'}\n` +
       `Competitor stance:\n${company.competitorGuidance || 'None'}\n` +
-      `Next-step guidance:\n${company.implementationGuidance || 'None'}\n\n` +
+      `Next-step guidance:\n${company.repTalkingPoints || 'None'}\n\n` +
       `Offerings Context:\n` +
       `Mode: ${offerMode}\n` +
       `Selected offerings: ${offerNames}\n` +

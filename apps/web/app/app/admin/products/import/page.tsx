@@ -6,7 +6,6 @@ import { useRouter } from 'next/navigation';
 import { OutOfCreditsModal } from '@/components/out-of-credits-modal';
 
 type SourceType = 'WEBSITE' | 'PDF';
-type FocusMode = 'STANDARD' | 'DEEP' | 'QUICK';
 
 type JobPayload = {
   id: string;
@@ -93,8 +92,6 @@ export default function ProductImportPage() {
   const [step, setStep] = useState(1);
   const [sourceType, setSourceType] = useState<SourceType>('WEBSITE');
   const [url, setUrl] = useState('');
-  const [pagesToScan, setPagesToScan] = useState(20);
-  const [focus, setFocus] = useState<FocusMode>('STANDARD');
   const [files, setFiles] = useState<File[]>([]);
   const [jobId, setJobId] = useState('');
   const [job, setJob] = useState<JobPayload | null>(null);
@@ -256,8 +253,6 @@ export default function ProductImportPage() {
 
       const payload = {
         url: url.trim(),
-        pagesToScan: Math.max(1, Number.isFinite(pagesToScan) ? Math.floor(pagesToScan) : 20),
-        focus,
       };
 
       const res = await fetch('/api/ingest/product/website', {
@@ -364,8 +359,6 @@ export default function ProductImportPage() {
       currentState: {
         sourceType,
         url,
-        focus,
-        pagesToScan,
         product,
         allProducts: products,
       },
@@ -503,10 +496,10 @@ export default function ProductImportPage() {
           </p>
         </div>
         <Link
-          href="/app/admin/context/offerings"
+          href="/app/admin/context"
           className="text-sm px-3 py-2 rounded-lg border border-slate-700 text-slate-300 hover:text-white hover:border-slate-500 transition-colors"
         >
-          Back to offerings
+          Back to context
         </Link>
       </div>
 
@@ -586,30 +579,6 @@ export default function ProductImportPage() {
                   className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"
                   placeholder="https://www.gtaphotopro.com"
                 />
-              </div>
-              <div className="grid md:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs text-slate-400 mb-1.5">Pages to scan</label>
-                  <input
-                    type="number"
-                    min={1}
-                    value={pagesToScan}
-                    onChange={(event) => setPagesToScan(Number(event.target.value) || 20)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-slate-400 mb-1.5">Focus</label>
-                  <select
-                    value={focus}
-                    onChange={(event) => setFocus(event.target.value as FocusMode)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"
-                  >
-                    <option value="STANDARD">Standard</option>
-                    <option value="DEEP">Deep</option>
-                    <option value="QUICK">Quick</option>
-                  </select>
-                </div>
               </div>
             </div>
           ) : (
@@ -1057,10 +1026,10 @@ export default function ProductImportPage() {
             </button>
             {applied && (
               <button
-                onClick={() => router.push('/app/admin/context/offerings')}
+                onClick={() => router.push('/app/admin/context')}
                 className="px-4 py-2 text-sm rounded-lg border border-sky-500/40 bg-sky-500/10 text-sky-200"
               >
-                Applied. Back to offerings
+                Applied. Back to context
               </button>
             )}
             {aiError && <span className="text-sm text-red-300">{aiError}</span>}
