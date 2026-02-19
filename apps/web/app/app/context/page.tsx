@@ -951,12 +951,6 @@ export default function ContextPage() {
           >
             Auto-fill context
           </Link>
-          <Link
-            href="/app/context/offerings-import"
-            className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:border-slate-500"
-          >
-            Auto-fill offerings
-          </Link>
         </div>
       </div>
 
