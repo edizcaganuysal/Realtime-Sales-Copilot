@@ -36,8 +36,15 @@ type QualitySuggestion = {
   proposedValue: string;
 };
 
+type AiSuggestion = {
+  text: string;
+  mode: 'draft' | 'improve';
+  notes: string[];
+  warnings: string[];
+};
+
 const INPUT =
-  'w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500';
+  'w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-sky-500';
 
 const DEFAULT_FORM: ProductForm = {
   name: '',
@@ -72,6 +79,8 @@ function linesToArray(text: string) {
     .filter((line) => line.length > 0);
 }
 
+type FormFieldKey = keyof ProductForm;
+
 export default function AdminProductsPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
@@ -84,6 +93,11 @@ export default function AdminProductsPage() {
   const [qualityChecking, setQualityChecking] = useState(false);
   const [qualitySuggestions, setQualitySuggestions] = useState<QualitySuggestion[]>([]);
   const [qualityOpen, setQualityOpen] = useState(false);
+  const [aiEnabled, setAiEnabled] = useState(true);
+  const [aiMessage, setAiMessage] = useState('');
+  const [aiBusyKey, setAiBusyKey] = useState('');
+  const [aiError, setAiError] = useState('');
+  const [aiSuggestions, setAiSuggestions] = useState<Partial<Record<FormFieldKey, AiSuggestion>>>({});
 
   async function load() {
     setLoading(true);
@@ -100,7 +114,15 @@ export default function AdminProductsPage() {
   }
 
   useEffect(() => {
-    load().catch(() => {
+    async function bootstrap() {
+      await load();
+      const aiRes = await fetch('/api/ai/fields/status', { cache: 'no-store' });
+      const aiData = await aiRes.json().catch(() => ({ enabled: false }));
+      setAiEnabled(Boolean(aiData?.enabled));
+      setAiMessage(typeof aiData?.message === 'string' ? aiData.message : '');
+    }
+
+    void bootstrap().catch(() => {
       setError('Failed to load products');
       setLoading(false);
     });
@@ -114,6 +136,8 @@ export default function AdminProductsPage() {
   function openCreate() {
     setEditing(null);
     setForm(DEFAULT_FORM);
+    setAiSuggestions({});
+    setAiError('');
     setError('');
     setModalOpen(true);
   }
@@ -130,6 +154,8 @@ export default function AdminProductsPage() {
       faqs_text: toPrettyJson(product.faqs, '[]'),
       objections_text: toPrettyJson(product.objections, '[]'),
     });
+    setAiSuggestions({});
+    setAiError('');
     setError('');
     setModalOpen(true);
   }
@@ -200,6 +226,7 @@ export default function AdminProductsPage() {
     setModalOpen(false);
     setEditing(null);
     setForm(DEFAULT_FORM);
+    setAiSuggestions({});
     await load();
   }
 
@@ -302,6 +329,75 @@ export default function AdminProductsPage() {
     }
   }
 
+  async function runAiAction(fieldKey: FormFieldKey, mode: 'draft' | 'improve') {
+    if (!aiEnabled) return;
+    const currentText = form[fieldKey];
+    if (mode === 'improve' && !currentText.trim()) {
+      setAiError('Add text before using AI Improve.');
+      return;
+    }
+
+    setAiError('');
+    const busy = `${fieldKey}:${mode}`;
+    setAiBusyKey(busy);
+
+    const endpoint = mode === 'draft' ? '/api/ai/fields/draft' : '/api/ai/fields/improve';
+    const payload = {
+      target: 'product',
+      fieldKey,
+      ...(mode === 'improve' ? { text: currentText } : {}),
+      currentState: {
+        form,
+        editingProductId: editing?.id ?? null,
+        editingProductName: editing?.name ?? null,
+      },
+    };
+
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    setAiBusyKey('');
+
+    if (!res.ok) {
+      setAiError(Array.isArray(data?.message) ? data.message[0] : (data?.message ?? 'AI request failed.'));
+      return;
+    }
+
+    const text = typeof data?.text === 'string' ? data.text.trim() : '';
+    if (!text) {
+      setAiError('AI returned empty text.');
+      return;
+    }
+
+    setAiSuggestions((prev) => ({
+      ...prev,
+      [fieldKey]: {
+        text,
+        mode,
+        notes: Array.isArray(data?.notes)
+          ? data.notes.filter((entry: unknown) => typeof entry === 'string').slice(0, 6)
+          : [],
+        warnings: Array.isArray(data?.warnings)
+          ? data.warnings.filter((entry: unknown) => typeof entry === 'string').slice(0, 6)
+          : [],
+      },
+    }));
+  }
+
+  function applyAiSuggestion(fieldKey: FormFieldKey) {
+    const suggestion = aiSuggestions[fieldKey];
+    if (!suggestion) return;
+    setForm((prev) => ({ ...prev, [fieldKey]: suggestion.text }));
+    setAiSuggestions((prev) => {
+      const next = { ...prev };
+      delete next[fieldKey];
+      return next;
+    });
+  }
+
   async function handleDelete(product: Product) {
     if (!confirm(`Delete "${product.name}"?`)) return;
     setDeletingId(product.id);
@@ -316,6 +412,29 @@ export default function AdminProductsPage() {
     await load();
   }
 
+  function renderAiControls(fieldKey: FormFieldKey, hasText: boolean) {
+    return (
+      <div className="flex items-center gap-1.5">
+        <button
+          onClick={() => runAiAction(fieldKey, 'draft')}
+          disabled={!aiEnabled || aiBusyKey.length > 0}
+          title={aiEnabled ? 'Generate AI draft' : aiMessage || 'AI unavailable'}
+          className="px-2 py-1 rounded-md border border-slate-700 text-xs text-slate-200 hover:border-slate-500 disabled:opacity-40"
+        >
+          {aiBusyKey === `${fieldKey}:draft` ? 'Drafting...' : 'AI Draft'}
+        </button>
+        <button
+          onClick={() => runAiAction(fieldKey, 'improve')}
+          disabled={!aiEnabled || aiBusyKey.length > 0 || !hasText}
+          title={aiEnabled ? 'Improve current text' : aiMessage || 'AI unavailable'}
+          className="px-2 py-1 rounded-md border border-slate-700 text-xs text-slate-200 hover:border-slate-500 disabled:opacity-40"
+        >
+          {aiBusyKey === `${fieldKey}:improve` ? 'Improving...' : 'AI Improve'}
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="p-8 max-w-6xl">
       <div className="flex items-start justify-between gap-4 mb-6">
@@ -328,13 +447,13 @@ export default function AdminProductsPage() {
         <div className="flex items-center gap-2">
           <Link
             href="/app/admin/products/import"
-            className="px-3 py-2 text-sm font-medium rounded-lg border border-cyan-500/40 bg-cyan-500/10 text-cyan-200 hover:bg-cyan-500/20 transition-colors"
+            className="px-3 py-2 text-sm font-medium rounded-lg border border-sky-500/40 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20 transition-colors"
           >
             Auto-fill from website or PDFs
           </Link>
           <button
             onClick={openCreate}
-            className="px-3 py-2 text-sm font-medium rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white transition-colors"
+            className="px-3 py-2 text-sm font-medium rounded-lg bg-sky-600 hover:bg-sky-500 text-white transition-colors"
           >
             New product
           </button>
@@ -383,7 +502,7 @@ export default function AdminProductsPage() {
                       {valueProps.slice(0, 3).map((line) => (
                         <span
                           key={`${product.id}-${line}`}
-                          className="text-xs px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/20"
+                          className="text-xs px-2 py-0.5 rounded bg-sky-500/10 text-sky-300 border border-sky-500/20"
                         >
                           {line}
                         </span>
@@ -433,7 +552,10 @@ export default function AdminProductsPage() {
 
             <div className="space-y-3">
               <div>
-                <label className="block text-xs text-slate-400 mb-1.5">Name</label>
+                <div className="mb-1.5 flex items-center justify-between gap-2">
+                  <label className="block text-xs text-slate-400">Name</label>
+                  {renderAiControls('name', Boolean(form.name.trim()))}
+                </div>
                 <input
                   className={INPUT}
                   value={form.name}
@@ -446,7 +568,10 @@ export default function AdminProductsPage() {
               </div>
 
               <div>
-                <label className="block text-xs text-slate-400 mb-1.5">Elevator pitch</label>
+                <div className="mb-1.5 flex items-center justify-between gap-2">
+                  <label className="block text-xs text-slate-400">Elevator pitch</label>
+                  {renderAiControls('elevator_pitch', Boolean(form.elevator_pitch.trim()))}
+                </div>
                 <textarea
                   rows={3}
                   className={INPUT + ' resize-none'}
@@ -462,7 +587,10 @@ export default function AdminProductsPage() {
               </div>
 
               <div>
-                <label className="block text-xs text-slate-400 mb-1.5">Value props</label>
+                <div className="mb-1.5 flex items-center justify-between gap-2">
+                  <label className="block text-xs text-slate-400">Value props</label>
+                  {renderAiControls('value_props_text', Boolean(form.value_props_text.trim()))}
+                </div>
                 <textarea
                   rows={5}
                   className={INPUT + ' resize-none'}
@@ -483,7 +611,10 @@ export default function AdminProductsPage() {
                 </summary>
                 <div className="p-3 space-y-3 bg-slate-900">
                   <div>
-                    <label className="block text-xs text-slate-400 mb-1.5">Pricing rules (JSON object)</label>
+                    <div className="mb-1.5 flex items-center justify-between gap-2">
+                      <label className="block text-xs text-slate-400">Pricing rules (JSON object)</label>
+                      {renderAiControls('pricing_rules_text', Boolean(form.pricing_rules_text.trim()))}
+                    </div>
                     <textarea
                       rows={4}
                       className={INPUT + ' resize-none font-mono text-xs'}
@@ -493,12 +624,15 @@ export default function AdminProductsPage() {
                       }
                     />
                     <p className="text-[11px] text-slate-600 mt-1">
-                      Add guardrails only, for example required qualifiers and prohibited promises.
+                      Add guardrails only, such as required qualifiers and prohibited promises.
                     </p>
                   </div>
 
                   <div>
-                    <label className="block text-xs text-slate-400 mb-1.5">FAQs (JSON array)</label>
+                    <div className="mb-1.5 flex items-center justify-between gap-2">
+                      <label className="block text-xs text-slate-400">FAQs (JSON array)</label>
+                      {renderAiControls('faqs_text', Boolean(form.faqs_text.trim()))}
+                    </div>
                     <textarea
                       rows={5}
                       className={INPUT + ' resize-none font-mono text-xs'}
@@ -511,7 +645,10 @@ export default function AdminProductsPage() {
                   </div>
 
                   <div>
-                    <label className="block text-xs text-slate-400 mb-1.5">Objections (JSON array)</label>
+                    <div className="mb-1.5 flex items-center justify-between gap-2">
+                      <label className="block text-xs text-slate-400">Objections (JSON array)</label>
+                      {renderAiControls('objections_text', Boolean(form.objections_text.trim()))}
+                    </div>
                     <textarea
                       rows={5}
                       className={INPUT + ' resize-none font-mono text-xs'}
@@ -526,7 +663,10 @@ export default function AdminProductsPage() {
                   </div>
 
                   <div>
-                    <label className="block text-xs text-slate-400 mb-1.5">Differentiators</label>
+                    <div className="mb-1.5 flex items-center justify-between gap-2">
+                      <label className="block text-xs text-slate-400">Differentiators</label>
+                      {renderAiControls('differentiators_text', Boolean(form.differentiators_text.trim()))}
+                    </div>
                     <textarea
                       rows={3}
                       className={INPUT + ' resize-none'}
@@ -542,7 +682,10 @@ export default function AdminProductsPage() {
                   </div>
 
                   <div>
-                    <label className="block text-xs text-slate-400 mb-1.5">Do not say</label>
+                    <div className="mb-1.5 flex items-center justify-between gap-2">
+                      <label className="block text-xs text-slate-400">Do not say</label>
+                      {renderAiControls('dont_say_text', Boolean(form.dont_say_text.trim()))}
+                    </div>
                     <textarea
                       rows={3}
                       className={INPUT + ' resize-none'}
@@ -560,7 +703,57 @@ export default function AdminProductsPage() {
               </details>
             </div>
 
-            <div className="mt-4 flex gap-2">
+            {Object.entries(aiSuggestions).length > 0 && (
+              <div className="mt-4 space-y-3">
+                {Object.entries(aiSuggestions).map(([fieldKey, suggestion]) => {
+                  if (!suggestion) return null;
+                  return (
+                    <div key={fieldKey} className="rounded-lg border border-sky-500/30 bg-sky-500/10 p-3 space-y-2">
+                      <p className="text-xs text-sky-200">
+                        {suggestion.mode === 'draft' ? 'AI Draft suggestion' : 'AI Improve suggestion'} ({fieldKey})
+                      </p>
+                      <pre className="whitespace-pre-wrap text-xs text-sky-100">{suggestion.text}</pre>
+                      {suggestion.notes.length > 0 && (
+                        <ul className="text-xs text-sky-200 space-y-0.5">
+                          {suggestion.notes.map((note) => (
+                            <li key={`${fieldKey}-${note}`}>{note}</li>
+                          ))}
+                        </ul>
+                      )}
+                      {suggestion.warnings.length > 0 && (
+                        <ul className="text-xs text-amber-200 space-y-0.5">
+                          {suggestion.warnings.map((warning) => (
+                            <li key={`${fieldKey}-${warning}`}>{warning}</li>
+                          ))}
+                        </ul>
+                      )}
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => applyAiSuggestion(fieldKey as FormFieldKey)}
+                          className="px-2.5 py-1 rounded-md border border-sky-400/50 text-xs text-sky-100 hover:border-sky-300"
+                        >
+                          Apply suggested edit
+                        </button>
+                        <button
+                          onClick={() =>
+                            setAiSuggestions((prev) => {
+                              const next = { ...prev };
+                              delete next[fieldKey as FormFieldKey];
+                              return next;
+                            })
+                          }
+                          className="px-2.5 py-1 rounded-md border border-slate-600 text-xs text-slate-300 hover:border-slate-400"
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="mt-4 flex gap-2 flex-wrap">
               <button
                 onClick={handleQualityCheck}
                 disabled={qualityChecking}
@@ -580,11 +773,17 @@ export default function AdminProductsPage() {
               <button
                 onClick={handleSave}
                 disabled={saving}
-                className="flex-1 py-2 text-sm text-white bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-lg transition-colors"
+                className="flex-1 py-2 text-sm text-white bg-sky-600 hover:bg-sky-500 disabled:opacity-50 rounded-lg transition-colors"
               >
                 {saving ? 'Saving...' : editing ? 'Save changes' : 'Create product'}
               </button>
             </div>
+
+            {(aiError || (!aiEnabled && aiMessage)) && (
+              <div className="mt-3 text-sm text-red-300">
+                {aiError || aiMessage}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -615,14 +814,14 @@ export default function AdminProductsPage() {
                       </div>
                       <button
                         onClick={() => applyQualitySuggestion(suggestion)}
-                        className="text-xs px-2.5 py-1 rounded-lg border border-emerald-500/30 text-emerald-300 hover:border-emerald-500/60 transition-colors"
+                        className="text-xs px-2.5 py-1 rounded-lg border border-sky-500/30 text-sky-300 hover:border-sky-500/60 transition-colors"
                       >
                         Apply suggested edit
                       </button>
                     </div>
                     <p className="mt-2 text-sm text-slate-300">{suggestion.message}</p>
                     {suggestion.proposedValue && (
-                      <pre className="mt-2 whitespace-pre-wrap text-xs text-cyan-200 bg-slate-900 border border-slate-800 rounded-lg p-3">
+                      <pre className="mt-2 whitespace-pre-wrap text-xs text-sky-200 bg-slate-900 border border-slate-800 rounded-lg p-3">
                         {suggestion.proposedValue}
                       </pre>
                     )}

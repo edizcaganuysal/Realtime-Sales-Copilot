@@ -31,6 +31,7 @@ import { CallsGateway } from './calls.gateway';
 import { MockCallService } from './mock-call.service';
 import { CreateCallDto } from './dto/create-call.dto';
 import { UpdateCallDto } from './dto/update-call.dto';
+import { PromptDebugDto } from './dto/prompt-debug.dto';
 
 // Twilio CallStatus values → internal status
 const TWILIO_STATUS: Record<string, string> = {
@@ -280,6 +281,13 @@ export class CallsController {
   @HttpCode(200)
   moreSuggestions(@Param('id') id: string) {
     return this.engineService.getAlternatives(id);
+  }
+
+  @Post('prompt-debug')
+  @Roles(Role.ADMIN)
+  @HttpCode(200)
+  promptDebug(@CurrentUser() user: JwtPayload, @Body() dto: PromptDebugDto) {
+    return this.engineService.promptDebug(user.orgId, dto);
   }
 }
 

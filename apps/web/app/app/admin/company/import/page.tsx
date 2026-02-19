@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
 type SourceType = 'WEBSITE' | 'PDF';
+type FocusMode = 'STANDARD' | 'DEEP' | 'QUICK';
 
 type JobPayload = {
   id: string;
@@ -20,6 +21,7 @@ type ExtractedField = {
   confidence: number;
   citations: string[];
   accepted: boolean;
+  suggested: boolean;
 };
 
 type CompanyFieldKey =
@@ -33,6 +35,13 @@ type CompanyFieldKey =
   | 'escalation_rules'
   | 'knowledge_base_appendix';
 
+type AiSuggestion = {
+  text: string;
+  mode: 'draft' | 'improve';
+  notes: string[];
+  warnings: string[];
+};
+
 const FIELD_SPECS: Array<{
   key: CompanyFieldKey;
   label: string;
@@ -42,49 +51,49 @@ const FIELD_SPECS: Array<{
   {
     key: 'company_overview',
     label: 'Company overview',
-    helper: 'Summarize positioning and what the company delivers in 2-4 sentences.',
+    helper: 'Summarize positioning and core services in 2-4 concise sentences.',
     rows: 4,
   },
   {
     key: 'target_customers',
     label: 'Target customers',
-    helper: 'Describe ideal customer segments and buying context.',
+    helper: 'Describe ideal buyer types and common purchase triggers.',
     rows: 4,
   },
   {
     key: 'value_props',
     label: 'Value propositions',
-    helper: 'Use one bullet per line with measurable outcomes.',
+    helper: 'Use one factual bullet per line.',
     rows: 5,
   },
   {
     key: 'tone_style',
-    label: 'Tone style',
-    helper: 'Define rep tone in short practical guidance.',
+    label: 'Rep tone style',
+    helper: 'Guide call tone and communication style.',
     rows: 3,
   },
   {
     key: 'compliance_and_policies',
-    label: 'Compliance and policies',
-    helper: 'List claims and policy guardrails reps should follow.',
-    rows: 4,
+    label: 'Sales & service policies',
+    helper: 'Booking, turnaround, cancellation, payment, licensing, and service-area guardrails.',
+    rows: 5,
   },
   {
     key: 'forbidden_claims',
     label: 'Forbidden claims',
-    helper: 'List statements reps must avoid making.',
+    helper: 'Claims reps should never make.',
     rows: 4,
   },
   {
     key: 'competitor_positioning',
     label: 'Competitor positioning',
-    helper: 'Position against competitors safely without unsupported claims.',
+    helper: 'How to compare safely and credibly.',
     rows: 4,
   },
   {
     key: 'escalation_rules',
     label: 'Escalation rules',
-    helper: 'Define when reps should escalate legal, pricing, or security questions.',
+    helper: 'When reps must escalate to manager/admin.',
     rows: 4,
   },
   {
@@ -94,13 +103,6 @@ const FIELD_SPECS: Array<{
     rows: 6,
   },
 ];
-
-function parsePaths(value: string) {
-  return value
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-}
 
 function toRecord(value: unknown) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
@@ -136,11 +138,15 @@ function parseExtractedField(raw: unknown): ExtractedField {
         .filter((entry) => entry.length > 0)
     : [];
 
+  const suggested =
+    data.suggested === true || (citations.length === 0 && confidence < 0.7);
+
   return {
     value: normalized,
     confidence,
     citations,
-    accepted: normalized.length > 0,
+    accepted: normalized.length > 0 && !suggested,
+    suggested,
   };
 }
 
@@ -149,10 +155,8 @@ export default function CompanyImportPage() {
   const [step, setStep] = useState(1);
   const [sourceType, setSourceType] = useState<SourceType>('WEBSITE');
   const [url, setUrl] = useState('');
-  const [maxPages, setMaxPages] = useState(8);
-  const [depth, setDepth] = useState(2);
-  const [includePathsText, setIncludePathsText] = useState('');
-  const [excludePathsText, setExcludePathsText] = useState('');
+  const [pagesToScan, setPagesToScan] = useState(20);
+  const [focus, setFocus] = useState<FocusMode>('STANDARD');
   const [files, setFiles] = useState<File[]>([]);
   const [jobId, setJobId] = useState('');
   const [job, setJob] = useState<JobPayload | null>(null);
@@ -161,17 +165,32 @@ export default function CompanyImportPage() {
   const [applying, setApplying] = useState(false);
   const [applied, setApplied] = useState(false);
   const [appendToKnowledgeBase, setAppendToKnowledgeBase] = useState(true);
+  const [aiEnabled, setAiEnabled] = useState(true);
+  const [aiMessage, setAiMessage] = useState('');
+  const [aiBusyKey, setAiBusyKey] = useState('');
+  const [aiError, setAiError] = useState('');
+  const [aiSuggestions, setAiSuggestions] = useState<Partial<Record<CompanyFieldKey, AiSuggestion>>>({});
   const [review, setReview] = useState<Record<CompanyFieldKey, ExtractedField>>({
-    company_overview: { value: '', confidence: 0, citations: [], accepted: false },
-    target_customers: { value: '', confidence: 0, citations: [], accepted: false },
-    value_props: { value: '', confidence: 0, citations: [], accepted: false },
-    tone_style: { value: '', confidence: 0, citations: [], accepted: false },
-    compliance_and_policies: { value: '', confidence: 0, citations: [], accepted: false },
-    forbidden_claims: { value: '', confidence: 0, citations: [], accepted: false },
-    competitor_positioning: { value: '', confidence: 0, citations: [], accepted: false },
-    escalation_rules: { value: '', confidence: 0, citations: [], accepted: false },
-    knowledge_base_appendix: { value: '', confidence: 0, citations: [], accepted: false },
+    company_overview: { value: '', confidence: 0, citations: [], accepted: false, suggested: false },
+    target_customers: { value: '', confidence: 0, citations: [], accepted: false, suggested: false },
+    value_props: { value: '', confidence: 0, citations: [], accepted: false, suggested: false },
+    tone_style: { value: '', confidence: 0, citations: [], accepted: false, suggested: false },
+    compliance_and_policies: { value: '', confidence: 0, citations: [], accepted: false, suggested: false },
+    forbidden_claims: { value: '', confidence: 0, citations: [], accepted: false, suggested: false },
+    competitor_positioning: { value: '', confidence: 0, citations: [], accepted: false, suggested: false },
+    escalation_rules: { value: '', confidence: 0, citations: [], accepted: false, suggested: false },
+    knowledge_base_appendix: { value: '', confidence: 0, citations: [], accepted: false, suggested: false },
   });
+
+  useEffect(() => {
+    async function loadAiStatus() {
+      const res = await fetch('/api/ai/fields/status', { cache: 'no-store' });
+      const data = await res.json().catch(() => ({ enabled: false }));
+      setAiEnabled(Boolean(data?.enabled));
+      setAiMessage(typeof data?.message === 'string' ? data.message : '');
+    }
+    void loadAiStatus();
+  }, []);
 
   const sourcesById = useMemo(() => {
     const sourceList = Array.isArray(job?.result?.sources)
@@ -246,10 +265,8 @@ export default function CompanyImportPage() {
 
       const payload = {
         url: url.trim(),
-        maxPages: Math.max(1, Math.min(15, maxPages)),
-        depth: Math.max(1, Math.min(3, depth)),
-        includePaths: parsePaths(includePathsText),
-        excludePaths: parsePaths(excludePathsText),
+        pagesToScan: Math.max(1, Number.isFinite(pagesToScan) ? Math.floor(pagesToScan) : 20),
+        focus,
       };
 
       const res = await fetch('/api/ingest/company/website', {
@@ -322,6 +339,76 @@ export default function CompanyImportPage() {
     setReview((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
   }
 
+  async function runAiAction(fieldKey: CompanyFieldKey, mode: 'draft' | 'improve') {
+    if (!aiEnabled) return;
+    if (mode === 'improve' && !review[fieldKey].value.trim()) {
+      setAiError('Add text before using AI Improve.');
+      return;
+    }
+
+    setAiError('');
+    const busy = `${fieldKey}:${mode}`;
+    setAiBusyKey(busy);
+
+    const endpoint = mode === 'draft' ? '/api/ai/fields/draft' : '/api/ai/fields/improve';
+    const payload = {
+      target: 'company',
+      fieldKey,
+      ...(mode === 'improve' ? { text: review[fieldKey].value } : {}),
+      currentState: {
+        sourceType,
+        url,
+        focus,
+        pagesToScan,
+        review,
+      },
+    };
+
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    setAiBusyKey('');
+
+    if (!res.ok) {
+      setAiError(Array.isArray(data?.message) ? data.message[0] : (data?.message ?? 'AI request failed.'));
+      return;
+    }
+
+    const text = typeof data?.text === 'string' ? data.text.trim() : '';
+    if (!text) {
+      setAiError('AI returned empty text.');
+      return;
+    }
+
+    setAiSuggestions((prev) => ({
+      ...prev,
+      [fieldKey]: {
+        text,
+        mode,
+        notes: Array.isArray(data?.notes)
+          ? data.notes.filter((entry: unknown) => typeof entry === 'string').slice(0, 6)
+          : [],
+        warnings: Array.isArray(data?.warnings)
+          ? data.warnings.filter((entry: unknown) => typeof entry === 'string').slice(0, 6)
+          : [],
+      },
+    }));
+  }
+
+  function applyAiSuggestion(fieldKey: CompanyFieldKey) {
+    const suggestion = aiSuggestions[fieldKey];
+    if (!suggestion) return;
+    patchReview(fieldKey, { value: suggestion.text });
+    setAiSuggestions((prev) => {
+      const next = { ...prev };
+      delete next[fieldKey];
+      return next;
+    });
+  }
+
   async function applyReview() {
     if (!jobId) return;
     setApplying(true);
@@ -357,6 +444,12 @@ export default function CompanyImportPage() {
   const progressMessage = typeof progress.message === 'string' ? progress.message : 'Processing';
   const progressCompleted = typeof progress.completed === 'number' ? progress.completed : 0;
   const progressTotal = typeof progress.total === 'number' ? progress.total : 0;
+  const runNote =
+    typeof job?.result?.note === 'string'
+      ? job.result.note
+      : typeof toRecord(job?.result?.stats).note === 'string'
+        ? String(toRecord(job?.result?.stats).note)
+        : '';
 
   return (
     <div className="p-8 max-w-6xl space-y-6">
@@ -364,7 +457,7 @@ export default function CompanyImportPage() {
         <div>
           <h1 className="text-xl font-semibold text-white">Import Company Profile</h1>
           <p className="text-sm text-slate-500 mt-1">
-            Auto-fill company profile fields from a website or PDFs, then review every field before saving.
+            Paste website URL or upload PDFs, run extraction, then accept/edit each field.
           </p>
         </div>
         <Link
@@ -384,11 +477,9 @@ export default function CompanyImportPage() {
             <div
               key={label}
               className={`rounded-lg border px-3 py-2 text-sm ${
-                done
-                  ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
-                  : active
-                    ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-300'
-                    : 'border-slate-800 bg-slate-900 text-slate-500'
+                done || active
+                  ? 'border-sky-500/40 bg-sky-500/10 text-sky-300'
+                  : 'border-slate-800 bg-slate-900 text-slate-500'
               }`}
             >
               {stepNumber}. {label}
@@ -411,7 +502,7 @@ export default function CompanyImportPage() {
               onClick={() => setSourceType('WEBSITE')}
               className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
                 sourceType === 'WEBSITE'
-                  ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-200'
+                  ? 'border-sky-500/50 bg-sky-500/10 text-sky-200'
                   : 'border-slate-700 text-slate-300'
               }`}
             >
@@ -421,7 +512,7 @@ export default function CompanyImportPage() {
               onClick={() => setSourceType('PDF')}
               className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
                 sourceType === 'PDF'
-                  ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-200'
+                  ? 'border-sky-500/50 bg-sky-500/10 text-sky-200'
                   : 'border-slate-700 text-slate-300'
               }`}
             >
@@ -431,7 +522,7 @@ export default function CompanyImportPage() {
           <div className="pt-2">
             <button
               onClick={() => setStep(2)}
-              className="px-4 py-2 text-sm font-medium rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white transition-colors"
+              className="px-4 py-2 text-sm font-medium rounded-lg bg-sky-600 hover:bg-sky-500 text-white transition-colors"
             >
               Continue
             </button>
@@ -451,53 +542,31 @@ export default function CompanyImportPage() {
                   value={url}
                   onChange={(event) => setUrl(event.target.value)}
                   className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"
-                  placeholder="https://example.com"
+                  placeholder="https://www.gtaphotopro.com"
                 />
               </div>
               <div className="grid md:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs text-slate-400 mb-1.5">Max pages (default 8, max 15)</label>
+                  <label className="block text-xs text-slate-400 mb-1.5">Pages to scan</label>
                   <input
                     type="number"
                     min={1}
-                    max={15}
-                    value={maxPages}
-                    onChange={(event) => setMaxPages(Number(event.target.value) || 8)}
+                    value={pagesToScan}
+                    onChange={(event) => setPagesToScan(Number(event.target.value) || 20)}
                     className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-slate-400 mb-1.5">Depth (default 2)</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={3}
-                    value={depth}
-                    onChange={(event) => setDepth(Number(event.target.value) || 2)}
+                  <label className="block text-xs text-slate-400 mb-1.5">Focus</label>
+                  <select
+                    value={focus}
+                    onChange={(event) => setFocus(event.target.value as FocusMode)}
                     className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"
-                  />
-                </div>
-              </div>
-              <div className="grid md:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs text-slate-400 mb-1.5">Include paths (optional)</label>
-                  <textarea
-                    rows={3}
-                    value={includePathsText}
-                    onChange={(event) => setIncludePathsText(event.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"
-                    placeholder="/product&#10;/pricing"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-slate-400 mb-1.5">Exclude paths (optional)</label>
-                  <textarea
-                    rows={3}
-                    value={excludePathsText}
-                    onChange={(event) => setExcludePathsText(event.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"
-                    placeholder="/blog&#10;/careers"
-                  />
+                  >
+                    <option value="STANDARD">Standard</option>
+                    <option value="DEEP">Deep</option>
+                    <option value="QUICK">Quick</option>
+                  </select>
                 </div>
               </div>
             </div>
@@ -513,7 +582,7 @@ export default function CompanyImportPage() {
                     const selected = Array.from(event.target.files ?? []);
                     setFiles(selected);
                   }}
-                  className="block w-full text-sm text-slate-300 file:mr-3 file:rounded-md file:border-0 file:bg-cyan-600 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white hover:file:bg-cyan-500"
+                  className="block w-full text-sm text-slate-300 file:mr-3 file:rounded-md file:border-0 file:bg-sky-600 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white hover:file:bg-sky-500"
                 />
               </div>
               {files.length > 0 && (
@@ -538,7 +607,7 @@ export default function CompanyImportPage() {
             <button
               onClick={runExtraction}
               disabled={running}
-              className="px-4 py-2 text-sm font-medium rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white disabled:opacity-50"
+              className="px-4 py-2 text-sm font-medium rounded-lg bg-sky-600 hover:bg-sky-500 text-white disabled:opacity-50"
             >
               {running ? 'Starting...' : 'Run extraction'}
             </button>
@@ -557,7 +626,7 @@ export default function CompanyImportPage() {
           </p>
           <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
             <div
-              className="bg-cyan-500 h-2 transition-all"
+              className="bg-sky-500 h-2 transition-all"
               style={{
                 width:
                   progressTotal > 0
@@ -569,6 +638,11 @@ export default function CompanyImportPage() {
           <p className="text-xs text-slate-500">
             {progressCompleted} / {progressTotal || '?'} processed
           </p>
+          {runNote && (
+            <p className="text-xs text-slate-300 rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5">
+              {runNote}
+            </p>
+          )}
         </div>
       )}
 
@@ -579,6 +653,11 @@ export default function CompanyImportPage() {
             <p className="mt-1 text-sm text-slate-500">
               Accept, edit, and apply only the fields you want.
             </p>
+            {runNote && (
+              <p className="mt-2 text-xs text-slate-300 rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 inline-flex">
+                {runNote}
+              </p>
+            )}
           </div>
 
           <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
@@ -594,6 +673,7 @@ export default function CompanyImportPage() {
 
           {FIELD_SPECS.map((spec) => {
             const field = review[spec.key];
+            const suggestion = aiSuggestions[spec.key];
             return (
               <section key={spec.key} className="rounded-xl border border-slate-800 bg-slate-900 p-4">
                 <div className="flex items-start justify-between gap-4">
@@ -601,10 +681,15 @@ export default function CompanyImportPage() {
                     <h3 className="text-sm font-semibold text-white">{spec.label}</h3>
                     <p className="text-xs text-slate-500 mt-0.5">{spec.helper}</p>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <span className="text-xs px-2 py-0.5 rounded border border-cyan-500/30 bg-cyan-500/10 text-cyan-200">
+                  <div className="flex items-center gap-2 flex-wrap justify-end">
+                    <span className="text-xs px-2 py-0.5 rounded border border-sky-500/30 bg-sky-500/10 text-sky-200">
                       {(field.confidence * 100).toFixed(0)}% confidence
                     </span>
+                    {field.suggested && (
+                      <span className="text-xs px-2 py-0.5 rounded border border-amber-500/30 bg-amber-500/10 text-amber-200">
+                        Suggested
+                      </span>
+                    )}
                     <label className="flex items-center gap-1 text-xs text-slate-300">
                       <input
                         type="checkbox"
@@ -615,6 +700,22 @@ export default function CompanyImportPage() {
                       />
                       Accept
                     </label>
+                    <button
+                      onClick={() => runAiAction(spec.key, 'draft')}
+                      disabled={!aiEnabled || aiBusyKey.length > 0}
+                      title={aiEnabled ? 'Generate AI draft' : aiMessage || 'AI unavailable'}
+                      className="px-2.5 py-1 rounded-md border border-slate-700 text-xs text-slate-200 hover:border-slate-500 disabled:opacity-40"
+                    >
+                      {aiBusyKey === `${spec.key}:draft` ? 'Drafting...' : 'AI Draft'}
+                    </button>
+                    <button
+                      onClick={() => runAiAction(spec.key, 'improve')}
+                      disabled={!aiEnabled || aiBusyKey.length > 0 || !field.value.trim()}
+                      title={aiEnabled ? 'Improve current text' : aiMessage || 'AI unavailable'}
+                      className="px-2.5 py-1 rounded-md border border-slate-700 text-xs text-slate-200 hover:border-slate-500 disabled:opacity-40"
+                    >
+                      {aiBusyKey === `${spec.key}:improve` ? 'Improving...' : 'AI Improve'}
+                    </button>
                   </div>
                 </div>
 
@@ -643,26 +744,71 @@ export default function CompanyImportPage() {
                     </ul>
                   </details>
                 )}
+
+                {suggestion && (
+                  <div className="mt-3 rounded-lg border border-sky-500/30 bg-sky-500/10 p-3 space-y-2">
+                    <p className="text-xs text-sky-200">
+                      {suggestion.mode === 'draft' ? 'AI Draft suggestion' : 'AI Improve suggestion'}
+                    </p>
+                    <pre className="whitespace-pre-wrap text-xs text-sky-100">{suggestion.text}</pre>
+                    {suggestion.notes.length > 0 && (
+                      <ul className="text-xs text-sky-200 space-y-0.5">
+                        {suggestion.notes.map((note) => (
+                          <li key={`${spec.key}-${note}`}>{note}</li>
+                        ))}
+                      </ul>
+                    )}
+                    {suggestion.warnings.length > 0 && (
+                      <ul className="text-xs text-amber-200 space-y-0.5">
+                        {suggestion.warnings.map((warning) => (
+                          <li key={`${spec.key}-${warning}`}>{warning}</li>
+                        ))}
+                      </ul>
+                    )}
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => applyAiSuggestion(spec.key)}
+                        className="px-2.5 py-1 rounded-md border border-sky-400/50 text-xs text-sky-100 hover:border-sky-300"
+                      >
+                        Apply suggested edit
+                      </button>
+                      <button
+                        onClick={() =>
+                          setAiSuggestions((prev) => {
+                            const next = { ...prev };
+                            delete next[spec.key];
+                            return next;
+                          })
+                        }
+                        className="px-2.5 py-1 rounded-md border border-slate-600 text-xs text-slate-300 hover:border-slate-400"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </div>
+                )}
               </section>
             );
           })}
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             <button
               onClick={applyReview}
               disabled={applying}
-              className="px-4 py-2 text-sm font-medium rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white disabled:opacity-50"
+              className="px-4 py-2 text-sm font-medium rounded-lg bg-sky-600 hover:bg-sky-500 text-white disabled:opacity-50"
             >
               {applying ? 'Applying...' : 'Apply to company profile'}
             </button>
             {applied && (
               <button
                 onClick={() => router.push('/app/admin/company')}
-                className="px-4 py-2 text-sm rounded-lg border border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+                className="px-4 py-2 text-sm rounded-lg border border-sky-500/40 bg-sky-500/10 text-sky-200"
               >
                 Applied. Back to company profile
               </button>
             )}
+            {aiError && <span className="text-sm text-red-300">{aiError}</span>}
+            {!aiEnabled && aiMessage && <span className="text-sm text-amber-300">{aiMessage}</span>}
           </div>
         </div>
       )}

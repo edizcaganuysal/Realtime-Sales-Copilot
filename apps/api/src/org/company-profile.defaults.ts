@@ -17,6 +17,25 @@ export interface OrgCompanyProfileInput {
   doNotSay: string;
 }
 
+export const EMPTY_COMPANY_PROFILE_DEFAULTS: OrgCompanyProfileInput = {
+  companyName: '',
+  productName: '',
+  productSummary: '',
+  idealCustomerProfile: '',
+  valueProposition: '',
+  differentiators: '',
+  proofPoints: '',
+  repTalkingPoints: '',
+  discoveryGuidance: '',
+  qualificationGuidance: '',
+  objectionHandling: '',
+  competitorGuidance: '',
+  pricingGuidance: '',
+  implementationGuidance: '',
+  faq: '',
+  doNotSay: '',
+};
+
 export const GTAPHOTOPRO_COMPANY_PROFILE_DEFAULTS: OrgCompanyProfileInput = {
   companyName: 'GTAPhotoPro',
   productName: 'GTAPhotoPro Real Estate Photo & Media',

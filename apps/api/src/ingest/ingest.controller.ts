@@ -19,6 +19,8 @@ import { IngestService, type UploadedPdfFile } from './ingest.service';
 import { CreateWebsiteIngestDto } from './dto/create-website-ingest.dto';
 import { QualityCompanyDto } from './dto/quality-company.dto';
 import { QualityProductDto } from './dto/quality-product.dto';
+import { AiFieldDraftDto } from './dto/ai-field-draft.dto';
+import { AiFieldImproveDto } from './dto/ai-field-improve.dto';
 
 @Controller('ingest')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -103,5 +105,27 @@ export class QualityController {
   @Roles(Role.MANAGER)
   product(@Body() dto: QualityProductDto) {
     return this.ingestService.qualityProduct(dto);
+  }
+}
+
+@Controller('ai/fields')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(Role.MANAGER)
+export class AiFieldsController {
+  constructor(private readonly ingestService: IngestService) {}
+
+  @Get('status')
+  status() {
+    return this.ingestService.aiFieldsStatus();
+  }
+
+  @Post('draft')
+  draft(@Body() dto: AiFieldDraftDto) {
+    return this.ingestService.aiFieldDraft(dto);
+  }
+
+  @Post('improve')
+  improve(@Body() dto: AiFieldImproveDto) {
+    return this.ingestService.aiFieldImprove(dto);
   }
 }
