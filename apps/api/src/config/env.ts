@@ -17,12 +17,12 @@ export function requireEnv(name: string): string {
 }
 
 export function getWebOrigins(): string[] {
-  const raw = read('WEB_ORIGIN');
+  const raw = read('WEB_ORIGIN') ?? read('CORS_ORIGIN');
   if (!raw) {
-    const key = 'WEB_ORIGIN';
+    const key = 'WEB_ORIGIN_OR_CORS_ORIGIN';
     if (!warned.has(key)) {
       warned.add(key);
-      logger.error('Missing WEB_ORIGIN. Falling back to http://localhost:3000');
+      logger.error('Missing WEB_ORIGIN/CORS_ORIGIN. Falling back to http://localhost:3000');
     }
     return ['http://localhost:3000'];
   }
@@ -34,11 +34,10 @@ export function getWebOrigins(): string[] {
 
   if (origins.length > 0) return origins;
 
-  const key = 'WEB_ORIGIN_EMPTY';
+  const key = 'WEB_ORIGIN_OR_CORS_ORIGIN_EMPTY';
   if (!warned.has(key)) {
     warned.add(key);
-    logger.error('WEB_ORIGIN is empty after parsing. Falling back to http://localhost:3000');
+    logger.error('WEB_ORIGIN/CORS_ORIGIN is empty after parsing. Falling back to http://localhost:3000');
   }
   return ['http://localhost:3000'];
 }
-

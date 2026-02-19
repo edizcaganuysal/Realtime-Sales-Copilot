@@ -8,10 +8,12 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
+import { randomBytes } from 'crypto';
 import { eq } from 'drizzle-orm';
 import { DRIZZLE, DrizzleDb } from '../db/db.module';
 import * as schema from '../db/schema';
 import { SignupDto } from './dto/signup.dto';
+import { GoogleAuthDto } from './dto/google-auth.dto';
 import { EMPTY_COMPANY_PROFILE_DEFAULTS } from '../org/company-profile.defaults';
 
 const FREE_PLAN_ID = 'free';
@@ -72,39 +74,11 @@ export class AuthService {
 
     let created: { orgId: string; user: typeof schema.users.$inferSelect };
     try {
-      created = await this.db.transaction(async (tx) => {
-        const [org] = await tx
-          .insert(schema.orgs)
-          .values({ name: orgName })
-          .returning({ id: schema.orgs.id });
-
-        await tx.insert(schema.orgSettings).values({
-          orgId: org.id,
-          requiresAgentApproval: true,
-          allowRepAgentCreation: true,
-          publisherPolicy: 'ADMIN_AND_MANAGERS',
-          liveLayoutDefault: 'STANDARD',
-          retentionDays: 90,
-        });
-
-        await tx.insert(schema.orgCompanyProfiles).values({
-          orgId: org.id,
-          ...EMPTY_COMPANY_PROFILE_DEFAULTS,
-        });
-
-        const [user] = await tx
-          .insert(schema.users)
-          .values({
-            orgId: org.id,
-            role: 'ADMIN',
-            name,
-            email,
-            passwordHash,
-            status: 'ACTIVE',
-          })
-          .returning();
-
-        return { orgId: org.id, user };
+      created = await this.createOrgAdminUser({
+        name,
+        orgName,
+        email,
+        passwordHash,
       });
     } catch (error) {
       const code = (error as { code?: string })?.code;
@@ -115,6 +89,47 @@ export class AuthService {
     }
 
     await this.assignDefaultPlan(created.orgId, planId);
+
+    return this.buildAuthPayload(created.user);
+  }
+
+  async googleAuth(dto: GoogleAuthDto) {
+    const email = this.normalizeEmail(dto.email);
+    const mode = dto.mode === 'login' ? 'login' : 'signup';
+    const requestedPlanId = dto.planId?.trim().toLowerCase();
+    const normalizedName = dto.name.trim();
+    const fallbackName = email.split('@')[0] || 'Admin User';
+
+    const [existing] = await this.db
+      .select()
+      .from(schema.users)
+      .where(eq(schema.users.email, email))
+      .limit(1);
+
+    if (existing) {
+      if (existing.status !== 'ACTIVE') {
+        throw new UnauthorizedException('Account is not active');
+      }
+      return this.buildAuthPayload(existing);
+    }
+
+    if (mode === 'login') {
+      throw new UnauthorizedException('No account found for this Google user');
+    }
+
+    const orgName = dto.orgName?.trim();
+    if (!orgName) {
+      throw new BadRequestException('Organization name is required');
+    }
+
+    const passwordHash = await bcrypt.hash(randomBytes(32).toString('hex'), 10);
+    const created = await this.createOrgAdminUser({
+      name: normalizedName || fallbackName,
+      orgName,
+      email,
+      passwordHash,
+    });
+    await this.assignDefaultPlan(created.orgId, requestedPlanId);
 
     return this.buildAuthPayload(created.user);
   }
@@ -208,6 +223,48 @@ export class AuthService {
       throw new InternalServerErrorException('Organization settings are missing');
     }
     return existing;
+  }
+
+  private async createOrgAdminUser(input: {
+    name: string;
+    orgName: string;
+    email: string;
+    passwordHash: string;
+  }) {
+    return this.db.transaction(async (tx) => {
+      const [org] = await tx
+        .insert(schema.orgs)
+        .values({ name: input.orgName })
+        .returning({ id: schema.orgs.id });
+
+      await tx.insert(schema.orgSettings).values({
+        orgId: org.id,
+        requiresAgentApproval: true,
+        allowRepAgentCreation: true,
+        publisherPolicy: 'ADMIN_AND_MANAGERS',
+        liveLayoutDefault: 'STANDARD',
+        retentionDays: 90,
+      });
+
+      await tx.insert(schema.orgCompanyProfiles).values({
+        orgId: org.id,
+        ...EMPTY_COMPANY_PROFILE_DEFAULTS,
+      });
+
+      const [user] = await tx
+        .insert(schema.users)
+        .values({
+          orgId: org.id,
+          role: 'ADMIN',
+          name: input.name,
+          email: input.email,
+          passwordHash: input.passwordHash,
+          status: 'ACTIVE',
+        })
+        .returning();
+
+      return { orgId: org.id, user };
+    });
   }
 
   private async assignDefaultPlan(orgId: string, requestedPlanId?: string) {
