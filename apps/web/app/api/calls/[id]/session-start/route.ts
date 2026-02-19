@@ -13,21 +13,18 @@ function missingConfigResponse() {
   return NextResponse.json({ message: getFriendlyConfigMessage() }, { status: 500 });
 }
 
-export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   if (!API) {
     return missingConfigResponse();
   }
 
   const { id } = await params;
-  const body = await req.json().catch(() => ({}));
-  const res = await fetch(`${API}/calls/${id}/suggestions/more`, {
+  const res = await fetch(`${API}/calls/${id}/session-start`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${await token()}`,
-      'Content-Type': 'application/json',
     },
-    body: JSON.stringify(body),
   });
-  const data = await res.json().catch(() => ({ message: 'Unexpected response from API' }));
+  const data = await res.json().catch(() => ({ ok: res.ok }));
   return NextResponse.json(data, { status: res.status });
 }

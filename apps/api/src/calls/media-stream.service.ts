@@ -129,8 +129,7 @@ export class MediaStreamService implements OnApplicationBootstrap {
                   );
 
                   if (!isFinal) {
-                    // Signal engine that someone is speaking (dims suggestions when prospect talks)
-                    this.engineService.signalSpeaking(callId!, spk);
+                    this.engineService.signalSpeaking(callId!, spk, text);
                   }
 
                   if (isFinal) {

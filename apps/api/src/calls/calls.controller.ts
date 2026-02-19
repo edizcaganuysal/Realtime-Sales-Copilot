@@ -277,10 +277,30 @@ export class CallsController {
     return call;
   }
 
+  @Post(':id/session-start')
+  @HttpCode(200)
+  async sessionStart(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    const call = await this.callsService.get(user, id);
+    if (call.status === 'IN_PROGRESS' || call.mode === CallMode.MOCK) {
+      const shouldUseStub = call.mode !== CallMode.MOCK && !this.twilioService.available;
+      this.engineService.start(id, shouldUseStub);
+    }
+    this.engineService.emitSessionStart(id);
+    return { ok: true };
+  }
+
   @Post(':id/suggestions/more')
   @HttpCode(200)
-  moreSuggestions(@Param('id') id: string) {
-    return this.engineService.getAlternatives(id);
+  async moreSuggestions(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: { mode?: 'SWAP' | 'MORE_OPTIONS'; count?: number },
+  ) {
+    await this.callsService.get(user, id);
+    return this.engineService.getAlternatives(id, {
+      mode: body?.mode,
+      count: body?.count,
+    });
   }
 
   @Post('prompt-debug')

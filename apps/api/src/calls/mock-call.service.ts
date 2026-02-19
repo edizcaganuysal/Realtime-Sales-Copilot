@@ -200,8 +200,7 @@ export class MockCallService implements OnApplicationBootstrap {
           if (text) {
             if (!aiSpeechStartedAt) aiSpeechStartedAt = Date.now();
             partialAiText += text;
-            // Signal engine that prospect is speaking
-            this.engineService.signalSpeaking(callId, 'PROSPECT');
+            this.engineService.signalSpeaking(callId, 'PROSPECT', partialAiText);
             this.gateway.emitToCall(callId, 'transcript.partial', {
               speaker: 'PROSPECT',
               text: partialAiText,

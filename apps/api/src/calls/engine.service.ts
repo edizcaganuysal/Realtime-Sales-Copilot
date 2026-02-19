@@ -18,6 +18,7 @@ type StageInfo = {
 
 type CallContext = {
   callId: string;
+  callMode: string;
   guidanceLevel: string;
   agentPrompt: string;
   notes: string | null;
@@ -67,7 +68,12 @@ type EngineTickPayload = {
   objection: string | null;
   sentiment: 'positive' | 'neutral' | 'negative' | null;
   checklistUpdates: Record<string, boolean>;
+  momentTag: string;
 };
+
+type TickReason = 'session_start' | 'prospect_final' | 'prospect_silence' | 'manual_swap' | 'fallback';
+
+type AlternativesMode = 'SWAP' | 'MORE_OPTIONS';
 
 type EngineState = {
   context: CallContext | null;
@@ -84,7 +90,18 @@ type EngineState = {
   suggestionCountTarget: 1 | 3;
   stats: CallStats;
   prospectSpeaking: boolean;
-  pendingTickPayload: EngineTickPayload | null;
+  lastProspectPartialText: string;
+  pendingProspectFinalSegments: string[];
+  pendingProspectFinalTimer: ReturnType<typeof setTimeout> | null;
+  prospectSilenceTimer: ReturnType<typeof setTimeout> | null;
+  prospectUtteranceSeq: number;
+  lastUpdatedUtteranceSeq: number;
+  lastProspectUtteranceText: string;
+  lastUpdateReason: TickReason | null;
+  lastMomentTag: string;
+  sessionStarted: boolean;
+  recentPrimarySuggestions: string[];
+  pendingTickPayload: { reason: TickReason; utteranceSeq: number; payload: EngineTickPayload } | null;
   stubTick: number;
   stubInterval: ReturnType<typeof setInterval> | null;
   llmInterval: ReturnType<typeof setInterval> | null;
@@ -305,6 +322,17 @@ export class EngineService implements OnModuleDestroy {
         talkRatioRep: 50,
       },
       prospectSpeaking: false,
+      lastProspectPartialText: '',
+      pendingProspectFinalSegments: [],
+      pendingProspectFinalTimer: null,
+      prospectSilenceTimer: null,
+      prospectUtteranceSeq: 0,
+      lastUpdatedUtteranceSeq: -1,
+      lastProspectUtteranceText: '',
+      lastUpdateReason: null,
+      lastMomentTag: 'Opening',
+      sessionStarted: false,
+      recentPrimarySuggestions: [],
       pendingTickPayload: null,
       stubTick: 0,
       stubInterval: null,
@@ -326,7 +354,7 @@ export class EngineService implements OnModuleDestroy {
     // Fallback interval — only fires if no transcript-triggered ticks happen
     state.llmInterval = setInterval(() => {
       if (!state.llmInFlight && Date.now() - state.lastLlmCallAt > 15_000) {
-        this.runEngineTick(callId, state).catch((err: Error) =>
+        this.runEngineTick(callId, state, { reason: 'fallback', requireTranscript: true }).catch((err: Error) =>
           this.logger.error(`Engine tick error (${callId}): ${err.message}`),
         );
       }
@@ -339,6 +367,15 @@ export class EngineService implements OnModuleDestroy {
     const state = this.engines.get(callId);
     if (!state || state.cancelled || !state.context) return;
     await this.refreshDynamicContext(callId, state, true);
+  }
+
+  emitSessionStart(callId: string) {
+    const state = this.engines.get(callId);
+    if (!state || state.cancelled) return;
+    state.sessionStarted = true;
+    this.gateway.emitToCall(callId, 'session_start', { tsMs: Date.now() });
+    if (!state.context) return;
+    this.emitInitialSuggestion(callId, state);
   }
 
   /**
@@ -393,30 +430,14 @@ export class EngineService implements OnModuleDestroy {
     // Deterministic checklist completion from turn content.
     this.maybeMarkChecklistFromTurn(callId, state, speaker, text);
 
-    // When PROSPECT finishes a turn → trigger suggestions immediately
     if (speaker === 'PROSPECT') {
-      state.prospectSpeaking = false;
-      this.gateway.emitToCall(callId, 'engine.prospect_speaking', { speaking: false });
-
-      // If we precomputed suggestions while listening, release them instantly now.
-      if (state.pendingTickPayload) {
-        this.emitTickPayload(callId, state, state.pendingTickPayload);
-        state.pendingTickPayload = null;
-        // Do not immediately trigger another tick for the same prospect turn.
-        return;
-      }
-
-      const msSinceLastLlm = Date.now() - state.lastLlmCallAt;
-      if (msSinceLastLlm < 500) {
-        return;
-      }
-
-      // Trigger LLM immediately — no debounce for prospect finish
-      if (!state.llmInFlight) {
-        this.runEngineTick(callId, state).catch((err: Error) =>
-          this.logger.error(`Engine tick (prospect-finish) error (${callId}): ${err.message}`),
-        );
-      }
+      state.lastProspectUtteranceText = text;
+      state.pendingProspectFinalSegments.push(text);
+      this.clearSilenceTimer(state);
+      this.clearFinalDebounceTimer(state);
+      state.pendingProspectFinalTimer = setTimeout(() => {
+        this.finalizeProspectUtterance(callId, state, 'prospect_final');
+      }, 280);
     }
   }
 
@@ -424,28 +445,302 @@ export class EngineService implements OnModuleDestroy {
    * Signal that a speaker started talking (partial transcript).
    * Used to dim/hide suggestions while prospect is speaking.
    */
-  signalSpeaking(callId: string, speaker: string) {
+  signalSpeaking(callId: string, speaker: string, text?: string) {
     const state = this.engines.get(callId);
     if (!state) return;
-    if (speaker === 'PROSPECT' && !state.prospectSpeaking) {
+    if (speaker !== 'PROSPECT') return;
+
+    if (text?.trim()) {
+      state.lastProspectPartialText = text.trim();
+    }
+
+    if (!state.prospectSpeaking) {
       state.prospectSpeaking = true;
       this.gateway.emitToCall(callId, 'engine.prospect_speaking', { speaking: true });
     }
+
+    this.clearSilenceTimer(state);
+    state.prospectSilenceTimer = setTimeout(() => {
+      this.finalizeProspectUtterance(callId, state, 'prospect_silence');
+    }, 1000);
   }
 
   stop(callId: string) {
     const state = this.engines.get(callId);
     if (!state) return;
     state.cancelled = true;
+    this.clearSilenceTimer(state);
+    this.clearFinalDebounceTimer(state);
     if (state.stubInterval) clearInterval(state.stubInterval);
     if (state.llmInterval) clearInterval(state.llmInterval);
     this.engines.delete(callId);
     this.logger.log(`Engine stopped — call ${callId}`);
   }
 
-  async getAlternatives(callId: string): Promise<{ texts: string[] }> {
+  private clearSilenceTimer(state: EngineState) {
+    if (!state.prospectSilenceTimer) return;
+    clearTimeout(state.prospectSilenceTimer);
+    state.prospectSilenceTimer = null;
+  }
+
+  private clearFinalDebounceTimer(state: EngineState) {
+    if (!state.pendingProspectFinalTimer) return;
+    clearTimeout(state.pendingProspectFinalTimer);
+    state.pendingProspectFinalTimer = null;
+  }
+
+  private finalizeProspectUtterance(
+    callId: string,
+    state: EngineState,
+    reason: 'prospect_final' | 'prospect_silence',
+  ) {
+    if (state.cancelled) return;
+
+    this.clearSilenceTimer(state);
+    this.clearFinalDebounceTimer(state);
+
+    const finalText = state.pendingProspectFinalSegments.join(' ').replace(/\s+/g, ' ').trim();
+    state.pendingProspectFinalSegments = [];
+
+    const partialText = state.lastProspectPartialText.replace(/\s+/g, ' ').trim();
+    if (finalText.length > 0) {
+      state.lastProspectUtteranceText = finalText;
+    } else if (
+      reason === 'prospect_silence' &&
+      partialText.length > 0 &&
+      !/^speaking\.\.\.$/i.test(partialText)
+    ) {
+      state.lastProspectUtteranceText = partialText;
+    }
+
+    state.lastProspectPartialText = '';
+    state.prospectSpeaking = false;
+    this.gateway.emitToCall(callId, 'engine.prospect_speaking', { speaking: false });
+
+    const shouldUpdate =
+      state.lastProspectUtteranceText.length > 0 || state.pendingTickPayload !== null;
+    if (!shouldUpdate) {
+      this.gateway.emitToCall(callId, 'engine.debug', {
+        reason,
+        lastProspectUtterance: state.lastProspectUtteranceText,
+        momentTag: state.lastMomentTag,
+        suggestionUpdated: false,
+      });
+      return;
+    }
+
+    state.prospectUtteranceSeq += 1;
+    const utteranceSeq = state.prospectUtteranceSeq;
+
+    if (state.pendingTickPayload) {
+      const pending = state.pendingTickPayload;
+      state.pendingTickPayload = null;
+      this.emitTickPayload(
+        callId,
+        state,
+        pending.payload,
+        pending.reason,
+        pending.utteranceSeq > 0 ? pending.utteranceSeq : utteranceSeq,
+      );
+      return;
+    }
+
+    if (state.llmInFlight) {
+      this.gateway.emitToCall(callId, 'engine.debug', {
+        reason,
+        lastProspectUtterance: state.lastProspectUtteranceText,
+        momentTag: state.lastMomentTag,
+        suggestionUpdated: false,
+      });
+      return;
+    }
+
+    this.runEngineTick(callId, state, { reason, requireTranscript: false, utteranceSeq }).catch(
+      (err: Error) =>
+        this.logger.error(`Engine tick (${reason}) error (${callId}): ${err.message}`),
+    );
+  }
+
+  private emitInitialSuggestion(callId: string, state: EngineState) {
+    if (!state.context) return;
+
+    if (state.transcriptBuffer.length > 0 || state.stats.prospectTurns > 0) {
+      if (!state.llmInFlight) {
+        this.runEngineTick(callId, state, {
+          reason: 'session_start',
+          requireTranscript: false,
+          utteranceSeq: state.prospectUtteranceSeq,
+        }).catch((err: Error) =>
+          this.logger.error(`Engine tick (session_start) error (${callId}): ${err.message}`),
+        );
+      }
+      return;
+    }
+
+    const openingSuggestions = this.buildOpeningSuggestions(
+      state.context.companyProfile,
+      state.context.productContext,
+      state.context.callMode,
+      state.context.notes,
+    );
+    const payload: EngineTickPayload = {
+      suggestions: openingSuggestions,
+      nudges: ['ASK_QUESTION', 'CONFIRM_UNDERSTANDING'].slice(0, 2),
+      cards: this.buildOpeningContextCards(
+        state.context.companyProfile,
+        state.context.productContext,
+      ),
+      objection: null,
+      sentiment: state.stats.sentiment,
+      checklistUpdates: {},
+      momentTag: 'Opening',
+    };
+    this.emitTickPayload(callId, state, payload, 'session_start', state.prospectUtteranceSeq);
+  }
+
+  private publishManualPrimary(callId: string, state: EngineState | null, text: string) {
+    if (!state) return;
+    const cards = state.context
+      ? this.buildOpeningContextCards(state.context.companyProfile, state.context.productContext)
+      : [];
+    const payload: EngineTickPayload = {
+      suggestions: [text],
+      nudges: [],
+      cards,
+      objection: state.stats.objectionDetected,
+      sentiment: state.stats.sentiment,
+      checklistUpdates: {},
+      momentTag: state.lastMomentTag || 'Discovery',
+    };
+    this.emitTickPayload(callId, state, payload, 'manual_swap', state.prospectUtteranceSeq);
+  }
+
+  private computeMomentTag(
+    stageName: string,
+    objection: string | null,
+    sentiment: string | null | undefined,
+  ): string {
+    if (objection === 'BUDGET') return 'Pricing objection';
+    if (objection === 'COMPETITOR') return 'Competitor pressure';
+    if (objection === 'TIMING') return 'Timing concern';
+    if (objection === 'NO_NEED') return 'No-need objection';
+    if (objection === 'AUTHORITY') return 'Decision-maker blocker';
+    const stage = stageName.toLowerCase();
+    if (stage.includes('opening')) return 'Opening';
+    if (stage.includes('discovery')) return 'Discovery';
+    if (stage.includes('objection')) return 'Objection handling';
+    if (stage.includes('next step') || stage.includes('close')) return 'Next-step opportunity';
+    if (sentiment === 'negative') return 'Risk signal';
+    if (sentiment === 'positive') return 'Positive momentum';
+    return 'Discovery';
+  }
+
+  private normalizeMomentTag(
+    raw: string | undefined,
+    stageName: string,
+    objection: string | null,
+    sentiment: string | null | undefined,
+  ) {
+    const cleaned = `${raw ?? ''}`.replace(/\s+/g, ' ').trim();
+    if (cleaned.length > 0) {
+      return cleaned.length > 38 ? `${cleaned.slice(0, 37).trimEnd()}...` : cleaned;
+    }
+    return this.computeMomentTag(stageName, objection, sentiment);
+  }
+
+  private pickDistinctSuggestions(suggestions: string[], maxCount: number): string[] {
+    const selected: string[] = [];
+    for (const suggestion of suggestions) {
+      if (
+        selected.some((item) => this.areSuggestionsSimilar(item, suggestion))
+      ) {
+        continue;
+      }
+      selected.push(suggestion);
+      if (selected.length >= maxCount) break;
+    }
+    if (selected.length > 0) return selected;
+    return suggestions.slice(0, maxCount);
+  }
+
+  private normalizeNudges(raw: string[], state: EngineState): string[] {
+    const picked = Array.from(new Set(raw.filter((item) => ALLOWED_NUDGES.includes(item))));
+    if (picked.length < 2) {
+      if (state.stats.talkRatioRep > 65 && !picked.includes('TOO_MUCH_TALKING')) {
+        picked.push('TOO_MUCH_TALKING');
+      }
+      if (state.stats.objectionDetected && !picked.includes('ADDRESS_OBJECTION')) {
+        picked.push('ADDRESS_OBJECTION');
+      }
+      if (!picked.includes('ASK_QUESTION')) {
+        picked.push('ASK_QUESTION');
+      }
+      if (!picked.includes('CONFIRM_UNDERSTANDING')) {
+        picked.push('CONFIRM_UNDERSTANDING');
+      }
+    }
+    return picked.slice(0, 3);
+  }
+
+  private pickNonRepeatingPrimary(
+    state: EngineState,
+    suggestions: string[],
+    reason: TickReason,
+    utteranceSeq: number,
+  ): string {
+    const ordered = [...suggestions];
+    const fallbackCandidates =
+      state.context?.stages && state.context
+        ? this.buildStageFallbackSuggestions(
+            state.context.companyProfile,
+            state.context.productContext,
+            state.context.stages[state.currentStageIdx]?.name ?? 'Opening',
+            state.stats.objectionDetected,
+            state.lastProspectUtteranceText,
+          )
+        : [];
+    ordered.push(...fallbackCandidates);
+    for (const candidate of ordered) {
+      const isSimilar = state.recentPrimarySuggestions.some((recent) =>
+        this.areSuggestionsSimilar(recent, candidate),
+      );
+      if (!isSimilar) return candidate;
+    }
+    if (reason === 'session_start' || reason === 'manual_swap') {
+      return ordered[0] ?? suggestions[0] ?? '';
+    }
+    const jittered = `${ordered[0] ?? suggestions[0] ?? ''}`.trim();
+    if (!jittered) return '';
+    const variation =
+      utteranceSeq % 2 === 0
+        ? `${jittered} What would make that most useful for you?`
+        : `Would you be open to a quick example specific to your workflow? ${jittered}`;
+    return this.makeSuggestionSpecific(variation, EMPTY_COMPANY_PROFILE_DEFAULTS, jittered);
+  }
+
+  private areSuggestionsSimilar(a: string, b: string): boolean {
+    const ta = new Set(this.tokenizeForRag(a).slice(0, 16));
+    const tb = new Set(this.tokenizeForRag(b).slice(0, 16));
+    if (ta.size === 0 || tb.size === 0) return false;
+    let intersection = 0;
+    for (const token of ta) {
+      if (tb.has(token)) intersection += 1;
+    }
+    const union = ta.size + tb.size - intersection;
+    if (union === 0) return false;
+    return intersection / union >= 0.7;
+  }
+
+  async getAlternatives(
+    callId: string,
+    options?: { mode?: AlternativesMode; count?: number },
+  ): Promise<{ texts: string[] }> {
     const state = this.engines.get(callId);
-    const desiredCount: 1 | 3 = 1;
+    const mode = options?.mode === 'MORE_OPTIONS' ? 'MORE_OPTIONS' : 'SWAP';
+    const requestedCount = Number.isFinite(options?.count)
+      ? Math.max(1, Math.min(2, Number(options?.count)))
+      : 2;
+    const desiredCount = mode === 'MORE_OPTIONS' ? requestedCount : 1;
     const fallbackFromState =
       state?.context
         ? this.buildStageFallbackSuggestions(
@@ -453,17 +748,17 @@ export class EngineService implements OnModuleDestroy {
             state.context.productContext,
             state.context.stages[state.currentStageIdx]?.name ?? 'Opening',
             state.stats.objectionDetected,
-          ).slice(0, desiredCount)
+            state.lastProspectUtteranceText,
+          ).slice(0, Math.max(desiredCount, 3))
         : null;
     const stubAlts = (fallbackFromState ?? [
       'Is now a bad time, or do you have 90 seconds for context?',
     ]).slice(0, desiredCount);
 
     if (!this.llm.available || !state?.context) {
-      this.gateway.emitToCall(callId, 'engine.suggestions', {
-        suggestions: stubAlts,
-        tsMs: Date.now(),
-      });
+      if (mode === 'SWAP' && stubAlts[0]) {
+        this.publishManualPrimary(callId, state ?? null, stubAlts[0]);
+      }
       return { texts: stubAlts };
     }
 
@@ -477,7 +772,9 @@ export class EngineService implements OnModuleDestroy {
       .map((t) => `${t.speaker}: ${t.text}`)
       .join('\n');
     const lastProspectLine =
-      [...state.transcriptBuffer].reverse().find((t) => t.speaker === 'PROSPECT')?.text ?? '';
+      (state.lastProspectUtteranceText ||
+        [...state.transcriptBuffer].reverse().find((t) => t.speaker === 'PROSPECT')?.text) ??
+      '';
     const ragSnippets = this.retrieveCompanySnippets(
       context.companyProfile,
       recentTurns,
@@ -490,37 +787,61 @@ export class EngineService implements OnModuleDestroy {
       stageList,
       [],
       ragSnippets,
-      desiredCount,
+      desiredCount === 1 ? 1 : 3,
+      state.recentPrimarySuggestions,
     );
     const userPrompt =
       (recentTurns ? `Transcript:\n${recentTurns}\n\n` : '') +
       (lastProspectLine ? `Last prospect line (answer this first): ${lastProspectLine}\n\n` : '') +
-      `Generate exactly ${desiredCount} alternative things the REP could say next. Each should be different in approach. ` +
-      `Respond with JSON only: {"suggestions": [${desiredCount === 1 ? '"option 1"' : '"option 1", "option 2", "option 3"'}]}`;
+      `Generate exactly ${desiredCount} alternative things the REP could say next. Each must use a different approach and wording. ` +
+      `Respond with JSON only: {"suggestions": [${desiredCount === 1 ? '"option 1"' : '"option 1", "option 2"'}]}`;
 
     try {
       const raw = await this.llm.chatFast(systemPrompt, userPrompt);
       const parsed = this.llm.parseJson<{ suggestions?: string[] }>(raw, {});
-      const texts = this.normalizeSuggestions(
+      let texts = this.normalizeSuggestions(
         parsed.suggestions ?? [],
         context.companyProfile,
         context.productContext,
         currentStage?.name ?? 'Opening',
         state.stats.objectionDetected,
-        desiredCount,
+        desiredCount === 1 ? 1 : 3,
         lastProspectLine,
       );
-      this.gateway.emitToCall(callId, 'engine.suggestions', {
-        suggestions: texts,
-        tsMs: Date.now(),
-      });
+      if (mode === 'MORE_OPTIONS') {
+        const currentPrimary = state.recentPrimarySuggestions[0] ?? '';
+        const nonRedundant = texts.filter(
+          (candidate) =>
+            currentPrimary.length === 0 ||
+            !this.areSuggestionsSimilar(candidate, currentPrimary),
+        );
+        const fallbackPool = this.buildStageFallbackSuggestions(
+          context.companyProfile,
+          context.productContext,
+          currentStage?.name ?? 'Opening',
+          state.stats.objectionDetected,
+          lastProspectLine,
+        ).filter(
+          (candidate) =>
+            currentPrimary.length === 0 ||
+            !this.areSuggestionsSimilar(candidate, currentPrimary),
+        );
+        texts = this.pickDistinctSuggestions(
+          [...nonRedundant, ...fallbackPool, ...texts],
+          desiredCount,
+        );
+        return { texts: texts.slice(0, desiredCount) };
+      }
+      texts = texts.slice(0, 1);
+      if (texts[0]) {
+        this.publishManualPrimary(callId, state, texts[0]);
+      }
       return { texts };
     } catch (err) {
       this.logger.error(`getAlternatives LLM error (${callId}): ${(err as Error).message}`);
-      this.gateway.emitToCall(callId, 'engine.suggestions', {
-        suggestions: stubAlts,
-        tsMs: Date.now(),
-      });
+      if (mode === 'SWAP' && stubAlts[0]) {
+        this.publishManualPrimary(callId, state, stubAlts[0]);
+      }
       return { texts: stubAlts };
     }
   }
@@ -575,6 +896,7 @@ export class EngineService implements OnModuleDestroy {
 
     const context: CallContext = {
       callId: 'prompt-debug',
+      callMode: 'OUTBOUND',
       guidanceLevel: input.guidance_level ?? 'STANDARD',
       agentPrompt,
       notes: input.notes ?? null,
@@ -594,6 +916,7 @@ export class EngineService implements OnModuleDestroy {
       currentStage.checklist,
       ragSnippets,
       1,
+      [],
     );
     const lastProspectLine = this.extractLastProspectLine(transcript);
     const userPrompt =
@@ -761,26 +1084,9 @@ export class EngineService implements OnModuleDestroy {
       stageName: stages[0]?.name ?? 'Opening',
     });
 
-    // Emit opening suggestions immediately + delayed re-emit to handle race condition
-    // (browser may not have joined the socket room yet)
-    const openingSuggestions = this.buildOpeningSuggestions(companyProfile, productContext);
-    const openingCards = this.buildOpeningContextCards(companyProfile, productContext);
-    const emitOpening = () => {
-      if (state.cancelled || state.transcriptBuffer.length > 0) return;
-      this.gateway.emitToCall(callId, 'engine.suggestions', {
-        suggestions: openingSuggestions,
-        tsMs: Date.now(),
-      });
-      this.gateway.emitToCall(callId, 'engine.context_cards', {
-        cards: openingCards,
-        objection: null,
-      });
-      this.gateway.emitToCall(callId, 'engine.stats', { stats: state.stats });
-    };
-    emitOpening();
-    // Re-emit after 500ms and 1500ms to catch late-joining clients
-    setTimeout(emitOpening, 500);
-    setTimeout(emitOpening, 1500);
+    if (state.sessionStarted) {
+      this.emitInitialSuggestion(callId, state);
+    }
 
     this.logger.log(
       `Engine context loaded — call ${callId}, ${stages.length} stages, guidance: ${call.guidanceLevel}`,
@@ -821,6 +1127,7 @@ export class EngineService implements OnModuleDestroy {
 
     state.context = {
       callId,
+      callMode: call.mode,
       guidanceLevel: call.guidanceLevel,
       agentPrompt,
       notes: call.notes ?? null,
@@ -1134,26 +1441,34 @@ export class EngineService implements OnModuleDestroy {
 
   // ── Private: engine tick ────────────────────────────────────────────────────
 
-  private async runEngineTick(callId: string, state: EngineState) {
+  private async runEngineTick(
+    callId: string,
+    state: EngineState,
+    opts: { reason: TickReason; requireTranscript: boolean; utteranceSeq?: number },
+  ) {
     if (!state.context || state.cancelled || state.llmInFlight) return;
-    if (state.transcriptBuffer.length === 0) return;
+    if (opts.requireTranscript && state.transcriptBuffer.length === 0) return;
 
     state.llmInFlight = true;
     state.lastLlmCallAt = Date.now();
     state.llmCallCount++;
 
     try {
-      if (this.llm.available && state.transcriptBuffer.length > 0) {
-        await this.runLlmTick(callId, state);
+      if (this.llm.available && (state.transcriptBuffer.length > 0 || !opts.requireTranscript)) {
+        await this.runLlmTick(callId, state, opts);
       } else if (!state.prospectSpeaking) {
-        this.runStubTick(callId, state);
+        this.runStubTick(callId, state, opts.reason, opts.utteranceSeq);
       }
     } finally {
       state.llmInFlight = false;
     }
   }
 
-  private async runLlmTick(callId: string, state: EngineState) {
+  private async runLlmTick(
+    callId: string,
+    state: EngineState,
+    opts: { reason: TickReason; requireTranscript: boolean; utteranceSeq?: number },
+  ) {
     const context = state.context;
     if (!context) return;
     const currentStage = context.stages[state.currentStageIdx] ?? context.stages[0];
@@ -1183,9 +1498,12 @@ export class EngineService implements OnModuleDestroy {
       checklistItems,
       ragSnippets,
       desiredCount,
+      state.recentPrimarySuggestions,
     );
     const lastProspectLine =
-      [...state.transcriptBuffer].reverse().find((t) => t.speaker === 'PROSPECT')?.text ?? '';
+      (state.lastProspectUtteranceText ||
+        [...state.transcriptBuffer].reverse().find((t) => t.speaker === 'PROSPECT')?.text) ??
+      '';
     const isQuestion = lastProspectLine.includes('?');
     const userPrompt =
       `Transcript:\n${recentTurns}\n\n` +
@@ -1213,6 +1531,7 @@ export class EngineService implements OnModuleDestroy {
         suggestions?: string[];
         suggestion?: string;
         nudges?: string[];
+        momentTag?: string;
         objection?: string;
         sentiment?: string;
         supportingData?: string[];
@@ -1242,6 +1561,12 @@ export class EngineService implements OnModuleDestroy {
       const productFallback = context.productContext.snippets.slice(0, 3);
       const cardsFromContext = supportingData.length > 0 ? supportingData : fallbackData;
       const cards = [...cardsFromContext, ...productFallback].slice(0, 4);
+      const momentTag = this.normalizeMomentTag(
+        parsed.momentTag,
+        stageForPrompt.name,
+        parsed.objection ?? state.stats.objectionDetected ?? null,
+        parsed.sentiment,
+      );
       const tickPayload: EngineTickPayload = {
         suggestions: normalizedSuggestions,
         nudges,
@@ -1254,41 +1579,104 @@ export class EngineService implements OnModuleDestroy {
             ? parsed.sentiment
             : null,
         checklistUpdates: parsed.checklistUpdates ?? {},
+        momentTag,
       };
 
       if (state.prospectSpeaking) {
-        state.pendingTickPayload = tickPayload;
+        state.pendingTickPayload = {
+          reason: opts.reason,
+          utteranceSeq: opts.utteranceSeq ?? state.prospectUtteranceSeq,
+          payload: tickPayload,
+        };
         return;
       }
 
-      this.emitTickPayload(callId, state, tickPayload);
+      this.emitTickPayload(
+        callId,
+        state,
+        tickPayload,
+        opts.reason,
+        opts.utteranceSeq ?? state.prospectUtteranceSeq,
+      );
     } catch (err) {
       this.logger.error(`LLM tick error (${callId}): ${(err as Error).message}`);
-      this.runStubTick(callId, state);
+      this.runStubTick(callId, state, opts.reason, opts.utteranceSeq);
     }
   }
 
-  private emitTickPayload(callId: string, state: EngineState, payload: EngineTickPayload) {
+  private emitTickPayload(
+    callId: string,
+    state: EngineState,
+    payload: EngineTickPayload,
+    reason: TickReason,
+    utteranceSeq: number,
+  ) {
+    if (
+      reason !== 'session_start' &&
+      reason !== 'manual_swap' &&
+      utteranceSeq <= state.lastUpdatedUtteranceSeq
+    ) {
+      this.gateway.emitToCall(callId, 'engine.debug', {
+        reason,
+        lastProspectUtterance: state.lastProspectUtteranceText,
+        momentTag: payload.momentTag,
+        suggestionUpdated: false,
+      });
+      return;
+    }
+
+    const dedupedSuggestions = this.pickDistinctSuggestions(payload.suggestions, 3);
+    const normalizedNudges = this.normalizeNudges(payload.nudges, state);
+    const antiRepeatedPrimary = this.pickNonRepeatingPrimary(
+      state,
+      dedupedSuggestions,
+      reason,
+      utteranceSeq,
+    );
+    const suggestionsForEmit = antiRepeatedPrimary
+      ? [antiRepeatedPrimary, ...dedupedSuggestions.filter((s) => s !== antiRepeatedPrimary)].slice(0, 3)
+      : dedupedSuggestions;
+
     this.gateway.emitToCall(callId, 'engine.suggestions', {
-      suggestions: payload.suggestions,
+      suggestions: suggestionsForEmit,
       tsMs: Date.now(),
     });
 
-    if (payload.suggestions[0]) {
+    if (suggestionsForEmit[0]) {
       this.gateway.emitToCall(callId, 'engine.primary_suggestion', {
-        text: payload.suggestions[0],
+        text: suggestionsForEmit[0],
         tsMs: Date.now(),
       });
     }
 
-    this.gateway.emitToCall(callId, 'engine.nudges', { nudges: payload.nudges });
+    this.gateway.emitToCall(callId, 'engine.nudges', { nudges: normalizedNudges });
     this.gateway.emitToCall(callId, 'engine.context_cards', {
       cards: payload.cards,
       objection: payload.objection,
     });
+    this.gateway.emitToCall(callId, 'engine.moment', {
+      tag: payload.momentTag,
+      tsMs: Date.now(),
+    });
 
     if (payload.objection) state.stats.objectionDetected = payload.objection;
     if (payload.sentiment) state.stats.sentiment = payload.sentiment;
+    state.lastMomentTag = payload.momentTag;
+    state.lastUpdateReason = reason;
+    state.lastUpdatedUtteranceSeq = utteranceSeq;
+    if (suggestionsForEmit[0]) {
+      state.recentPrimarySuggestions = [
+        suggestionsForEmit[0],
+        ...state.recentPrimarySuggestions.filter((item) => item !== suggestionsForEmit[0]),
+      ].slice(0, 5);
+    }
+
+    this.gateway.emitToCall(callId, 'engine.debug', {
+      reason,
+      lastProspectUtterance: state.lastProspectUtteranceText,
+      momentTag: payload.momentTag,
+      suggestionUpdated: true,
+    });
     this.gateway.emitToCall(callId, 'engine.stats', { stats: state.stats });
 
     this.applyChecklistUpdates(callId, state, payload.checklistUpdates);
@@ -1421,7 +1809,12 @@ export class EngineService implements OnModuleDestroy {
     return label.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   }
 
-  private runStubTick(callId: string, state: EngineState) {
+  private runStubTick(
+    callId: string,
+    state: EngineState,
+    reason: TickReason,
+    utteranceSeq?: number,
+  ) {
     const n = state.llmCallCount;
     const context = state.context;
     const guidanceLevel = context?.guidanceLevel ?? 'STANDARD';
@@ -1451,28 +1844,13 @@ export class EngineService implements OnModuleDestroy {
       productContext,
       stageName,
       state.stats.objectionDetected,
-    ).slice(0, desiredCount);
-    this.gateway.emitToCall(callId, 'engine.suggestions', {
-      suggestions,
-      tsMs: Date.now(),
-    });
-    this.gateway.emitToCall(callId, 'engine.primary_suggestion', {
-      text: suggestions[0],
-      tsMs: Date.now(),
-    });
-    this.gateway.emitToCall(callId, 'engine.prospect_speaking', { speaking: false });
-    this.gateway.emitToCall(callId, 'engine.context_cards', {
-      cards: this.buildOpeningContextCards(companyProfile, productContext),
-      objection: state.stats.objectionDetected,
-    });
+      state.lastProspectUtteranceText,
+    ).slice(0, Math.max(desiredCount, 3));
 
-    if (guidanceLevel !== 'MINIMAL') {
-      this.gateway.emitToCall(callId, 'engine.nudges', {
-        nudges: [STUB_NUDGES[n % STUB_NUDGES.length]!],
-      });
-    } else {
-      this.gateway.emitToCall(callId, 'engine.nudges', { nudges: [] });
-    }
+    const nudges =
+      guidanceLevel !== 'MINIMAL'
+        ? [STUB_NUDGES[n % STUB_NUDGES.length]!]
+        : [];
 
     if (state.checklistState.length > 0) {
       const doneCount = Math.min(Math.floor(n / 2), state.checklistState.length);
@@ -1484,19 +1862,38 @@ export class EngineService implements OnModuleDestroy {
       this.advanceStageIfChecklistCompleted(callId, state);
     }
 
-    this.gateway.emitToCall(callId, 'engine.stats', { stats: state.stats });
+    const tickPayload: EngineTickPayload = {
+      suggestions,
+      nudges,
+      cards: this.buildOpeningContextCards(companyProfile, productContext),
+      objection: state.stats.objectionDetected,
+      sentiment: state.stats.sentiment,
+      checklistUpdates: {},
+      momentTag: this.computeMomentTag(stageName, state.stats.objectionDetected, state.stats.sentiment),
+    };
+    this.emitTickPayload(
+      callId,
+      state,
+      tickPayload,
+      reason,
+      utteranceSeq ?? state.prospectUtteranceSeq,
+    );
   }
 
   private emitStubTranscript(callId: string, state: EngineState) {
     state.stubTick++;
     const t = state.stubTick;
+    const partialSpeaker = t % 6 < 3 ? 'REP' : 'PROSPECT';
 
     if (t % 2 === 1) {
       this.gateway.emitToCall(callId, 'transcript.partial', {
-        speaker: t % 6 < 3 ? 'REP' : 'PROSPECT',
+        speaker: partialSpeaker,
         text: `Speaking...`,
         tsMs: Date.now(),
       });
+      if (partialSpeaker === 'PROSPECT') {
+        this.signalSpeaking(callId, 'PROSPECT', 'Speaking...');
+      }
     }
 
     if (t % 5 === 0) {
@@ -1504,16 +1901,15 @@ export class EngineService implements OnModuleDestroy {
       const speaker = isRep ? 'REP' : 'PROSPECT';
       const lines = isRep ? STUB_TRANSCRIPT_REP : STUB_TRANSCRIPT_PROSPECT;
       const text = lines[Math.floor(t / 5) % lines.length]!;
-
-      state.transcriptBuffer.push({ speaker, text, tsMs: Date.now() });
-      if (state.transcriptBuffer.length > 30) state.transcriptBuffer.shift();
+      const tsMs = Date.now();
 
       this.gateway.emitToCall(callId, 'transcript.final', {
         speaker,
         text,
-        tsMs: Date.now(),
+        tsMs,
         isFinal: true,
       });
+      this.pushTranscript(callId, speaker, text);
     }
   }
 
@@ -1955,6 +2351,7 @@ export class EngineService implements OnModuleDestroy {
     checklistItems?: string[],
     ragSnippets: RagSnippet[] = [],
     suggestionCount: 1 | 3 = 3,
+    recentPrimarySuggestions: string[] = [],
   ): string {
     const stages = context.stages;
     const list =
@@ -1987,6 +2384,10 @@ export class EngineService implements OnModuleDestroy {
             .map((line, index) => `${index + 1}. ${line}`)
             .join('\n')
         : 'No product snippets available.';
+    const recentSuggestionSection =
+      recentPrimarySuggestions.length > 0
+        ? recentPrimarySuggestions.map((item, index) => `${index + 1}. ${item}`).join('\n')
+        : 'No recent suggestions yet.';
 
     let nudgeRule: string;
     if (context.guidanceLevel === 'MINIMAL') {
@@ -2022,6 +2423,7 @@ export class EngineService implements OnModuleDestroy {
       `Current stage: "${currentStage.name}"\n` +
       `Call notes: ${context.notes ?? 'None'}\n` +
       `Guidance: ${context.guidanceLevel}\n\n` +
+      `Recent primary suggestions to avoid repeating:\n${recentSuggestionSection}\n\n` +
       `Respond ONLY with a JSON object. Rules:\n` +
       `- "stage": current stage name\n` +
       `- "suggestions": array of EXACTLY ${suggestionCount} primary suggestion${suggestionCount === 1 ? '' : 's'} the REP should say next.\n` +
@@ -2029,7 +2431,14 @@ export class EngineService implements OnModuleDestroy {
       `Output contract:\n` +
       `- Return one primary suggestion in 1-2 sentences.\n` +
       `- Return up to 3 nudges.\n` +
+      `- Return one short "momentTag" (2-4 words).\n` +
       `- Do not hallucinate. If context lacks a fact, state uncertainty and ask a qualifier.\n\n` +
+      `Base coaching quality rules:\n` +
+      `- Prioritize rapport + reason + one question in openings.\n` +
+      `- Run discovery before pitching.\n` +
+      `- Objection flow: acknowledge, clarify, respond, confirm.\n` +
+      `- Every response must move toward a next step.\n` +
+      `- Avoid repeating any recent primary suggestion structure.\n\n` +
       `CRITICAL SUGGESTION RULES (follow these strictly):\n` +
       `1. READ THE LAST PROSPECT LINE CAREFULLY. Your suggestion MUST directly respond to what they said or asked.\n` +
       `2. If the prospect asked a QUESTION (pricing, features, timeline, etc.), your suggestion must ANSWER that specific question using data from context. Do NOT deflect or pivot to unrelated stats.\n` +
@@ -2047,6 +2456,7 @@ export class EngineService implements OnModuleDestroy {
       `14. Use product context baseline in every suggestion. If product mode is SELECTED, prioritize only selected products.\n` +
       `\n` +
       `- "supportingData": up to 4 concise factual bullets the rep can cite from the provided company context.\n` +
+      `- "momentTag": short tag for call moment, like "Discovery" or "Pricing objection"\n` +
       `- "objection": if prospect raised an objection, one of: BUDGET, COMPETITOR, TIMING, NO_NEED, AUTHORITY, or null\n` +
       `- "sentiment": prospect mood — "positive", "neutral", or "negative"\n` +
       nudgeRule +
@@ -2060,6 +2470,8 @@ export class EngineService implements OnModuleDestroy {
   private buildOpeningSuggestions(
     company: CompanyProfile,
     productContext: ProductContext,
+    callMode: string,
+    notes: string | null,
   ): string[] {
     const numericProof =
       this
@@ -2068,8 +2480,21 @@ export class EngineService implements OnModuleDestroy {
     const productLabel =
       productContext.names[0] || company.productName || 'your service';
     const companyName = company.companyName || 'our team';
+    const isDiscovery = /follow|discovery|existing|renewal|next step|check-in/i.test(
+      `${notes ?? ''}`.toLowerCase(),
+    );
+    if (isDiscovery) {
+      return [
+        `Hi, this is ${companyName} following up on ${productLabel}. Would it help if we start with your current process and one goal for this week?`,
+      ];
+    }
+    if (callMode === 'OUTBOUND') {
+      return [
+        `Hi, this is ${companyName}. Quick reason for my call on ${productLabel}: ${numericProof} What usually slows your listings down the most today?`,
+      ];
+    }
     return [
-      `Hi, this is ${companyName} about ${productLabel}. Is now a bad time, or do you have 90 seconds? ${numericProof}`,
+      `Hi, this is ${companyName} on ${productLabel}. Is now a bad time, or can I ask one quick question about your current workflow?`,
     ];
   }
 
