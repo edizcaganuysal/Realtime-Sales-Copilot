@@ -39,7 +39,7 @@ export function SiteShell({ children }: { children: React.ReactNode }) {
               Login
             </Link>
             <Link
-              href="/book-demo?type=signup"
+              href="/signup"
               className="hidden rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-100 sm:inline-flex"
             >
               Sign up
