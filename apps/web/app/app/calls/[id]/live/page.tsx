@@ -1,26 +1,33 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback, use } from 'react';
-import { useRouter } from 'next/navigation';
+import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { io, Socket } from 'socket.io-client';
 import {
-  PhoneOff,
-  PhoneCall,
+  AlertTriangle,
+  Bot,
+  Copy,
+  Ellipsis,
+  MessageSquareText,
   Mic,
   MicOff,
-  Bot,
-  ChevronUp,
-  ChevronDown,
-  AlertTriangle,
-  Zap,
-  MessageSquare,
-  Volume2,
+  PhoneCall,
+  PhoneOff,
 } from 'lucide-react';
+import { Modal } from '@/components/ui/modal';
 
-const WS_URL = process.env['NEXT_PUBLIC_WS_URL'] ?? process.env['NEXT_PUBLIC_API_URL'] ?? 'http://localhost:3001';
+const WS_URL =
+  process.env['NEXT_PUBLIC_WS_URL'] ??
+  process.env['NEXT_PUBLIC_API_URL'] ??
+  'http://localhost:3001';
 const API_WS_URL = WS_URL.replace(/^http/, 'ws');
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+type Role = 'ADMIN' | 'MANAGER' | 'REP';
+
+type ProductRef = {
+  id: string;
+  name: string;
+};
 
 type CallData = {
   id: string;
@@ -33,12 +40,13 @@ type CallData = {
   availableProducts?: ProductRef[];
 };
 
-type ProductRef = {
-  id: string;
-  name: string;
+type TranscriptLine = {
+  speaker: string;
+  text: string;
+  tsMs: number;
+  isFinal?: boolean;
+  _seq?: number;
 };
-
-type TranscriptLine = { speaker: string; text: string; tsMs: number; isFinal?: boolean; _seq?: number };
 
 type CallStats = {
   repTurns: number;
@@ -51,43 +59,35 @@ type CallStats = {
   talkRatioRep: number;
 };
 
-type Nudge = {
-  id: string;
-  text: string;
-  severity: 'info' | 'warn' | 'alert';
-  icon: 'pace' | 'talk' | 'question' | 'objection' | 'tone' | 'confirm';
+type DebugPayload = {
+  reason: string;
+  lastProspectUtterance: string;
+  momentTag: string;
+  suggestionUpdated: boolean;
 };
 
-type LiveDisplaySettings = {
-  showStats: boolean;
-  showChecklist: boolean;
-  showTranscript: boolean;
+type ContextToast = {
+  cards: string[];
+  objection: string | null;
+  tsMs: number;
 };
-
-const LIVE_SETTINGS_KEY = 'live_call_display_settings';
-const LIVE_SETTINGS_DEFAULTS: LiveDisplaySettings = {
-  showStats: true,
-  showChecklist: true,
-  showTranscript: true,
-};
-
-// ─── Timer ────────────────────────────────────────────────────────────────────
 
 function useTimer(startedAt: string | null) {
   const [elapsed, setElapsed] = useState(0);
+
   useEffect(() => {
     if (!startedAt) return;
-    const base = Date.now() - new Date(startedAt).getTime();
-    setElapsed(base);
-    const id = setInterval(() => setElapsed(Date.now() - new Date(startedAt).getTime()), 1000);
+    setElapsed(Date.now() - new Date(startedAt).getTime());
+    const id = setInterval(() => {
+      setElapsed(Date.now() - new Date(startedAt).getTime());
+    }, 1000);
     return () => clearInterval(id);
   }, [startedAt]);
-  const s = Math.floor(elapsed / 1000);
-  const m = Math.floor(s / 60);
-  return `${m}:${String(s % 60).padStart(2, '0')}`;
-}
 
-// ─── Mock call audio hook ────────────────────────────────────────────────────
+  const seconds = Math.floor(elapsed / 1000);
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}:${String(seconds % 60).padStart(2, '0')}`;
+}
 
 function useMockAudio(callId: string, isMock: boolean, isActive: boolean) {
   const wsRef = useRef<WebSocket | null>(null);
@@ -106,8 +106,14 @@ function useMockAudio(callId: string, isMock: boolean, isActive: boolean) {
       isPlayingRef.current = false;
       return;
     }
+
     isPlayingRef.current = true;
-    const chunk = audioQueueRef.current.shift()!;
+    const chunk = audioQueueRef.current.shift();
+    if (!chunk) {
+      isPlayingRef.current = false;
+      return;
+    }
+
     const buffer = ctx.createBuffer(1, chunk.length, 24000);
     buffer.copyToChannel(new Float32Array(chunk), 0);
     const source = ctx.createBufferSource();
@@ -117,19 +123,24 @@ function useMockAudio(callId: string, isMock: boolean, isActive: boolean) {
     source.start();
   }, []);
 
-  const enqueueAudio = useCallback((base64: string) => {
-    const bytes = atob(base64);
-    const samples = new Int16Array(bytes.length / 2);
-    for (let i = 0; i < samples.length; i++) {
-      samples[i] = bytes.charCodeAt(i * 2) | (bytes.charCodeAt(i * 2 + 1) << 8);
-    }
-    const float32 = new Float32Array(samples.length);
-    for (let i = 0; i < samples.length; i++) {
-      float32[i] = samples[i]! / 32768;
-    }
-    audioQueueRef.current.push(float32);
-    if (!isPlayingRef.current) playNextChunk();
-  }, [playNextChunk]);
+  const enqueueAudio = useCallback(
+    (base64: string) => {
+      const bytes = atob(base64);
+      const samples = new Int16Array(bytes.length / 2);
+      for (let i = 0; i < samples.length; i += 1) {
+        samples[i] = bytes.charCodeAt(i * 2) | (bytes.charCodeAt(i * 2 + 1) << 8);
+      }
+      const float32 = new Float32Array(samples.length);
+      for (let i = 0; i < samples.length; i += 1) {
+        float32[i] = samples[i]! / 32768;
+      }
+      audioQueueRef.current.push(float32);
+      if (!isPlayingRef.current) {
+        playNextChunk();
+      }
+    },
+    [playNextChunk],
+  );
 
   useEffect(() => {
     if (!isMock || !isActive) return;
@@ -139,9 +150,18 @@ function useMockAudio(callId: string, isMock: boolean, isActive: boolean) {
     async function start() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          audio: { sampleRate: 24000, channelCount: 1, echoCancellation: true, noiseSuppression: true },
+          audio: {
+            sampleRate: 24000,
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+          },
         });
-        if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
+        if (cancelled) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+
         streamRef.current = stream;
         setMicActive(true);
 
@@ -161,375 +181,241 @@ function useMockAudio(callId: string, isMock: boolean, isActive: boolean) {
 
         ws.onmessage = (event) => {
           try {
-            const msg = JSON.parse(event.data as string);
+            const msg = JSON.parse(event.data as string) as {
+              type: 'ready' | 'audio' | 'error';
+              data?: string;
+              message?: string;
+            };
             if (msg.type === 'ready') {
               setMockReady(true);
-            } else if (msg.type === 'audio') {
-              enqueueAudio(msg.data);
-            } else if (msg.type === 'error') {
-              console.error('Mock stream error:', msg.message);
+              return;
             }
-          } catch { /* ignore */ }
+            if (msg.type === 'audio' && msg.data) {
+              enqueueAudio(msg.data);
+              return;
+            }
+            if (msg.type === 'error') {
+              console.error(msg.message ?? 'Mock stream error');
+            }
+          } catch {
+            return;
+          }
         };
 
-        ws.onerror = () => console.error('Mock stream WS error');
-        ws.onclose = () => setMockReady(false);
+        ws.onerror = () => {
+          console.error('Mock stream websocket error');
+        };
 
-        processor.onaudioprocess = (e) => {
+        ws.onclose = () => {
+          setMockReady(false);
+        };
+
+        processor.onaudioprocess = (event) => {
           if (ws.readyState !== WebSocket.OPEN) return;
-          const input = e.inputBuffer.getChannelData(0);
+          const input = event.inputBuffer.getChannelData(0);
           const pcm16 = new Int16Array(input.length);
-          for (let i = 0; i < input.length; i++) {
-            const s = Math.max(-1, Math.min(1, input[i]!));
-            pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+          for (let i = 0; i < input.length; i += 1) {
+            const sample = Math.max(-1, Math.min(1, input[i]!));
+            pcm16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
           }
-          const u8 = new Uint8Array(pcm16.buffer);
+          const bytes = new Uint8Array(pcm16.buffer);
           let binary = '';
-          for (let i = 0; i < u8.length; i++) binary += String.fromCharCode(u8[i]!);
+          for (let i = 0; i < bytes.length; i += 1) {
+            binary += String.fromCharCode(bytes[i]!);
+          }
           ws.send(JSON.stringify({ type: 'audio', data: btoa(binary) }));
         };
-      } catch (err) {
-        console.error('Failed to start mock audio:', err);
+      } catch (error) {
+        console.error('Unable to initialize practice audio', error);
         setMicActive(false);
       }
     }
 
-    start();
+    void start();
 
     return () => {
       cancelled = true;
       processorRef.current?.disconnect();
-      streamRef.current?.getTracks().forEach((t) => t.stop());
-      ctxRef.current?.close();
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      void ctxRef.current?.close();
       wsRef.current?.close();
       audioQueueRef.current = [];
       isPlayingRef.current = false;
       setMicActive(false);
       setMockReady(false);
     };
-  }, [isMock, isActive, callId, enqueueAudio]);
+  }, [callId, enqueueAudio, isActive, isMock]);
 
   return { micActive, mockReady };
 }
 
-// ─── Nudge helpers ───────────────────────────────────────────────────────────
-
-const NUDGE_CONFIG: Record<string, { text: string; severity: Nudge['severity']; icon: Nudge['icon'] }> = {
-  ASK_QUESTION: { text: 'Ask a question', severity: 'info', icon: 'question' },
-  ADDRESS_OBJECTION: { text: 'Address objection', severity: 'alert', icon: 'objection' },
-  TOO_MUCH_TALKING: { text: 'You\'re talking too much — ask a question', severity: 'warn', icon: 'talk' },
-  MISSING_NEXT_STEP: { text: 'Propose a next step', severity: 'warn', icon: 'confirm' },
-  SOFTEN_TONE: { text: 'Soften your tone', severity: 'warn', icon: 'tone' },
-  SLOW_DOWN: { text: 'Slow down', severity: 'info', icon: 'pace' },
-  CONFIRM_UNDERSTANDING: { text: 'Confirm understanding', severity: 'info', icon: 'confirm' },
+const NUDGE_LABELS: Record<string, string> = {
+  ASK_QUESTION: 'Ask one question',
+  ADDRESS_OBJECTION: 'Address concern',
+  TOO_MUCH_TALKING: 'Let them speak',
+  MISSING_NEXT_STEP: 'Push next step',
+  SOFTEN_TONE: 'Soften tone',
+  SLOW_DOWN: 'Slow down',
+  CONFIRM_UNDERSTANDING: 'Confirm understanding',
 };
 
-function parseNudges(raw: string[], stats: CallStats): Nudge[] {
-  const nudges: Nudge[] = [];
-
-  // Always add talk ratio nudge if too high
-  if (stats.talkRatioRep > 65 && stats.repTurns + stats.prospectTurns > 2) {
-    nudges.push({
-      id: 'talk_ratio',
-      text: `You're at ${stats.talkRatioRep}% talk time — let them speak`,
-      severity: stats.talkRatioRep > 75 ? 'alert' : 'warn',
-      icon: 'talk',
-    });
-  }
-
-  // Add LLM-suggested nudges
+function parseNudges(raw: string[]): string[] {
+  const picked: string[] = [];
   for (const key of raw) {
-    const cfg = NUDGE_CONFIG[key];
-    if (cfg && !nudges.some((n) => n.icon === cfg.icon)) {
-      nudges.push({ id: key, ...cfg });
-    }
+    const label = NUDGE_LABELS[key];
+    if (!label) continue;
+    if (picked.includes(label)) continue;
+    picked.push(label);
+    if (picked.length === 3) break;
   }
-
-  return nudges.slice(0, 3);
+  return picked;
 }
 
-function NudgeIcon({ icon }: { icon: Nudge['icon'] }) {
-  const size = 13;
-  switch (icon) {
-    case 'pace': return <Zap size={size} />;
-    case 'talk': return <Volume2 size={size} />;
-    case 'question': return <MessageSquare size={size} />;
-    case 'objection': return <AlertTriangle size={size} />;
-    case 'tone': return <Volume2 size={size} />;
-    case 'confirm': return <MessageSquare size={size} />;
-    default: return <Zap size={size} />;
+function shortenSuggestion(text: string) {
+  const sentence = text.split(/(?<=[.!?])\s+/)[0] ?? text;
+  const words = sentence.trim().split(/\s+/).filter(Boolean);
+  if (words.length <= 16) {
+    return sentence.trim();
   }
+  return `${words.slice(0, 16).join(' ')}...`;
 }
 
-// ─── Sub-components ──────────────────────────────────────────────────────────
+function formatCredits(value: number | null) {
+  if (value === null) return '--';
+  return new Intl.NumberFormat('en-US').format(value);
+}
 
-function NextLineCard({
-  suggestion,
-  prospectSpeaking,
-  onSwap,
+function speakerLabel(speaker: string) {
+  return speaker === 'REP' ? 'YOU' : 'PROSPECT';
+}
+
+export default function LiveCallPage({
+  params,
 }: {
-  suggestion: string | null;
-  prospectSpeaking: boolean;
-  onSwap: () => void;
+  params: Promise<{ id: string }>;
 }) {
-  if (prospectSpeaking) {
-    return (
-      <div className="bg-slate-900/80 border border-slate-700/50 rounded-2xl p-6 text-center">
-        <div className="flex items-center justify-center gap-2 mb-2">
-          <span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse" />
-          <span className="text-sky-400 text-xs font-medium uppercase tracking-widest">Prospect speaking</span>
-        </div>
-        <p className="text-slate-500 text-sm">Listening...</p>
-      </div>
-    );
-  }
-
-  if (!suggestion) {
-    return (
-      <div className="bg-slate-900/80 border border-slate-700/50 rounded-2xl p-6 text-center">
-        <p className="text-slate-600 text-sm">Waiting for conversation to start...</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="bg-gradient-to-br from-emerald-950/60 to-slate-900/80 border border-sky-500/30 rounded-2xl p-5">
-      <div className="flex items-center justify-between mb-3">
-        <span className="text-sky-400 text-[11px] font-semibold uppercase tracking-widest">Say this</span>
-        <button
-          onClick={onSwap}
-          className="text-[10px] text-slate-500 hover:text-slate-300 px-2 py-0.5 rounded border border-slate-700 hover:border-slate-500 transition-colors"
-        >
-          Swap
-        </button>
-      </div>
-      <p className="text-white text-base leading-relaxed font-medium">{suggestion}</p>
-    </div>
-  );
-}
-
-function MicroNudges({ nudges }: { nudges: Nudge[] }) {
-  if (nudges.length === 0) return null;
-
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      {nudges.map((nudge) => (
-        <div
-          key={nudge.id}
-          className={`
-            flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium
-            ${nudge.severity === 'alert'
-              ? 'bg-red-950/60 text-red-400 border border-red-500/30'
-              : nudge.severity === 'warn'
-                ? 'bg-amber-950/60 text-amber-400 border border-amber-500/30'
-                : 'bg-slate-800/60 text-slate-400 border border-slate-700/50'
-            }
-          `}
-        >
-          <NudgeIcon icon={nudge.icon} />
-          {nudge.text}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function ContextCards({ cards, objection }: { cards: string[]; objection: string | null }) {
-  if (cards.length === 0 && !objection) return null;
-
-  const objectionLabels: Record<string, { label: string; tip: string }> = {
-    BUDGET: { label: 'Pricing objection', tip: 'Acknowledge cost, then quantify value or offer a smaller pilot.' },
-    COMPETITOR: { label: 'Competitor raised', tip: 'Ask what works and what doesn\'t, then differentiate on specifics.' },
-    TIMING: { label: 'Timing concern', tip: 'Align to their timeline. Offer a low-commitment next step.' },
-    NO_NEED: { label: 'No-need objection', tip: 'Ask one diagnostic question to uncover a hidden pain point.' },
-    AUTHORITY: { label: 'Authority blocker', tip: 'Help them build an internal case. Offer materials they can share.' },
-  };
-
-  const obj = objection ? objectionLabels[objection] : null;
-
-  return (
-    <div className="space-y-2">
-      {obj && (
-        <div className="px-4 py-3 rounded-xl bg-amber-950/40 border border-amber-500/25">
-          <div className="flex items-center gap-2 mb-1.5">
-            <AlertTriangle size={14} className="text-amber-400 shrink-0" />
-            <span className="text-amber-300 text-sm font-semibold">{obj.label}</span>
-          </div>
-          <p className="text-amber-200/70 text-sm leading-relaxed">{obj.tip}</p>
-        </div>
-      )}
-      <div className="flex items-start gap-1.5 flex-wrap">
-        <span className="text-[10px] text-slate-600 uppercase tracking-widest font-medium mt-1 mr-1">Data you can use:</span>
-      </div>
-      <div className="grid gap-2">
-        {cards.map((card, i) => (
-          <div key={i} className="px-4 py-2.5 rounded-xl bg-slate-800/50 border border-slate-700/40">
-            <p className="text-slate-300 text-sm leading-relaxed">{card}</p>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function MiniStats({ stats }: { stats: CallStats }) {
-  const repPct = Math.max(0, Math.min(100, stats.talkRatioRep));
-  return (
-    <div className="flex items-center gap-3 text-[10px] text-slate-500">
-      <span>Talk {repPct}%/{100 - repPct}%</span>
-      <span className="text-slate-700">|</span>
-      <span>Qs: {stats.repQuestions}</span>
-      <span className="text-slate-700">|</span>
-      <span className={stats.sentiment === 'positive' ? 'text-sky-500' : stats.sentiment === 'negative' ? 'text-red-400' : ''}>
-        {stats.sentiment === 'positive' ? 'Positive' : stats.sentiment === 'negative' ? 'Negative' : 'Neutral'}
-      </span>
-    </div>
-  );
-}
-
-function TranscriptDrawer({ lines, isOpen, onToggle }: {
-  lines: TranscriptLine[];
-  isOpen: boolean;
-  onToggle: () => void;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
-  }, [lines]);
-
-  const lastTwo = lines.slice(-4);
-
-  return (
-    <div className="border-t border-slate-800 bg-slate-900/50">
-      <button
-        onClick={onToggle}
-        className="w-full flex items-center justify-between px-4 py-2 text-xs text-slate-500 hover:text-slate-300 transition-colors"
-      >
-        <div className="flex items-center gap-2">
-          <span className="uppercase tracking-wider font-medium">Transcript</span>
-          {!isOpen && lastTwo.length > 0 && (
-            <span className="text-slate-600 truncate max-w-[300px]">
-              {lastTwo[lastTwo.length - 1]?.speaker}: {lastTwo[lastTwo.length - 1]?.text.slice(0, 60)}...
-            </span>
-          )}
-        </div>
-        {isOpen ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
-      </button>
-
-      {isOpen && (
-        <div ref={ref} className="max-h-60 overflow-y-auto px-4 pb-3 space-y-2">
-          {lines.length === 0 ? (
-            <p className="text-slate-700 text-xs text-center py-2">Transcript will appear here...</p>
-          ) : (
-            lines.map((l, i) => (
-              <div key={`${l._seq ?? i}-${l.tsMs}`} className="flex gap-2">
-                <span className={`text-[10px] font-mono shrink-0 w-16 pt-0.5 ${
-                  l.speaker === 'REP' ? 'text-blue-400' : 'text-slate-500'
-                }`}>
-                  {l.speaker === 'REP' ? 'YOU' : 'THEM'}
-                </span>
-                <span className="text-xs text-slate-300 leading-relaxed">{l.text}</span>
-              </div>
-            ))
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── Main page ────────────────────────────────────────────────────────────────
-
-export default function LiveCallPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const [call, setCall] = useState<CallData | null>(null);
-  const [callStatus, setCallStatus] = useState<string>('INITIATED');
+  const [callStatus, setCallStatus] = useState('INITIATED');
   const [connected, setConnected] = useState(false);
   const [transcript, setTranscript] = useState<TranscriptLine[]>([]);
+  const [partialProspectText, setPartialProspectText] = useState('');
   const [suggestion, setSuggestion] = useState<string | null>(null);
-  const [nudges, setNudges] = useState<Nudge[]>([]);
-  const [contextCards, setContextCards] = useState<string[]>([]);
-  const [objection, setObjection] = useState<string | null>(null);
-  const [stats, setStats] = useState<CallStats>({
-    repTurns: 0, prospectTurns: 0, repQuestions: 0, repWords: 0, prospectWords: 0,
-    objectionDetected: null, sentiment: 'neutral', talkRatioRep: 50,
-  });
+  const [nudges, setNudges] = useState<string[]>([]);
+  const [momentTag, setMomentTag] = useState('Opening');
   const [prospectSpeaking, setProspectSpeaking] = useState(false);
   const [ending, setEnding] = useState(false);
   const [transcriptOpen, setTranscriptOpen] = useState(false);
+  const [moreOptionsOpen, setMoreOptionsOpen] = useState(false);
+  const [moreOptionsLoading, setMoreOptionsLoading] = useState(false);
+  const [moreOptions, setMoreOptions] = useState<string[]>([]);
+  const [contextToast, setContextToast] = useState<ContextToast | null>(null);
+  const [contextPanelData, setContextPanelData] = useState<ContextToast | null>(null);
+  const [contextPanelOpen, setContextPanelOpen] = useState(false);
+  const [stats, setStats] = useState<CallStats>({
+    repTurns: 0,
+    prospectTurns: 0,
+    repQuestions: 0,
+    repWords: 0,
+    prospectWords: 0,
+    objectionDetected: null,
+    sentiment: 'neutral',
+    talkRatioRep: 50,
+  });
+  const [creditsBalance, setCreditsBalance] = useState<number | null>(null);
   const [productDrawerOpen, setProductDrawerOpen] = useState(false);
   const [productsModeDraft, setProductsModeDraft] = useState<'ALL' | 'SELECTED'>('ALL');
   const [selectedProductIdsDraft, setSelectedProductIdsDraft] = useState<string[]>([]);
   const [productSearch, setProductSearch] = useState('');
   const [productsSaving, setProductsSaving] = useState(false);
   const [productsError, setProductsError] = useState('');
-  const [creditsBalance, setCreditsBalance] = useState<number | null>(null);
-  const [displaySettings, setDisplaySettings] = useState<LiveDisplaySettings>(LIVE_SETTINGS_DEFAULTS);
+  const [role, setRole] = useState<Role | null>(null);
+  const [debugPayload, setDebugPayload] = useState<DebugPayload | null>(null);
 
   const socketRef = useRef<Socket | null>(null);
   const seqRef = useRef(0);
+  const pendingPrimaryRef = useRef<string | null>(null);
   const prospectSpeakingRef = useRef(false);
-  const hasProspectTurnRef = useRef(false);
-  const pendingSuggestionRef = useRef<string | null>(null);
-  const suggestionTurnRef = useRef(0);
-  const shownSuggestionTurnRef = useRef<number | null>(null);
-  const lastSuggestionAtRef = useRef(0);
-  const fallbackReqInFlightRef = useRef(false);
-  const timer = useTimer(call?.startedAt ?? null);
+  const suggestionRef = useRef<string | null>(null);
 
+  const timer = useTimer(call?.startedAt ?? null);
   const isMock = call?.mode === 'MOCK';
   const isActive = callStatus !== 'INITIATED';
-
+  const debugEnabled = searchParams.get('debug') === '1' && role === 'ADMIN';
   const { micActive, mockReady } = useMockAudio(id, isMock, isActive);
 
+  const availableProducts = call?.availableProducts ?? [];
+  const filteredProducts = useMemo(() => {
+    const q = productSearch.trim().toLowerCase();
+    if (!q) return availableProducts;
+    return availableProducts.filter((product) =>
+      product.name.toLowerCase().includes(q),
+    );
+  }, [availableProducts, productSearch]);
+
+  const selectedProducts =
+    call?.productsMode === 'SELECTED' && Array.isArray(call.selectedProducts)
+      ? call.selectedProducts
+      : [];
+  const productPills =
+    call?.productsMode === 'SELECTED' && selectedProducts.length > 0
+      ? selectedProducts.map((product) => product.name)
+      : ['All products'];
+
+  const topNudges = nudges.slice(0, 3);
+
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(LIVE_SETTINGS_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as Partial<LiveDisplaySettings>;
-      setDisplaySettings({
-        showStats: parsed.showStats ?? LIVE_SETTINGS_DEFAULTS.showStats,
-        showChecklist: parsed.showChecklist ?? LIVE_SETTINGS_DEFAULTS.showChecklist,
-        showTranscript: parsed.showTranscript ?? LIVE_SETTINGS_DEFAULTS.showTranscript,
-      });
-    } catch {
-      setDisplaySettings(LIVE_SETTINGS_DEFAULTS);
+    suggestionRef.current = suggestion;
+  }, [suggestion]);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadRole() {
+      const res = await fetch('/api/auth/me', { cache: 'no-store' });
+      if (!res.ok || !active) return;
+      const data = await res.json().catch(() => null);
+      if (!active) return;
+      const value = data?.user?.role;
+      if (value === 'ADMIN' || value === 'MANAGER' || value === 'REP') {
+        setRole(value);
+      }
     }
+
+    void loadRole();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
-  const requestSuggestionFallback = useCallback(async () => {
-    if (!hasProspectTurnRef.current) return;
-    if (fallbackReqInFlightRef.current) return;
-    fallbackReqInFlightRef.current = true;
-    try {
-      await fetch(`/api/calls/${id}/suggestions/more`, { method: 'POST' });
-    } catch { /* ignore */ } finally {
-      fallbackReqInFlightRef.current = false;
-    }
-  }, [id]);
-
-  const handleSwap = useCallback(async () => {
-    try {
-      await fetch(`/api/calls/${id}/suggestions/more`, { method: 'POST' });
-    } catch { /* ignore */ }
-  }, [id]);
-
-  // Fetch call data
   useEffect(() => {
-    fetch(`/api/calls/${id}`)
-      .then((r) => r.json())
-      .then((d) => {
-        setCall(d);
-        setCallStatus(d.status ?? 'INITIATED');
-        const mode = d.productsMode === 'SELECTED' ? 'SELECTED' : 'ALL';
-        setProductsModeDraft(mode);
-        const selected = Array.isArray(d.selectedProducts)
-          ? d.selectedProducts.map((product: ProductRef) => product.id)
-          : [];
-        setSelectedProductIdsDraft(selected);
-      });
+    let active = true;
+
+    async function loadCall() {
+      const response = await fetch(`/api/calls/${id}`, { cache: 'no-store' });
+      if (!response.ok || !active) return;
+      const data = (await response.json()) as CallData;
+      if (!active) return;
+      setCall(data);
+      setCallStatus(data.status ?? 'INITIATED');
+      const mode = data.productsMode === 'SELECTED' ? 'SELECTED' : 'ALL';
+      setProductsModeDraft(mode);
+      setSelectedProductIdsDraft(
+        Array.isArray(data.selectedProducts)
+          ? data.selectedProducts.map((item) => item.id)
+          : [],
+      );
+    }
+
+    void loadCall();
+
+    return () => {
+      active = false;
+    };
   }, [id]);
 
   useEffect(() => {
@@ -537,19 +423,18 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
 
     async function loadCredits() {
       const res = await fetch('/api/org/credits', { cache: 'no-store' });
-      if (!active || !res.ok) return;
+      if (!res.ok || !active) return;
       const data = await res.json().catch(() => null);
       if (!active) return;
-      const balance = data?.balance;
-      if (typeof balance === 'number') {
-        setCreditsBalance(balance);
+      if (typeof data?.balance === 'number') {
+        setCreditsBalance(data.balance);
       }
     }
 
     void loadCredits();
     const intervalId = setInterval(() => {
       void loadCredits();
-    }, 30000);
+    }, 10000);
     const refreshListener = () => {
       void loadCredits();
     };
@@ -562,7 +447,16 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
     };
   }, []);
 
-  // Socket.io for coaching events
+  useEffect(() => {
+    if (!contextToast) return;
+    const timerId = setTimeout(() => {
+      setContextToast((current) =>
+        current?.tsMs === contextToast.tsMs ? null : current,
+      );
+    }, 6000);
+    return () => clearTimeout(timerId);
+  }, [contextToast]);
+
   useEffect(() => {
     const socket = io(`${WS_URL}/calls`, { transports: ['websocket'] });
     socketRef.current = socket;
@@ -570,19 +464,19 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
     socket.on('connect', () => {
       setConnected(true);
       socket.emit('join', id);
+      void fetch(`/api/calls/${id}/session-start`, { method: 'POST' });
     });
-    socket.on('disconnect', () => setConnected(false));
 
-    // Partial transcript — just show "prospect speaking" state
+    socket.on('disconnect', () => {
+      setConnected(false);
+    });
+
     socket.on('transcript.partial', (data: TranscriptLine) => {
       if (data.speaker === 'PROSPECT') {
-        setProspectSpeaking(true);
-        prospectSpeakingRef.current = true;
-        setSuggestion(null);
+        setPartialProspectText(data.text);
       }
     });
 
-    // Final transcript — add to transcript list
     socket.on('transcript.final', (data: TranscriptLine) => {
       setTranscript((prev) => {
         const seq = ++seqRef.current;
@@ -590,151 +484,162 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
       });
 
       if (data.speaker === 'PROSPECT') {
-        hasProspectTurnRef.current = true;
-        setProspectSpeaking(false);
-        prospectSpeakingRef.current = false;
-        suggestionTurnRef.current += 1;
-        shownSuggestionTurnRef.current = null;
-
-        // Show pending suggestion if we have one
-        if (pendingSuggestionRef.current) {
-          const next = pendingSuggestionRef.current;
-          pendingSuggestionRef.current = null;
-          if (shownSuggestionTurnRef.current !== suggestionTurnRef.current) {
-            setSuggestion(next);
-            shownSuggestionTurnRef.current = suggestionTurnRef.current;
-            lastSuggestionAtRef.current = Date.now();
-          }
-        }
-
-        // Fallback request if no suggestion came quickly
-        setTimeout(() => {
-          if (
-            !prospectSpeakingRef.current &&
-            shownSuggestionTurnRef.current !== suggestionTurnRef.current &&
-            Date.now() - lastSuggestionAtRef.current > 700
-          ) {
-            void requestSuggestionFallback();
-          }
-        }, 750);
+        setPartialProspectText('');
       }
-    });
-
-    // Primary suggestion from engine
-    socket.on('engine.suggestions', (data: { suggestions: string[] }) => {
-      if (!hasProspectTurnRef.current) {
-        // Opening suggestion — always show
-        const first = data.suggestions?.[0];
-        if (first) setSuggestion(first);
-        return;
-      }
-      const next = (data.suggestions ?? []).filter(Boolean);
-      if (next.length === 0) return;
-
-      if (prospectSpeakingRef.current) {
-        pendingSuggestionRef.current = next[0]!;
-        return;
-      }
-      if (shownSuggestionTurnRef.current === suggestionTurnRef.current) return;
-
-      lastSuggestionAtRef.current = Date.now();
-      setSuggestion(next[0]!);
-      shownSuggestionTurnRef.current = suggestionTurnRef.current;
     });
 
     socket.on('engine.primary_suggestion', (data: { text: string }) => {
-      if (!hasProspectTurnRef.current) {
-        if (data.text) setSuggestion(data.text);
-        return;
-      }
       if (!data.text) return;
       if (prospectSpeakingRef.current) {
-        pendingSuggestionRef.current = data.text;
+        pendingPrimaryRef.current = data.text;
         return;
       }
-      if (shownSuggestionTurnRef.current === suggestionTurnRef.current) return;
-
-      lastSuggestionAtRef.current = Date.now();
       setSuggestion(data.text);
-      shownSuggestionTurnRef.current = suggestionTurnRef.current;
     });
 
-    // Nudges from engine
+    socket.on('engine.suggestions', (data: { suggestions: string[] }) => {
+      const first = (data.suggestions ?? [])[0];
+      if (!first) return;
+      if (prospectSpeakingRef.current) {
+        pendingPrimaryRef.current = first;
+        return;
+      }
+      if (!suggestionRef.current) {
+        setSuggestion(first);
+      }
+    });
+
     socket.on('engine.nudges', (data: { nudges: string[] }) => {
-      setStats((prev) => {
-        setNudges(parseNudges(data.nudges ?? [], prev));
-        return prev;
-      });
+      setNudges(parseNudges(data.nudges ?? []));
     });
 
-    // Context cards
-    socket.on('engine.context_cards', (data: { cards: string[]; objection: string | null }) => {
-      setContextCards(data.cards ?? []);
-      setObjection(data.objection);
+    socket.on('engine.moment', (data: { tag?: string }) => {
+      if (!data?.tag) return;
+      setMomentTag(data.tag);
     });
 
-    // Stats
-    socket.on('engine.stats', (data: { stats: CallStats }) => setStats(data.stats));
+    socket.on(
+      'engine.context_cards',
+      (data: { cards: string[]; objection: string | null }) => {
+        const cards = (data.cards ?? []).filter((item) => item.trim().length > 0).slice(0, 4);
+        if (cards.length === 0 && !data.objection) return;
+        const next = {
+          cards,
+          objection: data.objection ?? null,
+          tsMs: Date.now(),
+        };
+        setContextToast(next);
+        setContextPanelData(next);
+      },
+    );
 
-    // Prospect speaking signal
+    socket.on('engine.stats', (data: { stats: CallStats }) => {
+      setStats(data.stats);
+    });
+
     socket.on('engine.prospect_speaking', (data: { speaking: boolean }) => {
       setProspectSpeaking(data.speaking);
       prospectSpeakingRef.current = data.speaking;
-      if (data.speaking) {
-        setSuggestion(null);
-        return;
-      }
-      if (pendingSuggestionRef.current) {
-        const next = pendingSuggestionRef.current;
-        pendingSuggestionRef.current = null;
-        if (shownSuggestionTurnRef.current !== suggestionTurnRef.current) {
-          setSuggestion(next);
-          shownSuggestionTurnRef.current = suggestionTurnRef.current;
-          lastSuggestionAtRef.current = Date.now();
-        }
+      if (!data.speaking && pendingPrimaryRef.current) {
+        setSuggestion(pendingPrimaryRef.current);
+        pendingPrimaryRef.current = null;
       }
     });
 
-    // Call status updates
+    socket.on('engine.debug', (data: DebugPayload) => {
+      setDebugPayload(data);
+    });
+
     socket.on('call.status', (data: { status: string; startedAt: string | null }) => {
       setCallStatus(data.status);
-      if (data.startedAt) {
-        setCall((prev) => prev ? { ...prev, status: data.status, startedAt: data.startedAt } : prev);
-      } else {
-        setCall((prev) => prev ? { ...prev, status: data.status } : prev);
-      }
+      setCall((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          status: data.status,
+          startedAt: data.startedAt ?? prev.startedAt,
+        };
+      });
     });
 
-    return () => { socket.emit('leave', id); socket.disconnect(); };
-  }, [id, requestSuggestionFallback]);
+    return () => {
+      socket.emit('leave', id);
+      socket.disconnect();
+    };
+  }, [id]);
 
-  async function handleEnd() {
-    setEnding(true);
-    socketRef.current?.emit('leave', id);
-    await fetch(`/api/calls/${id}/end`, { method: 'POST' });
-    router.push('/app/calls');
-  }
+  const handleSwap = useCallback(async () => {
+    const res = await fetch(`/api/calls/${id}/suggestions/more`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'SWAP' }),
+    });
+    if (!res.ok) return;
+    const data = (await res.json().catch(() => null)) as { texts?: string[] } | null;
+    const next = data?.texts?.[0];
+    if (next) {
+      if (prospectSpeakingRef.current) {
+        pendingPrimaryRef.current = next;
+      } else {
+        setSuggestion(next);
+      }
+    }
+  }, [id]);
 
-  function openProductsDrawer() {
+  const handleMoreOptions = useCallback(async () => {
+    setMoreOptionsOpen(true);
+    setMoreOptionsLoading(true);
+    setMoreOptions([]);
+    const res = await fetch(`/api/calls/${id}/suggestions/more`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'MORE_OPTIONS', count: 2 }),
+    });
+    if (res.ok) {
+      const data = (await res.json().catch(() => null)) as { texts?: string[] } | null;
+      const next = (data?.texts ?? []).filter((item) => item.trim().length > 0).slice(0, 2);
+      setMoreOptions(next);
+    }
+    setMoreOptionsLoading(false);
+  }, [id]);
+
+  const handleCopyPrimary = useCallback(async () => {
+    if (!suggestion) return;
+    try {
+      await navigator.clipboard.writeText(suggestion);
+    } catch {
+      return;
+    }
+  }, [suggestion]);
+
+  const handleShorten = useCallback(() => {
+    if (!suggestion) return;
+    setSuggestion(shortenSuggestion(suggestion));
+  }, [suggestion]);
+
+  const openProductsDrawer = useCallback(() => {
     const mode = call?.productsMode === 'SELECTED' ? 'SELECTED' : 'ALL';
-    const selectedProducts = Array.isArray(call?.selectedProducts) ? call.selectedProducts : [];
-    const selected = selectedProducts.map((product) => product.id);
+    const selected = Array.isArray(call?.selectedProducts)
+      ? call.selectedProducts.map((product) => product.id)
+      : [];
     setProductsModeDraft(mode);
     setSelectedProductIdsDraft(selected);
     setProductSearch('');
     setProductsError('');
     setProductDrawerOpen(true);
-  }
+  }, [call]);
 
-  function toggleDraftProduct(id: string) {
+  const toggleDraftProduct = useCallback((productId: string) => {
     setSelectedProductIdsDraft((prev) =>
-      prev.includes(id) ? prev.filter((value) => value !== id) : [...prev, id],
+      prev.includes(productId)
+        ? prev.filter((item) => item !== productId)
+        : [...prev, productId],
     );
-  }
+  }, []);
 
-  async function saveProducts() {
+  const saveProducts = useCallback(async () => {
     if (productsModeDraft === 'SELECTED' && selectedProductIdsDraft.length === 0) {
-      setProductsError('Select at least one product or switch to All products.');
+      setProductsError('Select at least one product or use All products.');
       return;
     }
 
@@ -749,12 +654,14 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
           productsModeDraft === 'SELECTED' ? selectedProductIdsDraft : [],
       }),
     });
-    const data = await res.json();
+    const data = (await res.json().catch(() => null)) as CallData | { message?: string } | null;
     setProductsSaving(false);
 
-    if (!res.ok) {
+    if (!res.ok || !data || !('id' in data)) {
       setProductsError(
-        Array.isArray(data?.message) ? data.message[0] : (data?.message ?? 'Failed to update products'),
+        typeof data === 'object' && data && 'message' in data && data.message
+          ? data.message
+          : 'Failed to save products',
       );
       return;
     }
@@ -762,120 +669,292 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
     setCall(data);
     setProductsModeDraft(data.productsMode === 'SELECTED' ? 'SELECTED' : 'ALL');
     setSelectedProductIdsDraft(
-      Array.isArray(data.selectedProducts) ? data.selectedProducts.map((product: ProductRef) => product.id) : [],
+      Array.isArray(data.selectedProducts) ? data.selectedProducts.map((item) => item.id) : [],
     );
     setProductDrawerOpen(false);
-  }
+  }, [id, productsModeDraft, selectedProductIdsDraft]);
 
-  // Loading state
+  const handleEnd = useCallback(async () => {
+    setEnding(true);
+    socketRef.current?.emit('leave', id);
+    await fetch(`/api/calls/${id}/end`, { method: 'POST' });
+    router.push('/app/calls');
+  }, [id, router]);
+
   if (!call) {
     return (
-      <div className="flex items-center justify-center h-full bg-slate-950">
-        <div className="w-8 h-8 border-2 border-sky-400 border-t-transparent rounded-full animate-spin" />
+      <div className="flex h-full items-center justify-center bg-slate-950">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-sky-400 border-t-transparent" />
       </div>
     );
   }
 
-  const availableProducts = call.availableProducts ?? [];
-  const filteredAvailableProducts = availableProducts.filter((product) => {
-    const q = productSearch.trim().toLowerCase();
-    if (!q) return true;
-    return product.name.toLowerCase().includes(q);
-  });
-  const selectedProducts =
-    call.productsMode === 'SELECTED' && Array.isArray(call.selectedProducts)
-      ? call.selectedProducts
-      : [];
-  const productPills =
-    call.productsMode === 'SELECTED' && selectedProducts.length > 0
-      ? selectedProducts.map((product) => product.name)
-      : ['All products'];
-  const creditsLabel =
-    creditsBalance === null
-      ? 'Credits: --'
-      : `Credits: ${new Intl.NumberFormat('en-US').format(creditsBalance)}`;
-
   return (
-    <div className="relative flex flex-col h-full bg-slate-950">
-      {/* ─── Top bar ─────────────────────────────────────────────────── */}
-      <div className="shrink-0 flex items-center justify-between gap-3 px-4 sm:px-5 py-2 border-b border-slate-800/60 bg-slate-950">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div className={'w-2 h-2 rounded-full ' + (connected ? 'bg-sky-400 animate-pulse' : 'bg-slate-600')} />
+    <div className="relative flex h-full flex-col bg-slate-950">
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-800/60 bg-slate-950 px-4 py-2.5">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <div
+            className={
+              'h-2 w-2 rounded-full ' + (connected ? 'animate-pulse bg-sky-400' : 'bg-slate-600')
+            }
+          />
           {isMock ? (
-            <span className="flex items-center gap-1.5 text-violet-400 font-mono text-sm shrink-0"><Bot size={14} /> Practice</span>
+            <span className="flex shrink-0 items-center gap-1.5 font-mono text-sm text-violet-400">
+              <Bot size={14} />
+              Practice
+            </span>
           ) : (
-            <span className="text-white font-mono text-sm max-w-[120px] sm:max-w-[200px] truncate">{call.phoneTo}</span>
+            <span className="max-w-[180px] truncate font-mono text-sm text-white">
+              {call.phoneTo}
+            </span>
           )}
-          <span className="text-slate-600 text-xs tabular-nums shrink-0">{timer}</span>
+          <span className="shrink-0 tabular-nums text-xs text-slate-600">{timer}</span>
           {isMock && (
-            <span className={`hidden sm:flex items-center gap-1 text-xs shrink-0 ${micActive ? 'text-sky-400' : 'text-red-400'}`}>
+            <span
+              className={`hidden shrink-0 items-center gap-1 text-xs sm:flex ${
+                micActive ? 'text-sky-400' : 'text-red-400'
+              }`}
+            >
               {micActive ? <Mic size={12} /> : <MicOff size={12} />}
               {micActive ? (mockReady ? 'Live' : 'Connecting...') : 'No mic'}
             </span>
           )}
-          <div className="flex items-center gap-1.5 shrink-0">
-            {productPills.slice(0, 2).map((label) => (
+          <div className="flex items-center gap-1.5">
+            {productPills.slice(0, 2).map((name) => (
               <span
-                key={label}
-                className="hidden md:inline-flex text-[11px] px-2 py-0.5 rounded-full border border-sky-500/30 bg-sky-500/10 text-sky-300 max-w-[130px] truncate"
+                key={name}
+                className="max-w-[110px] truncate rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[11px] text-sky-200 md:max-w-[130px]"
               >
-                {label}
+                {name}
               </span>
             ))}
             {productPills.length > 2 && (
-              <span className="hidden md:inline-flex text-[11px] px-2 py-0.5 rounded-full border border-slate-700 text-slate-400">
+              <span className="rounded-full border border-slate-700 px-2 py-0.5 text-[11px] text-slate-400">
                 +{productPills.length - 2}
               </span>
             )}
             <button
               type="button"
               onClick={openProductsDrawer}
-              className="text-[11px] px-2 py-0.5 rounded-full border border-slate-700 hover:border-slate-500 text-slate-400 hover:text-slate-200 transition-colors"
+              className="rounded-full border border-slate-700 px-2 py-0.5 text-[11px] text-slate-400 transition-colors hover:border-slate-500 hover:text-slate-200"
             >
               Products
             </button>
           </div>
-          <span className="text-[11px] px-2 py-0.5 rounded-full border border-sky-500/30 bg-sky-500/10 text-sky-300">
-            {creditsLabel}
+          <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] text-emerald-200">
+            {momentTag}
           </span>
-          {displaySettings.showStats && (
-            <div className="hidden lg:block">
-              <MiniStats stats={stats} />
-            </div>
-          )}
+          <span className="rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[11px] text-sky-200">
+            Credits: {formatCredits(creditsBalance)}
+          </span>
         </div>
-        <button
-          onClick={handleEnd}
-          disabled={ending}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white text-xs font-medium rounded-lg transition-colors"
-        >
-          <PhoneOff size={13} />
-          {ending ? 'Ending...' : 'End'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setTranscriptOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 px-2.5 py-1.5 text-xs text-slate-300 transition-colors hover:border-slate-500 hover:text-white"
+          >
+            <MessageSquareText size={13} />
+            Transcript
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleMoreOptions()}
+            disabled={prospectSpeaking}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 px-2.5 py-1.5 text-xs text-slate-300 transition-colors hover:border-slate-500 hover:text-white"
+          >
+            <Ellipsis size={13} />
+            More options
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleEnd()}
+            disabled={ending}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-red-500 disabled:opacity-60"
+          >
+            <PhoneOff size={13} />
+            {ending ? 'Ending...' : 'End call'}
+          </button>
+        </div>
       </div>
 
-      {productDrawerOpen && (
-        <div className="absolute top-14 right-4 z-40 w-80 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl">
-          <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-white">Products</h3>
+      {callStatus === 'INITIATED' && !isMock ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-6 bg-slate-950">
+          <div className="relative">
+            <div className="flex h-20 w-20 items-center justify-center rounded-full bg-slate-800">
+              <PhoneCall size={32} className="text-sky-400" />
+            </div>
+            <span className="absolute inset-0 animate-ping rounded-full border-2 border-sky-400/40" />
+          </div>
+          <div className="space-y-1 text-center">
+            <p className="text-lg font-medium text-white">Calling {call.phoneTo}...</p>
+            <p className="text-sm text-slate-500">Waiting for answer</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void handleEnd()}
+            disabled={ending}
+            className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-500 disabled:opacity-60"
+          >
+            <PhoneOff size={15} />
+            {ending ? 'Ending...' : 'Cancel'}
+          </button>
+        </div>
+      ) : (
+        <div className="flex flex-1 flex-col items-center justify-center gap-5 px-4 py-7">
+          <div className="w-full max-w-3xl rounded-2xl border border-sky-500/30 bg-gradient-to-br from-slate-900 to-slate-900/80 p-6">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-semibold uppercase tracking-widest text-sky-400">
+                  Primary next line
+                </span>
+                {prospectSpeaking && (
+                  <span className="rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[10px] text-sky-300">
+                    Listening
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleCopyPrimary()}
+                  className="inline-flex items-center gap-1 rounded border border-slate-700 px-2 py-1 text-[11px] text-slate-300 transition-colors hover:border-slate-500 hover:text-white"
+                >
+                  <Copy size={11} />
+                  Copy
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleSwap()}
+                  disabled={prospectSpeaking}
+                  className="rounded border border-slate-700 px-2 py-1 text-[11px] text-slate-300 transition-colors hover:border-slate-500 hover:text-white"
+                >
+                  Swap
+                </button>
+                <button
+                  type="button"
+                  onClick={handleShorten}
+                  className="rounded border border-slate-700 px-2 py-1 text-[11px] text-slate-300 transition-colors hover:border-slate-500 hover:text-white"
+                >
+                  Shorten
+                </button>
+              </div>
+            </div>
+            <p className="min-h-[66px] text-lg font-medium leading-relaxed text-white">
+              {suggestion ?? 'Preparing your opening line...'}
+            </p>
+          </div>
+
+          <div className="w-full max-w-3xl">
+            <div className="flex flex-wrap gap-2">
+              {topNudges.length > 0 ? (
+                topNudges.map((nudge) => (
+                  <span
+                    key={nudge}
+                    className="rounded-full border border-slate-700 bg-slate-900 px-2.5 py-1 text-xs text-slate-300"
+                  >
+                    {nudge}
+                  </span>
+                ))
+              ) : (
+                <span className="text-xs text-slate-500">
+                  Nudges will appear as the conversation evolves.
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {contextToast && (
+        <div className="pointer-events-none absolute bottom-4 right-4 z-30">
+          <div className="pointer-events-auto rounded-xl border border-slate-700 bg-slate-900/95 px-3 py-2 shadow-2xl">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium text-slate-200">Context update available</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setContextPanelOpen(true);
+                  setContextToast(null);
+                }}
+                className="rounded border border-slate-700 px-2 py-0.5 text-[11px] text-slate-300 transition-colors hover:border-slate-500 hover:text-white"
+              >
+                View
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {transcriptOpen && (
+        <div className="absolute inset-y-0 right-0 z-40 w-full max-w-md border-l border-slate-700 bg-slate-950/95 shadow-2xl">
+          <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+            <h3 className="text-sm font-semibold text-white">Transcript</h3>
             <button
               type="button"
-              onClick={() => setProductDrawerOpen(false)}
-              className="text-slate-500 hover:text-slate-300 text-xs"
+              onClick={() => setTranscriptOpen(false)}
+              className="text-xs text-slate-400 transition-colors hover:text-white"
             >
               Close
             </button>
           </div>
+          <div className="h-[calc(100%-57px)] overflow-y-auto px-4 py-3">
+            {partialProspectText ? (
+              <div className="mb-3 rounded-lg border border-sky-500/20 bg-sky-500/10 px-3 py-2">
+                <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-sky-300">
+                  Prospect speaking
+                </p>
+                <p className="text-xs text-sky-100">{partialProspectText}</p>
+              </div>
+            ) : null}
+            {transcript.length === 0 ? (
+              <p className="pt-8 text-center text-xs text-slate-500">
+                Transcript will appear here.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {transcript.map((line, index) => (
+                  <div
+                    key={`${line._seq ?? index}-${line.tsMs}`}
+                    className="rounded-lg border border-slate-800 bg-slate-900/70 px-3 py-2"
+                  >
+                    <p
+                      className={`mb-1 text-[10px] font-mono ${
+                        line.speaker === 'REP' ? 'text-blue-400' : 'text-slate-400'
+                      }`}
+                    >
+                      {speakerLabel(line.speaker)}
+                    </p>
+                    <p className="text-xs leading-relaxed text-slate-200">{line.text}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
-          <div className="p-3 space-y-3">
+      {productDrawerOpen && (
+        <div className="absolute right-4 top-14 z-40 w-80 rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
+          <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+            <h3 className="text-sm font-semibold text-white">Products</h3>
+            <button
+              type="button"
+              onClick={() => setProductDrawerOpen(false)}
+              className="text-xs text-slate-400 transition-colors hover:text-white"
+            >
+              Close
+            </button>
+          </div>
+          <div className="space-y-3 p-3">
             <div className="flex gap-2">
               <button
                 type="button"
                 onClick={() => setProductsModeDraft('ALL')}
-                className={`flex-1 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
+                className={`flex-1 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors ${
                   productsModeDraft === 'ALL'
-                    ? 'bg-sky-600/20 border-sky-500/40 text-sky-300'
-                    : 'bg-slate-800 border-slate-700 text-slate-400'
+                    ? 'border-sky-500/40 bg-sky-500/10 text-sky-200'
+                    : 'border-slate-700 bg-slate-800 text-slate-400'
                 }`}
               >
                 All products
@@ -883,10 +962,10 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
               <button
                 type="button"
                 onClick={() => setProductsModeDraft('SELECTED')}
-                className={`flex-1 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
+                className={`flex-1 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors ${
                   productsModeDraft === 'SELECTED'
-                    ? 'bg-sky-600/20 border-sky-500/40 text-sky-300'
-                    : 'bg-slate-800 border-slate-700 text-slate-400'
+                    ? 'border-sky-500/40 bg-sky-500/10 text-sky-200'
+                    : 'border-slate-700 bg-slate-800 text-slate-400'
                 }`}
               >
                 Selected
@@ -897,27 +976,25 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
               <div className="space-y-2">
                 <input
                   value={productSearch}
-                  onChange={(e) => setProductSearch(e.target.value)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  onChange={(event) => setProductSearch(event.target.value)}
+                  className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white outline-none focus:border-sky-500/50"
                   placeholder="Search products..."
                 />
-                <div className="max-h-44 overflow-y-auto space-y-1 pr-1">
-                  {filteredAvailableProducts.length === 0 ? (
-                    <p className="text-xs text-slate-600 py-2">
-                      No products available.
-                    </p>
+                <div className="max-h-44 space-y-1 overflow-y-auto pr-1">
+                  {filteredProducts.length === 0 ? (
+                    <p className="py-2 text-xs text-slate-500">No products found.</p>
                   ) : (
-                    filteredAvailableProducts.map((product) => {
+                    filteredProducts.map((product) => {
                       const selected = selectedProductIdsDraft.includes(product.id);
                       return (
                         <button
                           key={product.id}
                           type="button"
                           onClick={() => toggleDraftProduct(product.id)}
-                          className={`w-full text-left px-2.5 py-2 rounded-lg border transition-colors ${
+                          className={`w-full rounded-lg border px-2.5 py-2 text-left text-sm transition-colors ${
                             selected
-                              ? 'border-sky-500/40 bg-sky-500/10 text-sky-200'
-                              : 'border-slate-700 bg-slate-800/70 text-slate-300'
+                              ? 'border-sky-500/40 bg-sky-500/10 text-sky-100'
+                              : 'border-slate-700 bg-slate-800 text-slate-300'
                           }`}
                         >
                           {product.name}
@@ -929,23 +1006,21 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
               </div>
             )}
 
-            {productsError && (
-              <p className="text-xs text-red-400">{productsError}</p>
-            )}
+            {productsError ? <p className="text-xs text-red-400">{productsError}</p> : null}
 
             <div className="flex gap-2 pt-1">
               <button
                 type="button"
                 onClick={() => setProductDrawerOpen(false)}
-                className="flex-1 py-2 text-xs text-slate-400 border border-slate-700 rounded-lg hover:text-white transition-colors"
+                className="flex-1 rounded-lg border border-slate-700 py-2 text-xs text-slate-300 transition-colors hover:border-slate-500 hover:text-white"
               >
                 Cancel
               </button>
               <button
                 type="button"
-                onClick={saveProducts}
+                onClick={() => void saveProducts()}
                 disabled={productsSaving}
-                className="flex-1 py-2 text-xs text-white bg-sky-600 hover:bg-sky-500 disabled:opacity-50 rounded-lg transition-colors"
+                className="flex-1 rounded-lg bg-sky-600 py-2 text-xs font-medium text-white transition-colors hover:bg-sky-500 disabled:opacity-60"
               >
                 {productsSaving ? 'Saving...' : 'Save'}
               </button>
@@ -954,61 +1029,86 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
         </div>
       )}
 
-      {/* ─── Connecting overlay (outbound only) ──────────────────────── */}
-      {callStatus === 'INITIATED' && !isMock && (
-        <div className="flex-1 flex flex-col items-center justify-center gap-6 bg-slate-950">
-          <div className="relative">
-            <div className="w-20 h-20 rounded-full bg-slate-800 flex items-center justify-center">
-              <PhoneCall size={32} className="text-sky-400" />
-            </div>
-            <span className="absolute inset-0 rounded-full border-2 border-sky-400/40 animate-ping" />
+      <Modal
+        open={moreOptionsOpen}
+        onClose={() => setMoreOptionsOpen(false)}
+        title="More options"
+        className="max-w-xl"
+      >
+        {moreOptionsLoading ? (
+          <p className="text-sm text-slate-300">Generating two alternatives...</p>
+        ) : moreOptions.length === 0 ? (
+          <p className="text-sm text-slate-400">No alternatives available yet.</p>
+        ) : (
+          <div className="space-y-2">
+            {moreOptions.slice(0, 2).map((option, index) => (
+              <button
+                key={`${option}-${index}`}
+                type="button"
+                onClick={() => {
+                  if (prospectSpeakingRef.current) {
+                    pendingPrimaryRef.current = option;
+                  } else {
+                    setSuggestion(option);
+                  }
+                  setMoreOptionsOpen(false);
+                }}
+                className="w-full rounded-lg border border-slate-700 bg-slate-800/80 px-3 py-2 text-left text-sm text-slate-100 transition-colors hover:border-slate-500"
+              >
+                {option}
+              </button>
+            ))}
           </div>
-          <div className="text-center space-y-1">
-            <p className="text-white font-medium text-lg">Calling {call.phoneTo}...</p>
-            <p className="text-slate-500 text-sm">Ringing</p>
-          </div>
-          <button onClick={handleEnd} disabled={ending}
-            className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors">
-            <PhoneOff size={15} />
-            {ending ? 'Ending...' : 'Cancel'}
-          </button>
-        </div>
-      )}
+        )}
+      </Modal>
 
-      {/* ─── Main coaching area ──────────────────────────────────────── */}
-      {(isActive || isMock) && (
-        <div className="flex-1 flex flex-col min-h-0">
-          {/* Center: coaching content */}
-          <div className="flex-1 flex flex-col items-center justify-center px-4 py-6 gap-4 overflow-y-auto">
-            {/* Primary suggestion card */}
-            <div className="w-full max-w-xl">
-              <NextLineCard
-                suggestion={suggestion}
-                prospectSpeaking={prospectSpeaking}
-                onSwap={handleSwap}
-              />
-            </div>
-
-            {/* Micro-nudges */}
-            <div className="w-full max-w-xl">
-              <MicroNudges nudges={nudges} />
-            </div>
-
-            {/* Context cards (collapsed rail) */}
-            {displaySettings.showChecklist && (contextCards.length > 0 || objection) && (
-              <div className="w-full max-w-xl">
-                <ContextCards cards={contextCards} objection={objection} />
+      <Modal
+        open={contextPanelOpen}
+        onClose={() => setContextPanelOpen(false)}
+        title="Context cards"
+        className="max-w-xl"
+      >
+        <div className="space-y-2">
+          {contextPanelData?.objection ? (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+              <div className="flex items-center gap-2">
+                <AlertTriangle size={14} />
+                <span>{contextPanelData.objection}</span>
               </div>
-            )}
-          </div>
+            </div>
+          ) : null}
+          {(contextPanelData?.cards ?? []).map((card, index) => (
+            <div
+              key={`${card}-${index}`}
+              className="rounded-lg border border-slate-700 bg-slate-800/80 px-3 py-2 text-sm text-slate-200"
+            >
+              {card}
+            </div>
+          ))}
+        </div>
+      </Modal>
 
-          {displaySettings.showTranscript && (
-            <TranscriptDrawer
-              lines={transcript}
-              isOpen={transcriptOpen}
-              onToggle={() => setTranscriptOpen((o) => !o)}
-            />
-          )}
+      {debugEnabled && (
+        <div className="absolute bottom-4 left-4 z-30 w-[360px] rounded-xl border border-slate-700 bg-slate-900/95 p-3 text-xs text-slate-200 shadow-2xl">
+          <p className="mb-2 font-semibold text-slate-100">Prompt debug</p>
+          <div className="space-y-1">
+            <p>
+              <span className="text-slate-400">Reason:</span>{' '}
+              {debugPayload?.reason ?? 'n/a'}
+            </p>
+            <p>
+              <span className="text-slate-400">Moment:</span>{' '}
+              {debugPayload?.momentTag ?? momentTag}
+            </p>
+            <p>
+              <span className="text-slate-400">Updated:</span>{' '}
+              {debugPayload?.suggestionUpdated ? 'yes' : 'no'}
+            </p>
+            <p className="line-clamp-3">
+              <span className="text-slate-400">Last prospect final:</span>{' '}
+              {debugPayload?.lastProspectUtterance || 'n/a'}
+            </p>
+          </div>
         </div>
       )}
     </div>
