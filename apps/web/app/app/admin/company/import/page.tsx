@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { OutOfCreditsModal } from '@/components/out-of-credits-modal';
 
 type SourceType = 'WEBSITE' | 'PDF';
 type FocusMode = 'STANDARD' | 'DEEP' | 'QUICK';
@@ -164,6 +165,7 @@ export default function CompanyImportPage() {
   const [error, setError] = useState('');
   const [applying, setApplying] = useState(false);
   const [applied, setApplied] = useState(false);
+  const [showOutOfCreditsModal, setShowOutOfCreditsModal] = useState(false);
   const [appendToKnowledgeBase, setAppendToKnowledgeBase] = useState(true);
   const [aiEnabled, setAiEnabled] = useState(true);
   const [aiMessage, setAiMessage] = useState('');
@@ -276,6 +278,10 @@ export default function CompanyImportPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
+        const message = Array.isArray(data?.message) ? data.message[0] : (data?.message ?? 'Failed to start extraction.');
+        if (res.status === 402 || String(message).toLowerCase().includes('not enough credits')) {
+          setShowOutOfCreditsModal(true);
+        }
         setError(Array.isArray(data?.message) ? data.message[0] : (data?.message ?? 'Failed to start extraction.'));
         setRunning(false);
         return;
@@ -287,6 +293,7 @@ export default function CompanyImportPage() {
         return;
       }
       setJobId(createdJobId);
+      window.dispatchEvent(new Event('credits:refresh'));
       setStep(3);
       return;
     }
@@ -318,6 +325,10 @@ export default function CompanyImportPage() {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
+      const message = Array.isArray(data?.message) ? data.message[0] : (data?.message ?? 'Failed to start extraction.');
+      if (res.status === 402 || String(message).toLowerCase().includes('not enough credits')) {
+        setShowOutOfCreditsModal(true);
+      }
       setError(Array.isArray(data?.message) ? data.message[0] : (data?.message ?? 'Failed to start extraction.'));
       setRunning(false);
       return;
@@ -329,6 +340,7 @@ export default function CompanyImportPage() {
       return;
     }
     setJobId(createdJobId);
+    window.dispatchEvent(new Event('credits:refresh'));
     setStep(3);
   }
 
@@ -812,6 +824,10 @@ export default function CompanyImportPage() {
           </div>
         </div>
       )}
+      <OutOfCreditsModal
+        open={showOutOfCreditsModal}
+        onClose={() => setShowOutOfCreditsModal(false)}
+      />
     </div>
   );
 }

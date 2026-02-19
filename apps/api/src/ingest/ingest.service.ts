@@ -12,6 +12,8 @@ import type { JwtPayload } from '@live-sales-coach/shared';
 import { DRIZZLE, DrizzleDb } from '../db/db.module';
 import * as schema from '../db/schema';
 import { EMPTY_COMPANY_PROFILE_DEFAULTS } from '../org/company-profile.defaults';
+import { CreditsService } from '../credits/credits.service';
+import { getCreditCost } from '../config/credit-costs';
 import { CreateWebsiteIngestDto } from './dto/create-website-ingest.dto';
 import { QualityCompanyDto } from './dto/quality-company.dto';
 import { QualityProductDto } from './dto/quality-product.dto';
@@ -126,7 +128,10 @@ export class IngestService {
   private readonly logger = new Logger(IngestService.name);
   private openaiClient: OpenAI | null = null;
 
-  constructor(@Inject(DRIZZLE) private readonly db: DrizzleDb) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: DrizzleDb,
+    private readonly creditsService: CreditsService,
+  ) {}
 
   async queueWebsiteJob(
     user: JwtPayload,
@@ -135,6 +140,17 @@ export class IngestService {
   ) {
     this.ensureOpenAiConfigured();
     const normalizedInput = this.normalizeWebsiteInput(dto);
+    await this.creditsService.requireAndDebit(
+      user.orgId,
+      getCreditCost('IMPORT_WEBSITE'),
+      'USAGE_IMPORT_WEBSITE',
+      {
+        target,
+        url: normalizedInput.url,
+        pages_to_scan: normalizedInput.pagesToScan,
+        focus: normalizedInput.focus,
+      },
+    );
     const [job] = await this.db
       .insert(schema.ingestionJobs)
       .values({
@@ -185,6 +201,16 @@ export class IngestService {
         throw new BadRequestException(`Unsupported file type: ${file.originalname}`);
       }
     }
+
+    await this.creditsService.requireAndDebit(
+      user.orgId,
+      getCreditCost('IMPORT_PDF'),
+      'USAGE_IMPORT_PDF',
+      {
+        target,
+        files: files.map((file) => ({ name: file.originalname, size: file.size })),
+      },
+    );
 
     const [job] = await this.db
       .insert(schema.ingestionJobs)

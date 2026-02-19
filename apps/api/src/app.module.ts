@@ -11,8 +11,23 @@ import { SalesRequestsModule } from './sales-requests/sales-requests.module';
 import { ProductsModule } from './products/products.module';
 import { RequestsModule } from './requests/requests.module';
 import { IngestModule } from './ingest/ingest.module';
+import { BillingModule } from './billing/billing.module';
 
 @Module({
-  imports: [DbModule, HealthModule, AuthModule, OrgModule, UsersModule, PlaybooksModule, AgentsModule, CallsModule, SalesRequestsModule, ProductsModule, RequestsModule, IngestModule],
+  imports: [
+    DbModule,
+    HealthModule,
+    AuthModule,
+    OrgModule,
+    UsersModule,
+    PlaybooksModule,
+    AgentsModule,
+    CallsModule,
+    SalesRequestsModule,
+    ProductsModule,
+    RequestsModule,
+    IngestModule,
+    BillingModule,
+  ],
 })
 export class AppModule {}

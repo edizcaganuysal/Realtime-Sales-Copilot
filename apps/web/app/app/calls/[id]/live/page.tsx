@@ -276,8 +276,8 @@ function NextLineCard({
     return (
       <div className="bg-slate-900/80 border border-slate-700/50 rounded-2xl p-6 text-center">
         <div className="flex items-center justify-center gap-2 mb-2">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-          <span className="text-emerald-400 text-xs font-medium uppercase tracking-widest">Prospect speaking</span>
+          <span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse" />
+          <span className="text-sky-400 text-xs font-medium uppercase tracking-widest">Prospect speaking</span>
         </div>
         <p className="text-slate-500 text-sm">Listening...</p>
       </div>
@@ -293,9 +293,9 @@ function NextLineCard({
   }
 
   return (
-    <div className="bg-gradient-to-br from-emerald-950/60 to-slate-900/80 border border-emerald-500/30 rounded-2xl p-5">
+    <div className="bg-gradient-to-br from-emerald-950/60 to-slate-900/80 border border-sky-500/30 rounded-2xl p-5">
       <div className="flex items-center justify-between mb-3">
-        <span className="text-emerald-400 text-[11px] font-semibold uppercase tracking-widest">Say this</span>
+        <span className="text-sky-400 text-[11px] font-semibold uppercase tracking-widest">Say this</span>
         <button
           onClick={onSwap}
           className="text-[10px] text-slate-500 hover:text-slate-300 px-2 py-0.5 rounded border border-slate-700 hover:border-slate-500 transition-colors"
@@ -380,7 +380,7 @@ function MiniStats({ stats }: { stats: CallStats }) {
       <span className="text-slate-700">|</span>
       <span>Qs: {stats.repQuestions}</span>
       <span className="text-slate-700">|</span>
-      <span className={stats.sentiment === 'positive' ? 'text-emerald-500' : stats.sentiment === 'negative' ? 'text-red-400' : ''}>
+      <span className={stats.sentiment === 'positive' ? 'text-sky-500' : stats.sentiment === 'negative' ? 'text-red-400' : ''}>
         {stats.sentiment === 'positive' ? 'Positive' : stats.sentiment === 'negative' ? 'Negative' : 'Neutral'}
       </span>
     </div>
@@ -550,10 +550,15 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
     const intervalId = setInterval(() => {
       void loadCredits();
     }, 30000);
+    const refreshListener = () => {
+      void loadCredits();
+    };
+    window.addEventListener('credits:refresh', refreshListener);
 
     return () => {
       active = false;
       clearInterval(intervalId);
+      window.removeEventListener('credits:refresh', refreshListener);
     };
   }, []);
 
@@ -766,7 +771,7 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
   if (!call) {
     return (
       <div className="flex items-center justify-center h-full bg-slate-950">
-        <div className="w-8 h-8 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" />
+        <div className="w-8 h-8 border-2 border-sky-400 border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
@@ -795,7 +800,7 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
       {/* ─── Top bar ─────────────────────────────────────────────────── */}
       <div className="shrink-0 flex items-center justify-between gap-3 px-4 sm:px-5 py-2 border-b border-slate-800/60 bg-slate-950">
         <div className="flex items-center gap-2.5 min-w-0">
-          <div className={'w-2 h-2 rounded-full ' + (connected ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600')} />
+          <div className={'w-2 h-2 rounded-full ' + (connected ? 'bg-sky-400 animate-pulse' : 'bg-slate-600')} />
           {isMock ? (
             <span className="flex items-center gap-1.5 text-violet-400 font-mono text-sm shrink-0"><Bot size={14} /> Practice</span>
           ) : (
@@ -803,7 +808,7 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
           )}
           <span className="text-slate-600 text-xs tabular-nums shrink-0">{timer}</span>
           {isMock && (
-            <span className={`hidden sm:flex items-center gap-1 text-xs shrink-0 ${micActive ? 'text-emerald-400' : 'text-red-400'}`}>
+            <span className={`hidden sm:flex items-center gap-1 text-xs shrink-0 ${micActive ? 'text-sky-400' : 'text-red-400'}`}>
               {micActive ? <Mic size={12} /> : <MicOff size={12} />}
               {micActive ? (mockReady ? 'Live' : 'Connecting...') : 'No mic'}
             </span>
@@ -812,7 +817,7 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
             {productPills.slice(0, 2).map((label) => (
               <span
                 key={label}
-                className="hidden md:inline-flex text-[11px] px-2 py-0.5 rounded-full border border-cyan-500/30 bg-cyan-500/10 text-cyan-300 max-w-[130px] truncate"
+                className="hidden md:inline-flex text-[11px] px-2 py-0.5 rounded-full border border-sky-500/30 bg-sky-500/10 text-sky-300 max-w-[130px] truncate"
               >
                 {label}
               </span>
@@ -830,7 +835,7 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
               Products
             </button>
           </div>
-          <span className="text-[11px] px-2 py-0.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 text-emerald-300">
+          <span className="text-[11px] px-2 py-0.5 rounded-full border border-sky-500/30 bg-sky-500/10 text-sky-300">
             {creditsLabel}
           </span>
           {displaySettings.showStats && (
@@ -869,7 +874,7 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
                 onClick={() => setProductsModeDraft('ALL')}
                 className={`flex-1 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
                   productsModeDraft === 'ALL'
-                    ? 'bg-emerald-600/20 border-emerald-500/40 text-emerald-300'
+                    ? 'bg-sky-600/20 border-sky-500/40 text-sky-300'
                     : 'bg-slate-800 border-slate-700 text-slate-400'
                 }`}
               >
@@ -880,7 +885,7 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
                 onClick={() => setProductsModeDraft('SELECTED')}
                 className={`flex-1 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
                   productsModeDraft === 'SELECTED'
-                    ? 'bg-cyan-600/20 border-cyan-500/40 text-cyan-300'
+                    ? 'bg-sky-600/20 border-sky-500/40 text-sky-300'
                     : 'bg-slate-800 border-slate-700 text-slate-400'
                 }`}
               >
@@ -893,7 +898,7 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
                 <input
                   value={productSearch}
                   onChange={(e) => setProductSearch(e.target.value)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-sky-500"
                   placeholder="Search products..."
                 />
                 <div className="max-h-44 overflow-y-auto space-y-1 pr-1">
@@ -911,7 +916,7 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
                           onClick={() => toggleDraftProduct(product.id)}
                           className={`w-full text-left px-2.5 py-2 rounded-lg border transition-colors ${
                             selected
-                              ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
+                              ? 'border-sky-500/40 bg-sky-500/10 text-sky-200'
                               : 'border-slate-700 bg-slate-800/70 text-slate-300'
                           }`}
                         >
@@ -940,7 +945,7 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
                 type="button"
                 onClick={saveProducts}
                 disabled={productsSaving}
-                className="flex-1 py-2 text-xs text-white bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 rounded-lg transition-colors"
+                className="flex-1 py-2 text-xs text-white bg-sky-600 hover:bg-sky-500 disabled:opacity-50 rounded-lg transition-colors"
               >
                 {productsSaving ? 'Saving...' : 'Save'}
               </button>
@@ -954,9 +959,9 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
         <div className="flex-1 flex flex-col items-center justify-center gap-6 bg-slate-950">
           <div className="relative">
             <div className="w-20 h-20 rounded-full bg-slate-800 flex items-center justify-center">
-              <PhoneCall size={32} className="text-emerald-400" />
+              <PhoneCall size={32} className="text-sky-400" />
             </div>
-            <span className="absolute inset-0 rounded-full border-2 border-emerald-400/40 animate-ping" />
+            <span className="absolute inset-0 rounded-full border-2 border-sky-400/40 animate-ping" />
           </div>
           <div className="text-center space-y-1">
             <p className="text-white font-medium text-lg">Calling {call.phoneTo}...</p>
