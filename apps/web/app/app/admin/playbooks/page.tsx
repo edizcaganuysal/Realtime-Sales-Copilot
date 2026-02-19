@@ -68,7 +68,7 @@ export default function PlaybooksPage() {
         </div>
         <button
           onClick={() => { setShowNew(true); setError(''); }}
-          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium rounded-lg transition-colors"
+          className="px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white text-sm font-medium rounded-lg transition-colors"
         >
           New playbook
         </button>
@@ -84,14 +84,14 @@ export default function PlaybooksPage() {
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               placeholder="Playbook name"
-              className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
             />
             {error && <p className="text-red-400 text-xs mt-1.5">{error}</p>}
           </div>
           <button
             type="submit"
             disabled={creating}
-            className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
+            className="px-3 py-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
           >
             {creating ? 'Creating…' : 'Create'}
           </button>
@@ -127,7 +127,7 @@ export default function PlaybooksPage() {
                 <div className="flex items-center gap-3">
                   <span className="text-sm font-medium text-white">{pb.name}</span>
                   {pb.isDefault && (
-                    <span className="text-xs px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 font-medium">
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-400 font-medium">
                       Default
                     </span>
                   )}

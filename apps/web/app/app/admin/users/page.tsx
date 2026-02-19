@@ -19,7 +19,7 @@ const ROLE_BADGE: Record<Role, string> = {
 };
 
 const STATUS_BADGE: Record<string, string> = {
-  ACTIVE: 'bg-emerald-500/15 text-emerald-400',
+  ACTIVE: 'bg-sky-500/15 text-sky-400',
   INVITED: 'bg-yellow-500/15 text-yellow-400',
   DISABLED: 'bg-slate-700 text-slate-500',
 };
@@ -49,7 +49,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-const INPUT = 'w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500';
+const INPUT = 'w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-sky-500';
 const SELECT = INPUT;
 
 export default function UsersPage() {
@@ -127,7 +127,7 @@ export default function UsersPage() {
         </div>
         <button
           onClick={() => { setShowAdd(true); setError(''); }}
-          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium rounded-lg transition-colors"
+          className="px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white text-sm font-medium rounded-lg transition-colors"
         >
           Add user
         </button>
@@ -236,7 +236,7 @@ export default function UsersPage() {
               <button
                 type="submit"
                 disabled={submitting}
-                className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
+                className="flex-1 py-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
               >
                 {submitting ? 'Creating…' : 'Create user'}
               </button>
@@ -281,7 +281,7 @@ export default function UsersPage() {
               <button
                 type="submit"
                 disabled={submitting}
-                className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
+                className="flex-1 py-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
               >
                 {submitting ? 'Saving…' : 'Save changes'}
               </button>

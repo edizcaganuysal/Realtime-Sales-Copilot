@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useRef, useState, use } from 'react';
-import { useRouter } from 'next/navigation';
+import { useEffect, useRef, useState } from 'react';
+import { useParams, useRouter } from 'next/navigation';
 import { GripVertical, Trash2, ChevronDown, ChevronUp, Plus, X } from 'lucide-react';
 
 type Stage = {
@@ -19,10 +19,11 @@ type Playbook = {
   stages: Stage[];
 };
 
-const INPUT = 'w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500';
+const INPUT = 'w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-sky-500';
 
-export default function PlaybookEditorPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
+export default function PlaybookEditorPage() {
+  const params = useParams<{ id: string }>();
+  const id = params?.id;
   const router = useRouter();
 
   const [playbook, setPlaybook] = useState<Playbook | null>(null);
@@ -204,7 +205,7 @@ export default function PlaybookEditorPage({ params }: { params: Promise<{ id: s
               onBlur={saveName}
               onKeyDown={(e) => { if (e.key === 'Enter') saveName(); if (e.key === 'Escape') setEditingName(false); }}
               maxLength={100}
-              className="text-xl font-semibold bg-slate-800 border border-slate-700 rounded-lg px-3 py-1 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 w-full"
+              className="text-xl font-semibold bg-slate-800 border border-slate-700 rounded-lg px-3 py-1 text-white focus:outline-none focus:ring-2 focus:ring-sky-500 w-full"
             />
           ) : (
             <h1
@@ -223,7 +224,7 @@ export default function PlaybookEditorPage({ params }: { params: Promise<{ id: s
           </button>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          {flash && <span className="text-xs text-emerald-400">{flash}</span>}
+          {flash && <span className="text-xs text-sky-400">{flash}</span>}
           {!playbook.isDefault && (
             <button
               onClick={setDefault}
@@ -233,7 +234,7 @@ export default function PlaybookEditorPage({ params }: { params: Promise<{ id: s
             </button>
           )}
           {playbook.isDefault && (
-            <span className="px-2.5 py-1 text-xs font-medium rounded-lg bg-emerald-500/15 text-emerald-400">
+            <span className="px-2.5 py-1 text-xs font-medium rounded-lg bg-sky-500/15 text-sky-400">
               Default
             </span>
           )}
@@ -343,7 +344,7 @@ export default function PlaybookEditorPage({ params }: { params: Promise<{ id: s
                 <button
                   onClick={() => saveStage(stage.id)}
                   disabled={saving === stage.id}
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
+                  className="px-4 py-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
                 >
                   {saving === stage.id ? 'Saving…' : 'Save stage'}
                 </button>
@@ -366,7 +367,7 @@ export default function PlaybookEditorPage({ params }: { params: Promise<{ id: s
           />
           <button
             type="submit"
-            className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium rounded-lg transition-colors"
+            className="px-3 py-2 bg-sky-600 hover:bg-sky-500 text-white text-sm font-medium rounded-lg transition-colors"
           >
             Add
           </button>

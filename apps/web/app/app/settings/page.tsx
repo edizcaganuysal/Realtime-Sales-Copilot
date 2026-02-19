@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { PageHeader } from '@/components/ui/page-header';
+import { SectionCard } from '@/components/ui/section-card';
 
 type LiveDisplaySettings = {
   showStats: boolean;
@@ -28,8 +30,8 @@ function Toggle({
       role="switch"
       aria-checked={checked}
       onClick={() => onChange(!checked)}
-      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
-        checked ? 'bg-emerald-500' : 'bg-slate-700'
+      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900 ${
+        checked ? 'bg-sky-500' : 'bg-slate-700'
       }`}
     >
       <span
@@ -75,12 +77,9 @@ export default function SettingsPage() {
 
   return (
     <div className="p-8 max-w-2xl">
-      <div className="mb-6">
-        <h1 className="text-lg font-semibold text-white">Settings</h1>
-        <p className="text-sm text-slate-500 mt-1">Customize what appears during live calls.</p>
-      </div>
+      <PageHeader title="Settings" description="Customize what appears during live calls." />
 
-      <div className="bg-slate-900 border border-slate-800 rounded-xl px-5">
+      <SectionCard contentClassName="px-5 py-0">
         <Row label="Show compact call stats">
           <Toggle checked={settings.showStats} onChange={(v) => patch('showStats', v)} />
         </Row>
@@ -90,9 +89,9 @@ export default function SettingsPage() {
         <Row label="Show transcript panel">
           <Toggle checked={settings.showTranscript} onChange={(v) => patch('showTranscript', v)} />
         </Row>
-      </div>
+      </SectionCard>
 
-      {saved && <p className="text-xs text-emerald-400 mt-3">Saved</p>}
+      {saved && <p className="text-xs text-sky-400 mt-3">Saved</p>}
     </div>
   );
 }

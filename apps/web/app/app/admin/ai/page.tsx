@@ -63,7 +63,7 @@ export default function AdminAiPage() {
       </div>
 
       {success && (
-        <div className="mb-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-300">
+        <div className="mb-4 rounded-lg border border-sky-500/30 bg-sky-500/10 px-4 py-2 text-sm text-sky-300">
           {success}
         </div>
       )}
@@ -87,7 +87,7 @@ export default function AdminAiPage() {
               setError('');
               setShowModal(true);
             }}
-            className="px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-medium"
+            className="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-sm font-medium"
           >
             Request fine-tuning
           </button>
@@ -136,7 +136,7 @@ export default function AdminAiPage() {
                 <textarea
                   rows={3}
                   maxLength={2000}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
                   value={form.complianceNotes}
                   onChange={(e) => setForm((prev) => ({ ...prev, complianceNotes: e.target.value }))}
                   placeholder="Data residency, retention, approved processors, security requirements"
@@ -148,7 +148,7 @@ export default function AdminAiPage() {
                 <textarea
                   rows={4}
                   maxLength={3000}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
                   value={form.notes}
                   onChange={(e) => setForm((prev) => ({ ...prev, notes: e.target.value }))}
                   placeholder="Goals, timelines, required behaviors, and evaluation criteria"
@@ -166,7 +166,7 @@ export default function AdminAiPage() {
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="flex-1 rounded-lg bg-cyan-600 py-2 text-sm font-medium text-white hover:bg-cyan-500 disabled:opacity-50"
+                  className="flex-1 rounded-lg bg-sky-600 py-2 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-50"
                 >
                   {submitting ? 'Submitting...' : 'Submit request'}
                 </button>

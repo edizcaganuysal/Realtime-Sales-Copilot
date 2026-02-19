@@ -13,7 +13,7 @@ export function SiteShell({ children }: { children: React.ReactNode }) {
       <header className="sticky top-0 z-40 border-b border-slate-200/80 bg-white/85 backdrop-blur">
         <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between px-4 sm:px-6 lg:px-8">
           <Link href="/" className="flex items-center gap-2">
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500 text-xs font-bold text-white">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-sky-500 text-xs font-bold text-white">
               S
             </span>
             <span className="text-sm font-semibold tracking-tight text-slate-900">Sales AI</span>

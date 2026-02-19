@@ -154,12 +154,12 @@ export default function PlanOnboardingPage() {
               onClick={() => setSelectedPlanId(plan.id)}
               className={`rounded-2xl border p-5 text-left transition-colors ${
                 selected
-                  ? 'border-emerald-500/50 bg-emerald-500/10'
+                  ? 'border-sky-500/50 bg-sky-500/10'
                   : 'border-slate-800 bg-slate-900 hover:border-slate-600'
               }`}
             >
               <p className="text-base font-semibold text-white">{plan.name}</p>
-              <p className="mt-3 text-2xl font-bold text-emerald-300">
+              <p className="mt-3 text-2xl font-bold text-sky-300">
                 {formatCredits(plan.monthlyCredits)}
               </p>
               <p className="mt-1 text-xs uppercase tracking-wider text-slate-500">credits / month</p>
@@ -175,7 +175,7 @@ export default function PlanOnboardingPage() {
         <button
           onClick={handleConfirm}
           disabled={submitting || !selectedPlanId}
-          className="px-5 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-sm font-medium"
+          className="px-5 py-2.5 rounded-lg bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-sm font-medium"
         >
           {submitting ? 'Applying plan...' : 'Confirm plan'}
         </button>

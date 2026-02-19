@@ -44,7 +44,7 @@ export default function PricingPage() {
             className={
               'rounded-2xl border p-6 shadow-sm ' +
               (tier.featured
-                ? 'border-emerald-300 bg-emerald-50'
+                ? 'border-sky-300 bg-sky-50'
                 : 'border-slate-200 bg-white')
             }
           >
@@ -54,7 +54,7 @@ export default function PricingPage() {
             <ul className="mt-5 space-y-2">
               {FEATURES.map((feature) => (
                 <li key={feature} className="flex items-start gap-2 text-sm text-slate-700">
-                  <span className="mt-1 h-2 w-2 rounded-full bg-emerald-500" />
+                  <span className="mt-1 h-2 w-2 rounded-full bg-sky-500" />
                   <span>{feature}</span>
                 </li>
               ))}

@@ -4,6 +4,11 @@ import { useEffect, useState } from 'react';
 import { AgentScope, AgentStatus, Role } from '@live-sales-coach/shared';
 import type { MeResponse } from '@live-sales-coach/shared';
 import { Bot, Plus, X } from 'lucide-react';
+import { PageHeader } from '@/components/ui/page-header';
+import { EmptyState } from '@/components/ui/empty-state';
+import { LoadingSkeleton } from '@/components/ui/loading-skeleton';
+import { StatusBadge } from '@/components/ui/status-badge';
+import { INPUT_BASE } from '@/components/ui/form-field';
 
 type Agent = {
   id: string;
@@ -15,21 +20,12 @@ type Agent = {
   createdAt: string;
 };
 
-const STATUS_BADGE: Record<AgentStatus, string> = {
-  DRAFT: 'bg-slate-700 text-slate-400',
-  PENDING_APPROVAL: 'bg-yellow-500/15 text-yellow-400',
-  APPROVED: 'bg-emerald-500/15 text-emerald-400',
-  REJECTED: 'bg-red-500/15 text-red-400',
+const STATUS_MAP: Record<AgentStatus, { label: string; variant: 'neutral' | 'warning' | 'success' | 'error' }> = {
+  DRAFT: { label: 'Draft', variant: 'neutral' },
+  PENDING_APPROVAL: { label: 'Pending', variant: 'warning' },
+  APPROVED: { label: 'Approved', variant: 'success' },
+  REJECTED: { label: 'Rejected', variant: 'error' },
 };
-
-const STATUS_LABEL: Record<AgentStatus, string> = {
-  DRAFT: 'Draft',
-  PENDING_APPROVAL: 'Pending',
-  APPROVED: 'Approved',
-  REJECTED: 'Rejected',
-};
-
-const INPUT = 'w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500';
 
 type Tab = 'company' | 'mine' | 'pending';
 
@@ -152,30 +148,32 @@ export default function AgentsPage() {
 
   return (
     <div className="p-8 max-w-4xl">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-lg font-semibold text-white">Agents</h1>
-        <div className="flex items-center gap-2">
-          {canRequestCustomAgent && (
-            <button
-              onClick={() => {
-                setError('');
-                setShowRequestModal(true);
-              }}
-              className="px-3 py-1.5 border border-cyan-500/40 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-200 text-sm font-medium rounded-lg transition-colors"
-            >
-              Request custom agent build
-            </button>
-          )}
-          {canCreate && (
-            <button onClick={openCreate} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium rounded-lg transition-colors">
-              <Plus size={14} /> New agent
-            </button>
-          )}
-        </div>
-      </div>
+      <PageHeader
+        title="Agents"
+        actions={
+          <>
+            {canRequestCustomAgent && (
+              <button
+                onClick={() => {
+                  setError('');
+                  setShowRequestModal(true);
+                }}
+                className="px-3 py-1.5 border border-sky-500/40 bg-sky-500/10 hover:bg-sky-500/20 text-sky-200 text-sm font-medium rounded-lg transition-colors"
+              >
+                Request custom agent build
+              </button>
+            )}
+            {canCreate && (
+              <button onClick={openCreate} className="flex items-center gap-1.5 px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white text-sm font-medium rounded-lg transition-colors">
+                <Plus size={14} /> New agent
+              </button>
+            )}
+          </>
+        }
+      />
 
       {requestSuccess && (
-        <div className="mb-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
+        <div className="mb-4 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-sm text-sky-300">
           {requestSuccess}
         </div>
       )}
@@ -190,12 +188,9 @@ export default function AgentsPage() {
       </div>
 
       {loading ? (
-        <div className="space-y-3">{[...Array(3)].map((_, i) => <div key={i} className="h-20 bg-slate-900 border border-slate-800 rounded-xl animate-pulse" />)}</div>
+        <LoadingSkeleton count={3} height="h-20" />
       ) : agents.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-16">
-          <Bot size={32} className="text-slate-700 mb-3" />
-          <p className="text-slate-500 text-sm">No agents here yet</p>
-        </div>
+        <EmptyState icon={Bot} message="No agents here yet" className="py-16" />
       ) : (
         <div className="space-y-3">
           {agents.map((agent) => (
@@ -204,7 +199,7 @@ export default function AgentsPage() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-sm font-medium text-white">{agent.name}</span>
-                    <span className={'text-xs px-1.5 py-0.5 rounded font-medium ' + STATUS_BADGE[agent.status]}>{STATUS_LABEL[agent.status]}</span>
+                    <StatusBadge variant={STATUS_MAP[agent.status].variant}>{STATUS_MAP[agent.status].label}</StatusBadge>
                     {agent.scope === AgentScope.ORG && <span className="text-xs px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400 font-medium">ORG</span>}
                   </div>
                   <p className="text-xs text-slate-500 line-clamp-2">{agent.prompt}</p>
@@ -213,7 +208,7 @@ export default function AgentsPage() {
                   {(agent.status === AgentStatus.DRAFT || agent.status === AgentStatus.REJECTED) && (
                     <>
                       <button onClick={() => openEdit(agent)} className="text-xs text-slate-400 hover:text-white transition-colors">Edit</button>
-                      <button onClick={() => handleSubmitAgent(agent.id)} className="text-xs px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-colors">Submit</button>
+                      <button onClick={() => handleSubmitAgent(agent.id)} className="text-xs px-2.5 py-1 bg-sky-600 hover:bg-sky-500 text-white rounded-lg transition-colors">Submit</button>
                       <button
                         onClick={() => handleDeleteAgent(agent.id, agent.name)}
                         className="text-xs px-2.5 py-1 border border-red-500/30 hover:border-red-500/60 text-red-400 rounded-lg transition-colors"
@@ -250,16 +245,16 @@ export default function AgentsPage() {
             <form onSubmit={handleSubmitForm} className="space-y-4">
               <div>
                 <label className="block text-xs text-slate-400 mb-1.5">Name</label>
-                <input required maxLength={100} className={INPUT} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Discovery Coach" />
+                <input required maxLength={100} className={INPUT_BASE} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Discovery Coach" />
               </div>
               <div>
                 <label className="block text-xs text-slate-400 mb-1.5">System prompt</label>
-                <textarea required rows={6} className={INPUT + ' resize-none'} value={form.prompt} onChange={(e) => setForm({ ...form, prompt: e.target.value })} placeholder="You are a sales coach helping a rep during a discovery call..." />
+                <textarea required rows={6} className={INPUT_BASE + ' resize-none'} value={form.prompt} onChange={(e) => setForm({ ...form, prompt: e.target.value })} placeholder="You are a sales coach helping a rep during a discovery call..." />
               </div>
               {!editAgent && !isRep && (
                 <div>
                   <label className="block text-xs text-slate-400 mb-1.5">Scope</label>
-                  <select className={INPUT} value={form.scope} onChange={(e) => setForm({ ...form, scope: e.target.value as AgentScope })}>
+                  <select className={INPUT_BASE} value={form.scope} onChange={(e) => setForm({ ...form, scope: e.target.value as AgentScope })}>
                     <option value={AgentScope.PERSONAL}>Personal (just me)</option>
                     <option value={AgentScope.ORG}>Org-wide</option>
                   </select>
@@ -267,7 +262,7 @@ export default function AgentsPage() {
               )}
               {error && <p className="text-red-400 text-sm">{error}</p>}
               <div className="flex gap-3 pt-1">
-                <button type="submit" disabled={submitting} className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors">
+                <button type="submit" disabled={submitting} className="flex-1 py-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors">
                   {submitting ? 'Saving…' : editAgent ? 'Save changes' : 'Create agent'}
                 </button>
                 <button type="button" onClick={() => setShowModal(false)} className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-medium rounded-lg transition-colors">Cancel</button>
@@ -289,7 +284,7 @@ export default function AgentsPage() {
                 <label className="block text-xs text-slate-400 mb-1.5">Use case</label>
                 <input
                   maxLength={120}
-                  className={INPUT}
+                  className={INPUT_BASE}
                   value={requestForm.useCase}
                   onChange={(e) => setRequestForm((prev) => ({ ...prev, useCase: e.target.value }))}
                   placeholder="What should this agent specialize in?"
@@ -300,7 +295,7 @@ export default function AgentsPage() {
                 <textarea
                   rows={5}
                   maxLength={2000}
-                  className={INPUT + ' resize-none'}
+                  className={INPUT_BASE + ' resize-none'}
                   value={requestForm.notes}
                   onChange={(e) => setRequestForm((prev) => ({ ...prev, notes: e.target.value }))}
                   placeholder="Context, workflows, target outcomes, and constraints."
@@ -308,7 +303,7 @@ export default function AgentsPage() {
               </div>
               {error && <p className="text-red-400 text-sm">{error}</p>}
               <div className="flex gap-3 pt-1">
-                <button type="submit" disabled={requestSubmitting} className="flex-1 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors">
+                <button type="submit" disabled={requestSubmitting} className="flex-1 py-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors">
                   {requestSubmitting ? 'Submitting...' : 'Submit request'}
                 </button>
                 <button type="button" onClick={() => setShowRequestModal(false)} className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-medium rounded-lg transition-colors">Cancel</button>

@@ -16,12 +16,12 @@ const HIGHLIGHTS = [
 export default function HomePage() {
   return (
     <div className="relative overflow-hidden">
-      <div className="absolute inset-x-0 top-0 -z-10 h-72 bg-gradient-to-b from-emerald-100 to-transparent" />
+      <div className="absolute inset-x-0 top-0 -z-10 h-72 bg-gradient-to-b from-sky-100 to-transparent" />
 
       <section className="mx-auto w-full max-w-6xl px-4 pb-16 pt-14 sm:px-6 lg:px-8 lg:pt-20">
         <div className="grid gap-10 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
           <div>
-            <p className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-emerald-700">
+            <p className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-sky-700">
               AI sales coaching platform
             </p>
             <h1 className="mt-5 text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl">
@@ -51,7 +51,7 @@ export default function HomePage() {
             <ul className="mt-4 space-y-3">
               {HIGHLIGHTS.map((item) => (
                 <li key={item} className="flex items-start gap-2 text-sm text-slate-600">
-                  <span className="mt-1 h-2 w-2 rounded-full bg-emerald-500" />
+                  <span className="mt-1 h-2 w-2 rounded-full bg-sky-500" />
                   <span>{item}</span>
                 </li>
               ))}

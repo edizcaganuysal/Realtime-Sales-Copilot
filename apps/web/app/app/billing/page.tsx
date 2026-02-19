@@ -59,7 +59,7 @@ function resolveTab(raw: string | null): BillingTab {
 
 function statusClass(status: string) {
   const value = status.toLowerCase();
-  if (value === 'fulfilled') return 'text-emerald-300 bg-emerald-500/10 border-emerald-500/30';
+  if (value === 'fulfilled') return 'text-sky-300 bg-sky-500/10 border-sky-500/30';
   if (value === 'approved') return 'text-sky-300 bg-sky-500/10 border-sky-500/30';
   if (value === 'rejected') return 'text-red-300 bg-red-500/10 border-red-500/30';
   return 'text-amber-300 bg-amber-500/10 border-amber-500/30';
@@ -359,7 +359,7 @@ export default function BillingPage() {
         </div>
       )}
       {notice && (
-        <div className="mb-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-300">
+        <div className="mb-4 rounded-lg border border-sky-500/30 bg-sky-500/10 px-4 py-2 text-sm text-sky-300">
           {notice}
         </div>
       )}

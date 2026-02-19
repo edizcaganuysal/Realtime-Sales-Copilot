@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { Bot, ArrowRight, Shield, Zap, Users } from 'lucide-react';
+import { PageHeader } from '@/components/ui/page-header';
 
 const DRILLS = [
   {
@@ -28,19 +29,19 @@ const DRILLS = [
 export default function TrainingPage() {
   return (
     <div className="p-8 space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold text-white">Training</h1>
-          <p className="text-slate-400 mt-1">Run focused practice drills before live calls.</p>
-        </div>
-        <Link
-          href="/app/dialer/new?mode=practice"
-          className="inline-flex items-center gap-2 rounded-lg border border-violet-500/40 bg-violet-500/10 px-3 py-2 text-sm font-medium text-violet-200 hover:bg-violet-500/20 transition-colors"
-        >
-          <Bot size={15} />
-          Start practice call
-        </Link>
-      </div>
+      <PageHeader
+        title="Training"
+        description="Run focused practice drills before live calls."
+        actions={
+          <Link
+            href="/app/dialer/new?mode=practice"
+            className="inline-flex items-center gap-2 rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-sm font-medium text-sky-200 hover:bg-sky-500/20 transition-colors"
+          >
+            <Bot size={15} />
+            Start practice call
+          </Link>
+        }
+      />
 
       <div className="grid gap-3">
         {DRILLS.map((drill) => {
@@ -52,7 +53,7 @@ export default function TrainingPage() {
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex items-start gap-3 min-w-0">
-                  <div className="mt-0.5 rounded-lg bg-slate-800 p-2 text-cyan-300">
+                  <div className="mt-0.5 rounded-lg bg-slate-800 p-2 text-sky-300">
                     <Icon size={15} />
                   </div>
                   <div className="min-w-0">
@@ -62,7 +63,7 @@ export default function TrainingPage() {
                 </div>
                 <Link
                   href={drill.href}
-                  className="shrink-0 inline-flex items-center gap-1 rounded-md border border-slate-700 px-2.5 py-1.5 text-xs text-slate-300 hover:text-white hover:border-slate-500 transition-colors"
+                  className="shrink-0 inline-flex items-center gap-1 rounded-md border border-slate-700 px-2.5 py-1.5 text-xs text-slate-300 hover:text-white hover:border-sky-500/40 transition-colors"
                 >
                   Practice
                   <ArrowRight size={13} />
