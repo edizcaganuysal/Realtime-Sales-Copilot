@@ -1,7 +1,7 @@
 'use client';
 
-import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { io, Socket } from 'socket.io-client';
 import {
   AlertTriangle,
@@ -291,12 +291,9 @@ function speakerLabel(speaker: string) {
   return speaker === 'REP' ? 'YOU' : 'PROSPECT';
 }
 
-export default function LiveCallPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
-  const { id } = use(params);
+export default function LiveCallPage() {
+  const params = useParams<{ id: string }>();
+  const id = params?.id;
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -766,7 +763,7 @@ export default function LiveCallPage({
               Offerings
             </button>
           </div>
-          <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] text-emerald-200">
+          <span className="rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[11px] text-sky-200">
             {momentTag}
           </span>
           <span className="rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[11px] text-sky-200">

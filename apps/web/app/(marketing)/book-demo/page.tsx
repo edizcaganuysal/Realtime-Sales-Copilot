@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 
 type FormState = {
@@ -28,6 +28,14 @@ function normalizeType(value: string | null): string {
 }
 
 export default function BookDemoPage() {
+  return (
+    <Suspense>
+      <BookDemoForm />
+    </Suspense>
+  );
+}
+
+function BookDemoForm() {
   const searchParams = useSearchParams();
   const initialType = useMemo(() => normalizeType(searchParams.get('type')), [searchParams]);
 
@@ -165,7 +173,7 @@ export default function BookDemoPage() {
           )}
 
           {success && (
-            <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+            <p className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-800">
               Request received. We will contact you soon.
             </p>
           )}

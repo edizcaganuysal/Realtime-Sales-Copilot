@@ -1,8 +1,11 @@
 'use client';
 
-import { useEffect, useState, use } from 'react';
+import { useEffect, useState } from 'react';
+import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, MessageSquare, Brain, BarChart2, CheckSquare } from 'lucide-react';
+import { SectionCard } from '@/components/ui/section-card';
+import { LoadingSkeleton } from '@/components/ui/loading-skeleton';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -57,15 +60,7 @@ function formatTime(tsMs: number) {
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
 function Section({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
-  return (
-    <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-      <div className="flex items-center gap-2.5 px-5 py-3.5 border-b border-slate-800">
-        <span className="text-slate-400">{icon}</span>
-        <h2 className="text-sm font-semibold text-white">{title}</h2>
-      </div>
-      <div className="p-5">{children}</div>
-    </div>
-  );
+  return <SectionCard title={title} icon={icon}>{children}</SectionCard>;
 }
 
 function TalkRatioBar({ rep, prospect }: { rep: number; prospect: number }) {
@@ -74,11 +69,11 @@ function TalkRatioBar({ rep, prospect }: { rep: number; prospect: number }) {
   return (
     <div className="space-y-2">
       <div className="flex gap-2 h-3 rounded-full overflow-hidden">
-        <div className="bg-emerald-500 rounded-l-full" style={{ width: `${repPct}%` }} />
+        <div className="bg-sky-500 rounded-l-full" style={{ width: `${repPct}%` }} />
         <div className="bg-blue-500 rounded-r-full" style={{ width: `${prosPct}%` }} />
       </div>
       <div className="flex gap-6 text-xs text-slate-400">
-        <span><span className="text-emerald-400 font-medium">{repPct}%</span> Rep</span>
+        <span><span className="text-sky-400 font-medium">{repPct}%</span> Rep</span>
         <span><span className="text-blue-400 font-medium">{prosPct}%</span> Prospect</span>
       </div>
     </div>
@@ -88,7 +83,7 @@ function TalkRatioBar({ rep, prospect }: { rep: number; prospect: number }) {
 function ScoreBadge({ score }: { score: number | null }) {
   if (score === null) return null;
   const color =
-    score >= 8 ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' :
+    score >= 8 ? 'text-sky-400 border-sky-500/30 bg-sky-500/10' :
     score >= 6 ? 'text-amber-400 border-amber-500/30 bg-amber-500/10' :
     'text-red-400 border-red-500/30 bg-red-500/10';
   return (
@@ -100,8 +95,9 @@ function ScoreBadge({ score }: { score: number | null }) {
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
-export default function CallReviewPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
+export default function CallReviewPage() {
+  const params = useParams<{ id: string }>();
+  const id = params?.id;
 
   const [call, setCall] = useState<CallData | null>(null);
   const [transcript, setTranscript] = useState<TranscriptLine[]>([]);
@@ -124,9 +120,7 @@ export default function CallReviewPage({ params }: { params: Promise<{ id: strin
   if (loading) {
     return (
       <div className="p-8 space-y-4 max-w-4xl">
-        {[...Array(3)].map((_, i) => (
-          <div key={i} className="h-32 bg-slate-900 border border-slate-800 rounded-xl animate-pulse" />
-        ))}
+        <LoadingSkeleton count={3} height="h-32" />
       </div>
     );
   }
@@ -164,7 +158,7 @@ export default function CallReviewPage({ params }: { params: Promise<{ id: strin
         {call.status === 'IN_PROGRESS' && (
           <Link
             href={`/app/calls/${id}/live`}
-            className="text-xs px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-colors"
+            className="text-xs px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-lg transition-colors"
           >
             Rejoin live
           </Link>
@@ -223,11 +217,11 @@ export default function CallReviewPage({ params }: { params: Promise<{ id: strin
               <div className="space-y-4">
                 {summary.coachingJson.strengths.length > 0 && (
                   <div>
-                    <p className="text-xs text-emerald-400 uppercase tracking-wider mb-2">Strengths</p>
+                    <p className="text-xs text-sky-400 uppercase tracking-wider mb-2">Strengths</p>
                     <ul className="space-y-1">
                       {summary.coachingJson.strengths.map((s, i) => (
                         <li key={i} className="text-xs text-slate-400 flex items-start gap-1.5">
-                          <span className="text-emerald-500 mt-0.5">✓</span> {s}
+                          <span className="text-sky-500 mt-0.5">✓</span> {s}
                         </li>
                       ))}
                     </ul>
@@ -247,11 +241,11 @@ export default function CallReviewPage({ params }: { params: Promise<{ id: strin
                 )}
                 {(summary.coachingJson.nextActions?.length ?? 0) > 0 && (
                   <div>
-                    <p className="text-xs text-cyan-400 uppercase tracking-wider mb-2">Next actions</p>
+                    <p className="text-xs text-sky-400 uppercase tracking-wider mb-2">Next actions</p>
                     <ul className="space-y-1">
                       {summary.coachingJson.nextActions!.map((action, i) => (
                         <li key={i} className="text-xs text-slate-400 flex items-start gap-1.5">
-                          <span className="text-cyan-500 mt-0.5">•</span> {action}
+                          <span className="text-sky-500 mt-0.5">•</span> {action}
                         </li>
                       ))}
                     </ul>
@@ -263,7 +257,7 @@ export default function CallReviewPage({ params }: { params: Promise<{ id: strin
                     <ul className="space-y-1">
                       {summary.coachingJson.nextBestLines!.map((line, i) => (
                         <li key={i} className="text-xs text-slate-300 flex items-start gap-1.5">
-                          <span className="text-violet-500 mt-0.5">{i + 1}.</span> "{line}"
+                          <span className="text-violet-500 mt-0.5">{i + 1}.</span> &ldquo;{line}&rdquo;
                         </li>
                       ))}
                     </ul>
@@ -295,7 +289,7 @@ export default function CallReviewPage({ params }: { params: Promise<{ id: strin
                       className={
                         'w-4 h-4 rounded border flex items-center justify-center shrink-0 text-[10px] ' +
                         (done
-                          ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
+                          ? 'bg-sky-500/20 border-sky-500/40 text-sky-400'
                           : 'border-slate-600 text-slate-600')
                       }
                     >
@@ -336,7 +330,7 @@ export default function CallReviewPage({ params }: { params: Promise<{ id: strin
                   className={
                     'shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold ' +
                     (line.speaker === 'REP'
-                      ? 'bg-emerald-500/20 text-emerald-400'
+                      ? 'bg-sky-500/20 text-sky-400'
                       : 'bg-blue-500/20 text-blue-400')
                   }
                 >

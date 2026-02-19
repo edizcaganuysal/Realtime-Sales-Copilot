@@ -153,7 +153,7 @@ export const PRACTICE_PERSONAS: PracticePersona[] = [
     title: 'Sales Manager, Real Estate Brokerage',
     description: 'Super friendly and chatty but not the decision maker. Tests your qualification and navigation skills.',
     difficulty: 'Medium',
-    color: 'emerald',
+    color: 'sky',
     prompt:
       `You are a Sales Manager at a real estate brokerage. You're friendly and chatty, but you are NOT the decision maker.\n\n` +
       `YOUR SPECIFIC TRAITS:\n` +

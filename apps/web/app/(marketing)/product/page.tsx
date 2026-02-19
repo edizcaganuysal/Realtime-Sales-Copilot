@@ -38,7 +38,7 @@ export default function ProductPage() {
         ))}
       </div>
 
-      <div className="mt-10 rounded-2xl border border-emerald-200 bg-emerald-50 p-6">
+      <div className="mt-10 rounded-2xl border border-sky-200 bg-sky-50 p-6">
         <h3 className="text-lg font-semibold text-slate-900">Need a tailored coaching profile?</h3>
         <p className="mt-2 text-sm text-slate-700">
           We can build a custom agent tuned to your segment, objection patterns, and qualification standards.

@@ -40,7 +40,7 @@ const PERSONA_COLORS: Record<string, string> = {
   red: 'border-red-500/30 hover:border-red-500/60 bg-red-500/5',
   blue: 'border-blue-500/30 hover:border-blue-500/60 bg-blue-500/5',
   violet: 'border-violet-500/30 hover:border-violet-500/60 bg-violet-500/5',
-  emerald: 'border-sky-500/30 hover:border-sky-500/60 bg-sky-500/5',
+  sky: 'border-sky-500/30 hover:border-sky-500/60 bg-sky-500/5',
   slate: 'border-slate-500/30 hover:border-slate-500/60 bg-slate-500/5',
 };
 
@@ -49,7 +49,7 @@ const PERSONA_ICON_COLORS: Record<string, string> = {
   red: 'text-red-400 bg-red-500/15',
   blue: 'text-blue-400 bg-blue-500/15',
   violet: 'text-violet-400 bg-violet-500/15',
-  emerald: 'text-sky-400 bg-sky-500/15',
+  sky: 'text-sky-400 bg-sky-500/15',
   slate: 'text-slate-400 bg-slate-500/15',
 };
 
@@ -58,7 +58,7 @@ const PERSONA_SELECTED: Record<string, string> = {
   red: 'border-red-400 bg-red-500/15 ring-1 ring-red-500/30',
   blue: 'border-blue-400 bg-blue-500/15 ring-1 ring-blue-500/30',
   violet: 'border-violet-400 bg-violet-500/15 ring-1 ring-violet-500/30',
-  emerald: 'border-sky-400 bg-sky-500/15 ring-1 ring-sky-500/30',
+  sky: 'border-sky-400 bg-sky-500/15 ring-1 ring-sky-500/30',
   slate: 'border-slate-400 bg-slate-500/15 ring-1 ring-slate-500/30',
 };
 

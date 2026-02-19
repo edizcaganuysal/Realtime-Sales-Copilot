@@ -25,7 +25,7 @@ function Toggle({
       aria-checked={checked}
       onClick={() => onChange(!checked)}
       className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none ${
-        checked ? 'bg-emerald-500' : 'bg-slate-700'
+        checked ? 'bg-sky-500' : 'bg-slate-700'
       }`}
     >
       <span
@@ -127,7 +127,7 @@ export default function GovernancePage() {
           <select
             value={settings.publisherPolicy}
             onChange={(e) => patch('publisherPolicy', e.target.value as PublisherPolicy)}
-            className="bg-slate-800 border border-slate-700 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            className="bg-slate-800 border border-slate-700 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-sky-500"
           >
             <option value={PublisherPolicy.ADMIN_ONLY}>Admin only</option>
             <option value={PublisherPolicy.ADMIN_AND_MANAGERS}>Admin &amp; Managers</option>
@@ -138,7 +138,7 @@ export default function GovernancePage() {
           <select
             value={settings.liveLayoutDefault}
             onChange={(e) => patch('liveLayoutDefault', e.target.value as LiveLayout)}
-            className="bg-slate-800 border border-slate-700 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            className="bg-slate-800 border border-slate-700 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-sky-500"
           >
             <option value={LiveLayout.MINIMAL}>Minimal</option>
             <option value={LiveLayout.STANDARD}>Standard</option>
@@ -149,7 +149,7 @@ export default function GovernancePage() {
           <select
             value={settings.retentionDays}
             onChange={(e) => patch('retentionDays', Number(e.target.value))}
-            className="bg-slate-800 border border-slate-700 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            className="bg-slate-800 border border-slate-700 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-sky-500"
           >
             {RETENTION_DAYS.map((d) => (
               <option key={d} value={d}>
@@ -164,11 +164,11 @@ export default function GovernancePage() {
         <button
           onClick={handleSave}
           disabled={saving}
-          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
+          className="px-4 py-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
         >
           {saving ? 'Saving…' : 'Save changes'}
         </button>
-        {flash === 'saved' && <span className="text-sm text-emerald-400">Saved</span>}
+        {flash === 'saved' && <span className="text-sm text-sky-400">Saved</span>}
         {flash === 'error' && <span className="text-sm text-red-400">Failed to save</span>}
       </div>
     </div>
