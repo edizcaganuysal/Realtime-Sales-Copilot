@@ -10,8 +10,9 @@ import { CallsModule } from './calls/calls.module';
 import { SalesRequestsModule } from './sales-requests/sales-requests.module';
 import { ProductsModule } from './products/products.module';
 import { RequestsModule } from './requests/requests.module';
+import { IngestModule } from './ingest/ingest.module';
 
 @Module({
-  imports: [DbModule, HealthModule, AuthModule, OrgModule, UsersModule, PlaybooksModule, AgentsModule, CallsModule, SalesRequestsModule, ProductsModule, RequestsModule],
+  imports: [DbModule, HealthModule, AuthModule, OrgModule, UsersModule, PlaybooksModule, AgentsModule, CallsModule, SalesRequestsModule, ProductsModule, RequestsModule, IngestModule],
 })
 export class AppModule {}

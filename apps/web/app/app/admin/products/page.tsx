@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 
@@ -25,6 +26,14 @@ type ProductForm = {
   pricing_rules_text: string;
   faqs_text: string;
   objections_text: string;
+};
+
+type QualitySuggestion = {
+  id: string;
+  field: string;
+  title: string;
+  message: string;
+  proposedValue: string;
 };
 
 const INPUT =
@@ -72,6 +81,9 @@ export default function AdminProductsPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Product | null>(null);
   const [form, setForm] = useState<ProductForm>(DEFAULT_FORM);
+  const [qualityChecking, setQualityChecking] = useState(false);
+  const [qualitySuggestions, setQualitySuggestions] = useState<QualitySuggestion[]>([]);
+  const [qualityOpen, setQualityOpen] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -191,6 +203,105 @@ export default function AdminProductsPage() {
     await load();
   }
 
+  async function handleQualityCheck() {
+    let pricingRules: Record<string, unknown>;
+    let faqs: unknown[];
+    let objections: unknown[];
+
+    try {
+      const parsedPricing = JSON.parse(form.pricing_rules_text || '{}');
+      const parsedFaqs = JSON.parse(form.faqs_text || '[]');
+      const parsedObjections = JSON.parse(form.objections_text || '[]');
+      if (!parsedPricing || typeof parsedPricing !== 'object' || Array.isArray(parsedPricing)) {
+        throw new Error('Pricing rules must be a JSON object.');
+      }
+      if (!Array.isArray(parsedFaqs)) {
+        throw new Error('FAQs must be a JSON array.');
+      }
+      if (!Array.isArray(parsedObjections)) {
+        throw new Error('Objections must be a JSON array.');
+      }
+      pricingRules = parsedPricing;
+      faqs = parsedFaqs;
+      objections = parsedObjections;
+    } catch (parseError) {
+      setError(parseError instanceof Error ? parseError.message : 'Invalid JSON input.');
+      return;
+    }
+
+    setQualityChecking(true);
+    setError('');
+    const res = await fetch('/api/quality/product', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: form.name,
+        elevator_pitch: form.elevator_pitch,
+        value_props: linesToArray(form.value_props_text),
+        differentiators: linesToArray(form.differentiators_text),
+        dont_say: linesToArray(form.dont_say_text),
+        pricing_rules: pricingRules,
+        faqs,
+        objections,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setQualityChecking(false);
+
+    if (!res.ok) {
+      setError(Array.isArray(data?.message) ? data.message[0] : (data?.message ?? 'Quality check failed'));
+      return;
+    }
+
+    const suggestions = Array.isArray(data?.suggestions) ? data.suggestions : [];
+    setQualitySuggestions(
+      suggestions.map((entry: Record<string, unknown>, index: number) => ({
+        id: typeof entry.id === 'string' && entry.id ? entry.id : `suggestion_${index + 1}`,
+        field: typeof entry.field === 'string' ? entry.field : 'general',
+        title: typeof entry.title === 'string' ? entry.title : 'Improve quality',
+        message: typeof entry.message === 'string' ? entry.message : '',
+        proposedValue: typeof entry.proposedValue === 'string' ? entry.proposedValue : '',
+      })),
+    );
+    setQualityOpen(true);
+  }
+
+  function applyQualitySuggestion(suggestion: QualitySuggestion) {
+    const normalized = suggestion.field.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (!suggestion.proposedValue.trim()) return;
+    if (normalized === 'name') {
+      setForm((prev) => ({ ...prev, name: suggestion.proposedValue }));
+      return;
+    }
+    if (normalized === 'elevatorpitch') {
+      setForm((prev) => ({ ...prev, elevator_pitch: suggestion.proposedValue }));
+      return;
+    }
+    if (normalized === 'valueprops') {
+      setForm((prev) => ({ ...prev, value_props_text: suggestion.proposedValue }));
+      return;
+    }
+    if (normalized === 'differentiators') {
+      setForm((prev) => ({ ...prev, differentiators_text: suggestion.proposedValue }));
+      return;
+    }
+    if (normalized === 'donotsay') {
+      setForm((prev) => ({ ...prev, dont_say_text: suggestion.proposedValue }));
+      return;
+    }
+    if (normalized === 'pricingrules') {
+      setForm((prev) => ({ ...prev, pricing_rules_text: suggestion.proposedValue }));
+      return;
+    }
+    if (normalized === 'faqs') {
+      setForm((prev) => ({ ...prev, faqs_text: suggestion.proposedValue }));
+      return;
+    }
+    if (normalized === 'objections') {
+      setForm((prev) => ({ ...prev, objections_text: suggestion.proposedValue }));
+    }
+  }
+
   async function handleDelete(product: Product) {
     if (!confirm(`Delete "${product.name}"?`)) return;
     setDeletingId(product.id);
@@ -214,12 +325,20 @@ export default function AdminProductsPage() {
             Save product context once so agents can use it by default.
           </p>
         </div>
-        <button
-          onClick={openCreate}
-          className="px-3 py-2 text-sm font-medium rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white transition-colors"
-        >
-          New product
-        </button>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/app/admin/products/import"
+            className="px-3 py-2 text-sm font-medium rounded-lg border border-cyan-500/40 bg-cyan-500/10 text-cyan-200 hover:bg-cyan-500/20 transition-colors"
+          >
+            Auto-fill from website or PDFs
+          </Link>
+          <button
+            onClick={openCreate}
+            className="px-3 py-2 text-sm font-medium rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white transition-colors"
+          >
+            New product
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -321,6 +440,9 @@ export default function AdminProductsPage() {
                   onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
                   placeholder="Product name"
                 />
+                <p className="text-[11px] text-slate-600 mt-1">
+                  Keep product name short and recognizable for reps and buyers.
+                </p>
               </div>
 
               <div>
@@ -334,6 +456,9 @@ export default function AdminProductsPage() {
                   }
                   placeholder="Short pitch reps can use"
                 />
+                <p className="text-[11px] text-slate-600 mt-1">
+                  Write a 2-4 sentence pitch focused on business outcome and fit.
+                </p>
               </div>
 
               <div>
@@ -367,6 +492,9 @@ export default function AdminProductsPage() {
                         setForm((prev) => ({ ...prev, pricing_rules_text: e.target.value }))
                       }
                     />
+                    <p className="text-[11px] text-slate-600 mt-1">
+                      Add guardrails only, for example required qualifiers and prohibited promises.
+                    </p>
                   </div>
 
                   <div>
@@ -377,6 +505,9 @@ export default function AdminProductsPage() {
                       value={form.faqs_text}
                       onChange={(e) => setForm((prev) => ({ ...prev, faqs_text: e.target.value }))}
                     />
+                    <p className="text-[11px] text-slate-600 mt-1">
+                      {'Use objects like {"question":"...","answer":"..."} for cleaner coaching answers.'}
+                    </p>
                   </div>
 
                   <div>
@@ -389,6 +520,9 @@ export default function AdminProductsPage() {
                         setForm((prev) => ({ ...prev, objections_text: e.target.value }))
                       }
                     />
+                    <p className="text-[11px] text-slate-600 mt-1">
+                      Capture frequent objections and safe response patterns.
+                    </p>
                   </div>
 
                   <div>
@@ -402,6 +536,9 @@ export default function AdminProductsPage() {
                       }
                       placeholder={'One per line'}
                     />
+                    <p className="text-[11px] text-slate-600 mt-1">
+                      Keep each line specific, verifiable, and competitor-safe.
+                    </p>
                   </div>
 
                   <div>
@@ -415,12 +552,22 @@ export default function AdminProductsPage() {
                       }
                       placeholder={'One per line'}
                     />
+                    <p className="text-[11px] text-slate-600 mt-1">
+                      Include compliance-sensitive language reps should avoid.
+                    </p>
                   </div>
                 </div>
               </details>
             </div>
 
             <div className="mt-4 flex gap-2">
+              <button
+                onClick={handleQualityCheck}
+                disabled={qualityChecking}
+                className="py-2 px-3 text-sm text-slate-200 border border-slate-700 hover:border-slate-500 disabled:opacity-50 rounded-lg transition-colors"
+              >
+                {qualityChecking ? 'Checking...' : 'Quality check'}
+              </button>
               <button
                 onClick={() => {
                   setModalOpen(false);
@@ -438,6 +585,51 @@ export default function AdminProductsPage() {
                 {saving ? 'Saving...' : editing ? 'Save changes' : 'Create product'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {qualityOpen && (
+        <div className="fixed inset-0 z-[60] bg-black/70 flex items-center justify-center p-4">
+          <div className="w-full max-w-3xl bg-slate-900 border border-slate-800 rounded-2xl p-5 max-h-[92vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-white font-semibold text-base">Quality suggestions</h3>
+              <button
+                onClick={() => setQualityOpen(false)}
+                className="text-slate-400 hover:text-white text-sm"
+              >
+                Close
+              </button>
+            </div>
+
+            {qualitySuggestions.length === 0 ? (
+              <p className="text-sm text-slate-400">No suggestions returned.</p>
+            ) : (
+              <div className="space-y-3">
+                {qualitySuggestions.map((suggestion) => (
+                  <div key={suggestion.id} className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="text-sm font-medium text-white">{suggestion.title}</p>
+                        <p className="text-xs text-slate-500 mt-0.5">{suggestion.field}</p>
+                      </div>
+                      <button
+                        onClick={() => applyQualitySuggestion(suggestion)}
+                        className="text-xs px-2.5 py-1 rounded-lg border border-emerald-500/30 text-emerald-300 hover:border-emerald-500/60 transition-colors"
+                      >
+                        Apply suggested edit
+                      </button>
+                    </div>
+                    <p className="mt-2 text-sm text-slate-300">{suggestion.message}</p>
+                    {suggestion.proposedValue && (
+                      <pre className="mt-2 whitespace-pre-wrap text-xs text-cyan-200 bg-slate-900 border border-slate-800 rounded-lg p-3">
+                        {suggestion.proposedValue}
+                      </pre>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
