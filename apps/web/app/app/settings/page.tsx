@@ -6,14 +6,19 @@ import { SectionCard } from '@/components/ui/section-card';
 
 type LiveDisplaySettings = {
   showStats: boolean;
-  showChecklist: boolean;
   showTranscript: boolean;
+};
+
+type MeResponse = {
+  user: {
+    name: string;
+    email: string;
+  };
 };
 
 const STORAGE_KEY = 'live_call_display_settings';
 const DEFAULTS: LiveDisplaySettings = {
   showStats: true,
-  showChecklist: true,
   showTranscript: true,
 };
 
@@ -45,7 +50,7 @@ function Toggle({
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between py-4 border-b border-slate-800 last:border-0">
+    <div className="flex items-center justify-between border-b border-slate-800 py-4 last:border-0">
       <span className="text-sm text-slate-300">{label}</span>
       {children}
     </div>
@@ -55,6 +60,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 export default function SettingsPage() {
   const [settings, setSettings] = useState<LiveDisplaySettings>(DEFAULTS);
   const [saved, setSaved] = useState(false);
+  const [me, setMe] = useState<MeResponse | null>(null);
 
   useEffect(() => {
     try {
@@ -67,6 +73,13 @@ export default function SettingsPage() {
     }
   }, []);
 
+  useEffect(() => {
+    void fetch('/api/auth/me', { cache: 'no-store' })
+      .then((res) => res.json())
+      .then((data) => setMe(data))
+      .catch(() => null);
+  }, []);
+
   function patch<K extends keyof LiveDisplaySettings>(key: K, value: LiveDisplaySettings[K]) {
     const next = { ...settings, [key]: value };
     setSettings(next);
@@ -76,22 +89,26 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="p-8 max-w-2xl">
-      <PageHeader title="Settings" description="Customize what appears during live calls." />
+    <div className="p-8 max-w-2xl space-y-5">
+      <PageHeader title="Settings" description="Personal account and live screen preferences." />
 
-      <SectionCard contentClassName="px-5 py-0">
+      <SectionCard title="Account">
+        <div className="space-y-2 text-sm text-slate-300">
+          <p className="font-medium text-white">{me?.user.name ?? 'Account'}</p>
+          <p className="text-slate-400">{me?.user.email ?? ''}</p>
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Live display" contentClassName="px-5 py-0">
         <Row label="Show compact call stats">
           <Toggle checked={settings.showStats} onChange={(v) => patch('showStats', v)} />
         </Row>
-        <Row label="Show stage checklist">
-          <Toggle checked={settings.showChecklist} onChange={(v) => patch('showChecklist', v)} />
-        </Row>
-        <Row label="Show transcript panel">
+        <Row label="Show transcript drawer">
           <Toggle checked={settings.showTranscript} onChange={(v) => patch('showTranscript', v)} />
         </Row>
       </SectionCard>
 
-      {saved && <p className="text-xs text-sky-400 mt-3">Saved</p>}
+      {saved && <p className="text-xs text-sky-400">Saved</p>}
     </div>
   );
 }

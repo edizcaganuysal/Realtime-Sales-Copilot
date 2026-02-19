@@ -18,7 +18,7 @@ export default function SignupPage() {
     oauthErrorCode === 'google_config_missing'
       ? 'Google sign-up is not configured yet. Please contact support.'
       : oauthErrorCode === 'google_signup_requires_org'
-        ? 'Organization name is required to continue with Google.'
+        ? 'Account name is required to continue with Google.'
         : oauthErrorCode === 'google_oauth_failed'
           ? 'Google sign-up could not be completed. Please try again.'
           : '';
@@ -52,7 +52,7 @@ export default function SignupPage() {
   function handleGoogleSignup() {
     const org = orgName.trim();
     if (!org) {
-      setError('Organization name is required to continue with Google.');
+      setError('Account name is required to continue with Google.');
       return;
     }
     const target = `/api/auth/google/start?mode=signup&orgName=${encodeURIComponent(org)}`;
@@ -116,7 +116,7 @@ export default function SignupPage() {
           </div>
 
           <div>
-            <label className="block text-sm text-slate-300 mb-1.5">Organization</label>
+            <label className="block text-sm text-slate-300 mb-1.5">Account name</label>
             <input
               type="text"
               required

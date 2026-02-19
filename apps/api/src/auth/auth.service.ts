@@ -57,7 +57,7 @@ export class AuthService {
       throw new BadRequestException('Name is required');
     }
     if (!orgName) {
-      throw new BadRequestException('Organization name is required');
+      throw new BadRequestException('Account name is required');
     }
 
     const [existing] = await this.db
@@ -119,7 +119,7 @@ export class AuthService {
 
     const orgName = dto.orgName?.trim();
     if (!orgName) {
-      throw new BadRequestException('Organization name is required');
+      throw new BadRequestException('Account name is required');
     }
 
     const passwordHash = await bcrypt.hash(randomBytes(32).toString('hex'), 10);

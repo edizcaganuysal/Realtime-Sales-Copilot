@@ -22,8 +22,6 @@ const WS_URL =
   'http://localhost:3001';
 const API_WS_URL = WS_URL.replace(/^http/, 'ws');
 
-type Role = 'ADMIN' | 'MANAGER' | 'REP';
-
 type ProductRef = {
   id: string;
   name: string;
@@ -332,7 +330,6 @@ export default function LiveCallPage() {
   const [productSearch, setProductSearch] = useState('');
   const [productsSaving, setProductsSaving] = useState(false);
   const [productsError, setProductsError] = useState('');
-  const [role, setRole] = useState<Role | null>(null);
   const [debugPayload, setDebugPayload] = useState<DebugPayload | null>(null);
 
   const socketRef = useRef<Socket | null>(null);
@@ -344,7 +341,7 @@ export default function LiveCallPage() {
   const timer = useTimer(call?.startedAt ?? null);
   const isMock = call?.mode === 'MOCK';
   const isActive = callStatus !== 'INITIATED';
-  const debugEnabled = searchParams.get('debug') === '1' && role === 'ADMIN';
+  const debugEnabled = searchParams.get('debug') === '1';
   const { micActive, mockReady } = useMockAudio(id, isMock, isActive);
 
   const availableProducts = call?.availableProducts ?? [];
@@ -370,27 +367,6 @@ export default function LiveCallPage() {
   useEffect(() => {
     suggestionRef.current = suggestion;
   }, [suggestion]);
-
-  useEffect(() => {
-    let active = true;
-
-    async function loadRole() {
-      const res = await fetch('/api/auth/me', { cache: 'no-store' });
-      if (!res.ok || !active) return;
-      const data = await res.json().catch(() => null);
-      if (!active) return;
-      const value = data?.user?.role;
-      if (value === 'ADMIN' || value === 'MANAGER' || value === 'REP') {
-        setRole(value);
-      }
-    }
-
-    void loadRole();
-
-    return () => {
-      active = false;
-    };
-  }, []);
 
   useEffect(() => {
     let active = true;

@@ -1,5 +1,5 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
-import { AgentScope, AgentStatus, Role } from '@live-sales-coach/shared';
+import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Role } from '@live-sales-coach/shared';
 import type { JwtPayload } from '@live-sales-coach/shared';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
@@ -16,12 +16,8 @@ export class AgentsController {
   constructor(private readonly agentsService: AgentsService) {}
 
   @Get()
-  list(
-    @CurrentUser() user: JwtPayload,
-    @Query('scope') scope?: AgentScope,
-    @Query('status') status?: AgentStatus,
-  ) {
-    return this.agentsService.list(user, scope, status);
+  list(@CurrentUser() user: JwtPayload) {
+    return this.agentsService.list(user);
   }
 
   @Post()
@@ -41,25 +37,5 @@ export class AgentsController {
   @Delete(':id')
   remove(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.agentsService.remove(user, id);
-  }
-
-  @Post(':id/submit')
-  @HttpCode(200)
-  submit(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.agentsService.submit(user, id);
-  }
-
-  @Post(':id/approve')
-  @Roles(Role.MANAGER)
-  @HttpCode(200)
-  approve(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.agentsService.approve(user, id);
-  }
-
-  @Post(':id/reject')
-  @Roles(Role.MANAGER)
-  @HttpCode(200)
-  reject(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.agentsService.reject(user, id);
   }
 }

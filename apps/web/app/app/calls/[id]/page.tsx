@@ -3,21 +3,17 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, MessageSquare, Brain, BarChart2, CheckSquare } from 'lucide-react';
+import { ArrowLeft, MessageSquare, Brain, BarChart2 } from 'lucide-react';
 import { SectionCard } from '@/components/ui/section-card';
 import { LoadingSkeleton } from '@/components/ui/loading-skeleton';
-
-// ─── Types ────────────────────────────────────────────────────────────────────
 
 type CallData = {
   id: string;
   phoneTo: string;
   status: string;
-  guidanceLevel: string;
   startedAt: string | null;
   endedAt: string | null;
   notes: string | null;
-  playbookId: string | null;
 };
 
 type TranscriptLine = {
@@ -40,10 +36,7 @@ type SummaryData = {
     nextBestLines?: string[];
     risks?: string[];
   };
-  checklistResultsJson: Record<string, boolean>;
 } | null;
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function formatDuration(start: string | null, end: string | null) {
   if (!start) return '—';
@@ -54,13 +47,27 @@ function formatDuration(start: string | null, end: string | null) {
 }
 
 function formatTime(tsMs: number) {
-  return new Date(tsMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  return new Date(tsMs).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
 }
 
-// ─── Sub-components ──────────────────────────────────────────────────────────
-
-function Section({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
-  return <SectionCard title={title} icon={icon}>{children}</SectionCard>;
+function Section({
+  title,
+  icon,
+  children,
+}: {
+  title: string;
+  icon: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <SectionCard title={title} icon={icon}>
+      {children}
+    </SectionCard>
+  );
 }
 
 function TalkRatioBar({ rep, prospect }: { rep: number; prospect: number }) {
@@ -68,13 +75,17 @@ function TalkRatioBar({ rep, prospect }: { rep: number; prospect: number }) {
   const prosPct = Math.round(prospect * 100);
   return (
     <div className="space-y-2">
-      <div className="flex gap-2 h-3 rounded-full overflow-hidden">
-        <div className="bg-sky-500 rounded-l-full" style={{ width: `${repPct}%` }} />
-        <div className="bg-blue-500 rounded-r-full" style={{ width: `${prosPct}%` }} />
+      <div className="flex h-3 gap-2 overflow-hidden rounded-full">
+        <div className="rounded-l-full bg-sky-500" style={{ width: `${repPct}%` }} />
+        <div className="rounded-r-full bg-blue-500" style={{ width: `${prosPct}%` }} />
       </div>
       <div className="flex gap-6 text-xs text-slate-400">
-        <span><span className="text-sky-400 font-medium">{repPct}%</span> Rep</span>
-        <span><span className="text-blue-400 font-medium">{prosPct}%</span> Prospect</span>
+        <span>
+          <span className="font-medium text-sky-400">{repPct}%</span> Rep
+        </span>
+        <span>
+          <span className="font-medium text-blue-400">{prosPct}%</span> Prospect
+        </span>
       </div>
     </div>
   );
@@ -83,17 +94,17 @@ function TalkRatioBar({ rep, prospect }: { rep: number; prospect: number }) {
 function ScoreBadge({ score }: { score: number | null }) {
   if (score === null) return null;
   const color =
-    score >= 8 ? 'text-sky-400 border-sky-500/30 bg-sky-500/10' :
-    score >= 6 ? 'text-amber-400 border-amber-500/30 bg-amber-500/10' :
-    'text-red-400 border-red-500/30 bg-red-500/10';
+    score >= 8
+      ? 'text-sky-400 border-sky-500/30 bg-sky-500/10'
+      : score >= 6
+        ? 'text-amber-400 border-amber-500/30 bg-amber-500/10'
+        : 'text-red-400 border-red-500/30 bg-red-500/10';
   return (
-    <div className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-sm font-semibold ${color}`}>
+    <div className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-semibold ${color}`}>
       {score}/10
     </div>
   );
 }
-
-// ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function CallReviewPage() {
   const params = useParams<{ id: string }>();
@@ -119,37 +130,31 @@ export default function CallReviewPage() {
 
   if (loading) {
     return (
-      <div className="p-8 space-y-4 max-w-4xl">
+      <div className="max-w-4xl space-y-4 p-8">
         <LoadingSkeleton count={3} height="h-32" />
       </div>
     );
   }
 
   if (!call) {
-    return (
-      <div className="p-8 text-slate-500 text-sm">Call not found.</div>
-    );
+    return <div className="p-8 text-sm text-slate-500">Call not found.</div>;
   }
 
-  const checklistEntries = summary ? Object.entries(summary.checklistResultsJson) : [];
-
   return (
-    <div className="p-8 max-w-4xl space-y-5">
-      {/* Header */}
+    <div className="max-w-4xl space-y-5 p-8">
       <div className="flex items-start justify-between">
         <div className="flex items-center gap-3">
           <Link
             href="/app/calls"
-            className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-white transition-colors"
+            className="flex items-center gap-1.5 text-xs text-slate-500 transition-colors hover:text-white"
           >
             <ArrowLeft size={14} /> Back
           </Link>
           <span className="text-slate-700">|</span>
           <div>
-            <h1 className="text-white font-semibold font-mono text-lg">{call.phoneTo}</h1>
-            <p className="text-slate-500 text-xs mt-0.5">
-              {call.startedAt ? new Date(call.startedAt).toLocaleString() : '—'}
-              {' · '}
+            <h1 className="font-mono text-lg font-semibold text-white">{call.phoneTo}</h1>
+            <p className="mt-0.5 text-xs text-slate-500">
+              {call.startedAt ? new Date(call.startedAt).toLocaleString() : '—'} {' · '}
               {formatDuration(call.startedAt, call.endedAt)}
               {call.notes && ` · ${call.notes}`}
             </p>
@@ -158,27 +163,27 @@ export default function CallReviewPage() {
         {call.status === 'IN_PROGRESS' && (
           <Link
             href={`/app/calls/${id}/live`}
-            className="text-xs px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-lg transition-colors"
+            className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs text-white transition-colors hover:bg-sky-500"
           >
             Rejoin live
           </Link>
         )}
       </div>
 
-      {/* AI Summary + Coaching */}
       {summary ? (
         <>
           <Section title="AI Summary" icon={<Brain size={15} />}>
-            <p className="text-slate-300 text-sm leading-relaxed mb-4">
+            <p className="mb-4 text-sm leading-relaxed text-slate-300">
               {summary.summaryJson.summary || 'No summary generated.'}
             </p>
             {summary.summaryJson.keyMoments.length > 0 && (
               <div>
-                <p className="text-xs text-slate-500 uppercase tracking-wider mb-2">Key moments</p>
+                <p className="mb-2 text-xs uppercase tracking-wider text-slate-500">Key moments</p>
                 <ul className="space-y-1.5">
-                  {summary.summaryJson.keyMoments.map((m, i) => (
-                    <li key={i} className="flex items-start gap-2 text-sm text-slate-400">
-                      <span className="text-slate-600 mt-0.5">•</span> {m}
+                  {summary.summaryJson.keyMoments.map((moment, index) => (
+                    <li key={index} className="flex items-start gap-2 text-sm text-slate-400">
+                      <span className="mt-0.5 text-slate-600">•</span>
+                      {moment}
                     </li>
                   ))}
                 </ul>
@@ -188,10 +193,9 @@ export default function CallReviewPage() {
 
           <Section title="Coaching" icon={<BarChart2 size={15} />}>
             <div className="grid grid-cols-2 gap-6">
-              {/* Left: metrics */}
               <div className="space-y-5">
                 <div>
-                  <p className="text-xs text-slate-500 uppercase tracking-wider mb-2">Talk ratio</p>
+                  <p className="mb-2 text-xs uppercase tracking-wider text-slate-500">Talk ratio</p>
                   <TalkRatioBar
                     rep={summary.coachingJson.talkRatio.rep}
                     prospect={summary.coachingJson.talkRatio.prospect}
@@ -199,29 +203,29 @@ export default function CallReviewPage() {
                 </div>
                 <div className="flex items-center gap-4">
                   <div>
-                    <p className="text-xs text-slate-500 uppercase tracking-wider mb-1">Questions asked</p>
-                    <p className="text-2xl font-bold text-white tabular-nums">
+                    <p className="mb-1 text-xs uppercase tracking-wider text-slate-500">Questions asked</p>
+                    <p className="text-2xl font-bold tabular-nums text-white">
                       {summary.coachingJson.questionCount}
                     </p>
                   </div>
                   {summary.coachingJson.score !== null && (
                     <div>
-                      <p className="text-xs text-slate-500 uppercase tracking-wider mb-1">Score</p>
+                      <p className="mb-1 text-xs uppercase tracking-wider text-slate-500">Score</p>
                       <ScoreBadge score={summary.coachingJson.score} />
                     </div>
                   )}
                 </div>
               </div>
 
-              {/* Right: strengths + improvements */}
               <div className="space-y-4">
                 {summary.coachingJson.strengths.length > 0 && (
                   <div>
-                    <p className="text-xs text-sky-400 uppercase tracking-wider mb-2">Strengths</p>
+                    <p className="mb-2 text-xs uppercase tracking-wider text-sky-400">Strengths</p>
                     <ul className="space-y-1">
-                      {summary.coachingJson.strengths.map((s, i) => (
-                        <li key={i} className="text-xs text-slate-400 flex items-start gap-1.5">
-                          <span className="text-sky-500 mt-0.5">✓</span> {s}
+                      {summary.coachingJson.strengths.map((value, index) => (
+                        <li key={index} className="flex items-start gap-1.5 text-xs text-slate-400">
+                          <span className="mt-0.5 text-sky-500">✓</span>
+                          {value}
                         </li>
                       ))}
                     </ul>
@@ -229,11 +233,12 @@ export default function CallReviewPage() {
                 )}
                 {summary.coachingJson.improvements.length > 0 && (
                   <div>
-                    <p className="text-xs text-amber-400 uppercase tracking-wider mb-2">Improvements</p>
+                    <p className="mb-2 text-xs uppercase tracking-wider text-amber-400">Improvements</p>
                     <ul className="space-y-1">
-                      {summary.coachingJson.improvements.map((imp, i) => (
-                        <li key={i} className="text-xs text-slate-400 flex items-start gap-1.5">
-                          <span className="text-amber-500 mt-0.5">→</span> {imp}
+                      {summary.coachingJson.improvements.map((value, index) => (
+                        <li key={index} className="flex items-start gap-1.5 text-xs text-slate-400">
+                          <span className="mt-0.5 text-amber-500">→</span>
+                          {value}
                         </li>
                       ))}
                     </ul>
@@ -241,11 +246,12 @@ export default function CallReviewPage() {
                 )}
                 {(summary.coachingJson.nextActions?.length ?? 0) > 0 && (
                   <div>
-                    <p className="text-xs text-sky-400 uppercase tracking-wider mb-2">Next actions</p>
+                    <p className="mb-2 text-xs uppercase tracking-wider text-sky-400">Next actions</p>
                     <ul className="space-y-1">
-                      {summary.coachingJson.nextActions!.map((action, i) => (
-                        <li key={i} className="text-xs text-slate-400 flex items-start gap-1.5">
-                          <span className="text-sky-500 mt-0.5">•</span> {action}
+                      {summary.coachingJson.nextActions!.map((value, index) => (
+                        <li key={index} className="flex items-start gap-1.5 text-xs text-slate-400">
+                          <span className="mt-0.5 text-sky-500">•</span>
+                          {value}
                         </li>
                       ))}
                     </ul>
@@ -253,11 +259,12 @@ export default function CallReviewPage() {
                 )}
                 {(summary.coachingJson.nextBestLines?.length ?? 0) > 0 && (
                   <div>
-                    <p className="text-xs text-violet-400 uppercase tracking-wider mb-2">Next best lines</p>
+                    <p className="mb-2 text-xs uppercase tracking-wider text-violet-400">Next best lines</p>
                     <ul className="space-y-1">
-                      {summary.coachingJson.nextBestLines!.map((line, i) => (
-                        <li key={i} className="text-xs text-slate-300 flex items-start gap-1.5">
-                          <span className="text-violet-500 mt-0.5">{i + 1}.</span> &ldquo;{line}&rdquo;
+                      {summary.coachingJson.nextBestLines!.map((value, index) => (
+                        <li key={index} className="flex items-start gap-1.5 text-xs text-slate-300">
+                          <span className="mt-0.5 text-violet-500">{index + 1}.</span>
+                          &ldquo;{value}&rdquo;
                         </li>
                       ))}
                     </ul>
@@ -265,11 +272,12 @@ export default function CallReviewPage() {
                 )}
                 {(summary.coachingJson.risks?.length ?? 0) > 0 && (
                   <div>
-                    <p className="text-xs text-rose-400 uppercase tracking-wider mb-2">Risks</p>
+                    <p className="mb-2 text-xs uppercase tracking-wider text-rose-400">Risks</p>
                     <ul className="space-y-1">
-                      {summary.coachingJson.risks!.map((risk, i) => (
-                        <li key={i} className="text-xs text-slate-400 flex items-start gap-1.5">
-                          <span className="text-rose-500 mt-0.5">!</span> {risk}
+                      {summary.coachingJson.risks!.map((value, index) => (
+                        <li key={index} className="flex items-start gap-1.5 text-xs text-slate-400">
+                          <span className="mt-0.5 text-rose-500">!</span>
+                          {value}
                         </li>
                       ))}
                     </ul>
@@ -278,47 +286,21 @@ export default function CallReviewPage() {
               </div>
             </div>
           </Section>
-
-          {/* Checklist results (only if populated) */}
-          {checklistEntries.length > 0 && (
-            <Section title="Checklist Results" icon={<CheckSquare size={15} />}>
-              <div className="space-y-2">
-                {checklistEntries.map(([label, done]) => (
-                  <div key={label} className="flex items-center gap-3">
-                    <span
-                      className={
-                        'w-4 h-4 rounded border flex items-center justify-center shrink-0 text-[10px] ' +
-                        (done
-                          ? 'bg-sky-500/20 border-sky-500/40 text-sky-400'
-                          : 'border-slate-600 text-slate-600')
-                      }
-                    >
-                      {done ? '✓' : ''}
-                    </span>
-                    <span className={'text-sm ' + (done ? 'text-slate-400 line-through' : 'text-slate-300')}>
-                      {label}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </Section>
-          )}
         </>
       ) : (
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 text-center">
-          <Brain size={24} className="text-slate-700 mx-auto mb-2" />
-          <p className="text-slate-500 text-sm">
+        <div className="rounded-xl border border-slate-800 bg-slate-900 p-5 text-center">
+          <Brain size={24} className="mx-auto mb-2 text-slate-700" />
+          <p className="text-sm text-slate-500">
             {call.status === 'IN_PROGRESS'
               ? 'AI analysis is generated after the call ends.'
-              : 'No AI analysis available — call may have been too short, or LLM is not configured.'}
+              : 'No AI analysis available.'}
           </p>
         </div>
       )}
 
-      {/* Transcript */}
       <Section title={`Transcript (${transcript.length} lines)`} icon={<MessageSquare size={15} />}>
         {transcript.length === 0 ? (
-          <p className="text-slate-600 text-sm text-center py-4">No transcript recorded for this call.</p>
+          <p className="py-4 text-center text-sm text-slate-600">No transcript recorded for this call.</p>
         ) : (
           <div className="space-y-3">
             {transcript.map((line) => (
@@ -328,7 +310,7 @@ export default function CallReviewPage() {
               >
                 <div
                   className={
-                    'shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold ' +
+                    'h-6 w-6 shrink-0 rounded-full text-[9px] font-bold flex items-center justify-center ' +
                     (line.speaker === 'REP'
                       ? 'bg-sky-500/20 text-sky-400'
                       : 'bg-blue-500/20 text-blue-400')
@@ -336,13 +318,18 @@ export default function CallReviewPage() {
                 >
                   {line.speaker === 'REP' ? 'R' : 'P'}
                 </div>
-                <div className={'max-w-[75%] ' + (line.speaker === 'REP' ? 'items-end' : 'items-start') + ' flex flex-col gap-0.5'}>
+                <div
+                  className={
+                    'flex max-w-[75%] flex-col gap-0.5 ' +
+                    (line.speaker === 'REP' ? 'items-end' : 'items-start')
+                  }
+                >
                   <div
                     className={
-                      'px-3 py-2 rounded-xl text-sm ' +
+                      'rounded-xl px-3 py-2 text-sm ' +
                       (line.speaker === 'REP'
-                        ? 'bg-slate-700 text-slate-200 rounded-tr-sm'
-                        : 'bg-slate-800 text-slate-300 rounded-tl-sm')
+                        ? 'rounded-tr-sm bg-slate-700 text-slate-200'
+                        : 'rounded-tl-sm bg-slate-800 text-slate-300')
                     }
                   >
                     {line.text}

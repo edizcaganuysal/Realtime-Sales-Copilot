@@ -344,6 +344,8 @@ export class CallsService {
       const patch: Partial<typeof schema.calls.$inferInsert> = {};
 
       if (dto.notes !== undefined) patch.notes = dto.notes;
+      if (dto.outcome !== undefined) patch.outcome = dto.outcome;
+      if (dto.deal_value !== undefined) patch.dealValue = dto.deal_value;
       if (shouldSyncProducts) patch.productsMode = nextMode;
 
       let next = call;

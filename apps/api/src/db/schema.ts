@@ -286,6 +286,8 @@ export const calls = pgTable('calls', {
   phoneTo: text('phone_to').notNull(),
   contactJson: jsonb('contact_json').default({}).notNull(),
   notes: text('notes'),
+  outcome: text('outcome').default('unknown').notNull(),
+  dealValue: integer('deal_value'),
   preparedOpenerText: text('prepared_opener_text'),
   preparedOpenerGeneratedAt: timestamp('prepared_opener_generated_at', {
     withTimezone: true,
