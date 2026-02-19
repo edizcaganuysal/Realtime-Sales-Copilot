@@ -1,70 +1,185 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { GuidanceLevel, LiveLayout } from '@live-sales-coach/shared';
-import type { MeResponse } from '@live-sales-coach/shared';
-import { Phone } from 'lucide-react';
+import { CallMode } from '@live-sales-coach/shared';
+import { Phone, Bot, Plus, ChevronRight, Shield, Zap, Users, Crown, Smile, X, Pencil, Trash2 } from 'lucide-react';
 
 type Agent = { id: string; name: string };
-type Playbook = { id: string; name: string };
+type PracticePersona = {
+  id: string;
+  name: string;
+  title: string;
+  description: string;
+  difficulty: string;
+  color: string;
+  isCustom?: boolean;
+};
 
 const INPUT =
   'w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500';
 
-const GUIDANCE_LABELS: Record<GuidanceLevel, string> = {
-  MINIMAL: 'Minimal — nudges only',
-  STANDARD: 'Standard — suggestions + nudges',
-  GUIDED: 'Guided — full checklist + coaching',
+const DIFFICULTY_COLORS: Record<string, string> = {
+  Medium: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30',
+  Hard: 'text-amber-400 bg-amber-500/10 border-amber-500/30',
+  Expert: 'text-red-400 bg-red-500/10 border-red-500/30',
 };
 
-const LAYOUT_LABELS: Record<string, string> = {
-  MINIMAL: 'Minimal',
-  STANDARD: 'Standard',
+const PERSONA_ICONS: Record<string, React.ReactNode> = {
+  'budget-blocker': <Shield size={20} />,
+  'time-waster': <Zap size={20} />,
+  'competitor-loyalist': <Users size={20} />,
+  'skeptical-exec': <Crown size={20} />,
+  'friendly-noshow': <Smile size={20} />,
+};
+
+const PERSONA_COLORS: Record<string, string> = {
+  amber: 'border-amber-500/30 hover:border-amber-500/60 bg-amber-500/5',
+  red: 'border-red-500/30 hover:border-red-500/60 bg-red-500/5',
+  blue: 'border-blue-500/30 hover:border-blue-500/60 bg-blue-500/5',
+  violet: 'border-violet-500/30 hover:border-violet-500/60 bg-violet-500/5',
+  emerald: 'border-emerald-500/30 hover:border-emerald-500/60 bg-emerald-500/5',
+  slate: 'border-slate-500/30 hover:border-slate-500/60 bg-slate-500/5',
+};
+
+const PERSONA_ICON_COLORS: Record<string, string> = {
+  amber: 'text-amber-400 bg-amber-500/15',
+  red: 'text-red-400 bg-red-500/15',
+  blue: 'text-blue-400 bg-blue-500/15',
+  violet: 'text-violet-400 bg-violet-500/15',
+  emerald: 'text-emerald-400 bg-emerald-500/15',
+  slate: 'text-slate-400 bg-slate-500/15',
+};
+
+const PERSONA_SELECTED: Record<string, string> = {
+  amber: 'border-amber-400 bg-amber-500/15 ring-1 ring-amber-500/30',
+  red: 'border-red-400 bg-red-500/15 ring-1 ring-red-500/30',
+  blue: 'border-blue-400 bg-blue-500/15 ring-1 ring-blue-500/30',
+  violet: 'border-violet-400 bg-violet-500/15 ring-1 ring-violet-500/30',
+  emerald: 'border-emerald-400 bg-emerald-500/15 ring-1 ring-emerald-500/30',
+  slate: 'border-slate-400 bg-slate-500/15 ring-1 ring-slate-500/30',
 };
 
 export default function DialerPage() {
   const router = useRouter();
-  const [me, setMe] = useState<MeResponse | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
-  const [playbooks, setPlaybooks] = useState<Playbook[]>([]);
-  const [form, setForm] = useState({
-    phoneTo: '',
-    agentId: '',
-    playbookId: '',
-    guidanceLevel: GuidanceLevel.STANDARD,
-    layoutPreset: LiveLayout.STANDARD,
-    notes: '',
-  });
+  const [personas, setPersonas] = useState<PracticePersona[]>([]);
+  const [mode, setMode] = useState<CallMode>(CallMode.OUTBOUND);
+  const [selectedPersonaId, setSelectedPersonaId] = useState<string | null>(null);
+  const [showModal, setShowModal] = useState(false);
+  const [editingPersonaId, setEditingPersonaId] = useState<string | null>(null);
+  const [modalForm, setModalForm] = useState({ name: '', title: '', description: '', prompt: '', difficulty: 'Medium' });
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({ phoneTo: '', agentId: '', notes: '' });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
-  useEffect(() => {
-    Promise.all([
-      fetch('/api/auth/me').then((r) => r.json()),
-      fetch('/api/agents?scope=ORG&status=APPROVED').then((r) => r.json()),
-      fetch('/api/playbooks').then((r) => r.json()),
-    ]).then(([meData, agentsData, playbooksData]) => {
-      setMe(meData);
-      setAgents(Array.isArray(agentsData) ? agentsData : []);
-      setPlaybooks(Array.isArray(playbooksData) ? playbooksData : []);
-      if (meData?.orgSettings?.liveLayoutDefault) {
-        setForm((f) => ({ ...f, layoutPreset: meData.orgSettings.liveLayoutDefault }));
+  const loadPersonas = useCallback(async () => {
+    try {
+      const res = await fetch('/api/calls/practice-personas');
+      const data = await res.json();
+      const safe = Array.isArray(data) ? data : [];
+      setPersonas(safe);
+      if (safe.length > 0 && !selectedPersonaId) {
+        setSelectedPersonaId(safe[0].id);
       }
+    } catch { /* ignore */ }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    fetch('/api/agents?scope=ORG&status=APPROVED')
+      .then((r) => r.json())
+      .then((agentsData) => {
+        const safeAgents = Array.isArray(agentsData) ? agentsData : [];
+        setAgents(safeAgents);
+        setForm((f) => {
+          const preferredAgent = safeAgents.find((a: Agent) =>
+            a.name.toLowerCase().includes('gtaphotopro'),
+          );
+          return { ...f, agentId: f.agentId || preferredAgent?.id || '' };
+        });
+      });
+    loadPersonas();
+  }, [loadPersonas]);
+
+  function openCreateModal() {
+    setEditingPersonaId(null);
+    setModalForm({ name: '', title: '', description: '', prompt: '', difficulty: 'Medium' });
+    setShowModal(true);
+  }
+
+  function openEditModal(persona: PracticePersona) {
+    setEditingPersonaId(persona.id);
+    setModalForm({
+      name: persona.name,
+      title: persona.title,
+      description: persona.description,
+      prompt: '', // will be populated below if we fetch it
+      difficulty: persona.difficulty,
     });
-  }, []);
+    setShowModal(true);
+  }
+
+  async function handleSavePersona() {
+    if (!modalForm.name.trim() || !modalForm.prompt.trim()) return;
+    setSaving(true);
+
+    try {
+      if (editingPersonaId) {
+        // Update existing
+        const res = await fetch(`/api/calls/practice-personas/${editingPersonaId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(modalForm),
+        });
+        if (res.ok) {
+          await loadPersonas();
+          setShowModal(false);
+        }
+      } else {
+        // Create new
+        const res = await fetch('/api/calls/practice-personas', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(modalForm),
+        });
+        if (res.ok) {
+          const created = await res.json();
+          await loadPersonas();
+          setSelectedPersonaId(created.id);
+          setShowModal(false);
+        }
+      }
+    } catch { /* ignore */ } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDeletePersona(personaId: string) {
+    try {
+      await fetch(`/api/calls/practice-personas/${personaId}`, { method: 'DELETE' });
+      await loadPersonas();
+      if (selectedPersonaId === personaId) {
+        setSelectedPersonaId(personas[0]?.id ?? null);
+      }
+    } catch { /* ignore */ }
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setSubmitting(true);
     setError('');
 
-    const body: Record<string, string> = { phoneTo: form.phoneTo };
+    const body: Record<string, string> = {
+      phoneTo: mode === CallMode.MOCK ? 'MOCK' : form.phoneTo,
+      mode,
+    };
     if (form.agentId) body.agentId = form.agentId;
-    if (form.playbookId) body.playbookId = form.playbookId;
-    body.guidanceLevel = form.guidanceLevel;
-    body.layoutPreset = form.layoutPreset;
     if (form.notes) body.notes = form.notes;
+
+    if (mode === CallMode.MOCK && selectedPersonaId) {
+      body.practicePersonaId = selectedPersonaId;
+    }
 
     const res = await fetch('/api/calls', {
       method: 'POST',
@@ -83,93 +198,180 @@ export default function DialerPage() {
     router.push(`/app/calls/${call.id}/live`);
   }
 
+  const isMock = mode === CallMode.MOCK;
+
   return (
-    <div className="p-8 max-w-lg">
+    <div className="p-8 max-w-2xl">
       <div className="flex items-center gap-3 mb-6">
-        <div className="w-9 h-9 rounded-xl bg-emerald-500/15 flex items-center justify-center">
-          <Phone size={18} className="text-emerald-400" />
+        <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${isMock ? 'bg-violet-500/15' : 'bg-emerald-500/15'}`}>
+          {isMock ? <Bot size={18} className="text-violet-400" /> : <Phone size={18} className="text-emerald-400" />}
         </div>
         <div>
-          <h1 className="text-lg font-semibold text-white">New call</h1>
-          <p className="text-xs text-slate-500">Configure and start an outbound call</p>
+          <h1 className="text-lg font-semibold text-white">{isMock ? 'Practice call' : 'New call'}</h1>
+          <p className="text-xs text-slate-500">
+            {isMock ? 'Practice with a challenging AI prospect' : 'Configure and start an outbound call'}
+          </p>
         </div>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label className="block text-xs text-slate-400 mb-1.5">Phone number</label>
-          <input
-            required
-            type="tel"
-            className={INPUT}
-            placeholder="+1 (555) 000-0000"
-            value={form.phoneTo}
-            onChange={(e) => setForm({ ...form, phoneTo: e.target.value })}
-          />
-        </div>
+      {/* Mode toggle */}
+      <div className="flex gap-2 mb-5">
+        <button
+          type="button"
+          onClick={() => setMode(CallMode.OUTBOUND)}
+          className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-colors border ${
+            !isMock
+              ? 'bg-emerald-600/20 border-emerald-500/40 text-emerald-400'
+              : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
+          }`}
+        >
+          <Phone size={14} />
+          Real call
+        </button>
+        <button
+          type="button"
+          onClick={() => setMode(CallMode.MOCK)}
+          className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-colors border ${
+            isMock
+              ? 'bg-violet-600/20 border-violet-500/40 text-violet-400'
+              : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
+          }`}
+        >
+          <Bot size={14} />
+          Practice (AI)
+        </button>
+      </div>
 
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {/* Practice persona selection */}
+        {isMock && (
+          <div>
+            <label className="block text-xs text-slate-400 mb-2">Choose your prospect</label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {personas.map((p) => {
+                const isSelected = selectedPersonaId === p.id;
+                const colorClass = isSelected
+                  ? (PERSONA_SELECTED[p.color] ?? PERSONA_SELECTED.slate)
+                  : (PERSONA_COLORS[p.color] ?? PERSONA_COLORS.slate);
+                const iconColor = PERSONA_ICON_COLORS[p.color] ?? PERSONA_ICON_COLORS.slate;
+
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => setSelectedPersonaId(p.id)}
+                    className={`relative text-left p-3.5 rounded-xl border transition-all group ${colorClass}`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${iconColor}`}>
+                        {PERSONA_ICONS[p.id] ?? <Bot size={20} />}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <span className="text-white text-sm font-semibold truncate">{p.name}</span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full border font-medium ${DIFFICULTY_COLORS[p.difficulty] ?? DIFFICULTY_COLORS.Medium}`}>
+                            {p.difficulty}
+                          </span>
+                        </div>
+                        <p className="text-slate-500 text-[11px] mb-1">{p.title}</p>
+                        <p className="text-slate-400 text-xs leading-relaxed">{p.description}</p>
+                      </div>
+                    </div>
+                    {/* Edit/Delete for custom personas */}
+                    {p.isCustom && (
+                      <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={(e) => { e.stopPropagation(); openEditModal(p); }}
+                          onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); openEditModal(p); } }}
+                          className="p-1 rounded bg-slate-700/80 text-slate-400 hover:text-white transition-colors"
+                        >
+                          <Pencil size={12} />
+                        </span>
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={(e) => { e.stopPropagation(); handleDeletePersona(p.id); }}
+                          onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); handleDeletePersona(p.id); } }}
+                          className="p-1 rounded bg-slate-700/80 text-slate-400 hover:text-red-400 transition-colors"
+                        >
+                          <Trash2 size={12} />
+                        </span>
+                      </div>
+                    )}
+                    {isSelected && !p.isCustom && (
+                      <div className="absolute top-2 right-2">
+                        <ChevronRight size={14} className="text-slate-400" />
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+
+              {/* Create new custom persona */}
+              <button
+                type="button"
+                onClick={openCreateModal}
+                className="text-left p-3.5 rounded-xl border border-dashed border-slate-700/50 hover:border-slate-500 bg-transparent transition-all"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 bg-slate-800 text-slate-500">
+                    <Plus size={20} />
+                  </div>
+                  <div>
+                    <span className="text-slate-300 text-sm font-medium">New custom prospect</span>
+                    <p className="text-slate-600 text-xs mt-0.5">Create and save a training scenario</p>
+                  </div>
+                </div>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Phone number (real calls only) */}
+        {!isMock && (
+          <div>
+            <label className="block text-xs text-slate-400 mb-1.5">Phone number</label>
+            <input
+              required={!isMock}
+              type="tel"
+              className={INPUT}
+              placeholder="+1 (555) 000-0000"
+              value={form.phoneTo}
+              onChange={(e) => setForm({ ...form, phoneTo: e.target.value })}
+            />
+          </div>
+        )}
+
+        {/* Coaching agent */}
         <div>
-          <label className="block text-xs text-slate-400 mb-1.5">Agent (optional)</label>
+          <label className="block text-xs text-slate-400 mb-1.5">Coaching agent (optional)</label>
           <select
             className={INPUT}
             value={form.agentId}
             onChange={(e) => setForm({ ...form, agentId: e.target.value })}
           >
-            <option value="">— No agent —</option>
+            <option value="">— Default coach —</option>
             {agents.map((a) => (
               <option key={a.id} value={a.id}>{a.name}</option>
             ))}
           </select>
         </div>
 
+        {/* Notes */}
         <div>
-          <label className="block text-xs text-slate-400 mb-1.5">Playbook (optional)</label>
-          <select
-            className={INPUT}
-            value={form.playbookId}
-            onChange={(e) => setForm({ ...form, playbookId: e.target.value })}
-          >
-            <option value="">— No playbook —</option>
-            {playbooks.map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="block text-xs text-slate-400 mb-1.5">Guidance</label>
-            <select
-              className={INPUT}
-              value={form.guidanceLevel}
-              onChange={(e) => setForm({ ...form, guidanceLevel: e.target.value as GuidanceLevel })}
-            >
-              {Object.entries(GUIDANCE_LABELS).map(([v, label]) => (
-                <option key={v} value={v}>{label}</option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-xs text-slate-400 mb-1.5">Layout</label>
-            <select
-              className={INPUT}
-              value={form.layoutPreset}
-              onChange={(e) => setForm({ ...form, layoutPreset: e.target.value as LiveLayout })}
-            >
-              {Object.entries(LAYOUT_LABELS).map(([v, label]) => (
-                <option key={v} value={v}>{label}</option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        <div>
-          <label className="block text-xs text-slate-400 mb-1.5">Notes (optional)</label>
+          <label className="block text-xs text-slate-400 mb-1.5">
+            {isMock ? 'Scenario notes (optional)' : 'Notes (optional)'}
+          </label>
           <textarea
-            rows={3}
+            rows={2}
             className={INPUT + ' resize-none'}
-            placeholder="Context about this call, contact, or goal…"
+            placeholder={
+              isMock
+                ? 'Add context: "They run a 50-agent brokerage in Toronto..."'
+                : 'Context about this call, contact, or goal...'
+            }
             value={form.notes}
             onChange={(e) => setForm({ ...form, notes: e.target.value })}
           />
@@ -180,12 +382,108 @@ export default function DialerPage() {
         <button
           type="submit"
           disabled={submitting}
-          className="w-full flex items-center justify-center gap-2 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-medium rounded-lg transition-colors"
+          className={`w-full flex items-center justify-center gap-2 py-2.5 disabled:opacity-50 text-white font-medium rounded-lg transition-colors ${
+            isMock ? 'bg-violet-600 hover:bg-violet-500' : 'bg-emerald-600 hover:bg-emerald-500'
+          }`}
         >
-          <Phone size={15} />
-          {submitting ? 'Starting…' : 'Start call'}
+          {isMock ? <Bot size={15} /> : <Phone size={15} />}
+          {submitting ? 'Starting...' : isMock ? 'Start practice call' : 'Start call'}
         </button>
       </form>
+
+      {/* Create / Edit persona modal */}
+      {showModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-white font-semibold">
+                {editingPersonaId ? 'Edit prospect' : 'Create custom prospect'}
+              </h2>
+              <button onClick={() => setShowModal(false)} className="text-slate-500 hover:text-white">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">Name</label>
+                <input
+                  className={INPUT}
+                  placeholder="e.g. The HIPAA Gatekeeper"
+                  value={modalForm.name}
+                  onChange={(e) => setModalForm({ ...modalForm, name: e.target.value })}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Title</label>
+                  <input
+                    className={INPUT}
+                    placeholder="e.g. IT Director, Hospital"
+                    value={modalForm.title}
+                    onChange={(e) => setModalForm({ ...modalForm, title: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Difficulty</label>
+                  <select
+                    className={INPUT}
+                    value={modalForm.difficulty}
+                    onChange={(e) => setModalForm({ ...modalForm, difficulty: e.target.value })}
+                  >
+                    <option value="Medium">Medium</option>
+                    <option value="Hard">Hard</option>
+                    <option value="Expert">Expert</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">Short description</label>
+                <input
+                  className={INPUT}
+                  placeholder="e.g. Concerned about compliance, tight budget cycle..."
+                  value={modalForm.description}
+                  onChange={(e) => setModalForm({ ...modalForm, description: e.target.value })}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">Persona prompt</label>
+                <textarea
+                  rows={6}
+                  className={INPUT + ' resize-none'}
+                  placeholder={'Describe who this prospect is and how they should behave.\n\nExample: "You are a skeptical IT Director at a hospital. You\'re concerned about HIPAA compliance and have a very tight budget cycle..."'}
+                  value={modalForm.prompt}
+                  onChange={(e) => setModalForm({ ...modalForm, prompt: e.target.value })}
+                />
+                <p className="text-slate-600 text-[11px] mt-1">
+                  Be specific about their objections, concerns, personality, and behavior patterns.
+                </p>
+              </div>
+
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowModal(false)}
+                  className="flex-1 py-2 text-sm text-slate-400 hover:text-white border border-slate-700 rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSavePersona}
+                  disabled={saving || !modalForm.name.trim() || !modalForm.prompt.trim()}
+                  className="flex-1 py-2 text-sm text-white bg-violet-600 hover:bg-violet-500 disabled:opacity-50 rounded-lg transition-colors"
+                >
+                  {saving ? 'Saving...' : editingPersonaId ? 'Save changes' : 'Create prospect'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

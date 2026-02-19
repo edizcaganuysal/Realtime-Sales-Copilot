@@ -50,11 +50,19 @@ export default function GovernancePage() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [saving, setSaving] = useState(false);
   const [flash, setFlash] = useState<'saved' | 'error' | null>(null);
+  const [loadError, setLoadError] = useState('');
 
   useEffect(() => {
     fetch('/api/org')
-      .then((r) => r.json())
-      .then((d) => setSettings(d.settings));
+      .then(async (r) => ({ ok: r.ok, data: await r.json() }))
+      .then(({ ok, data }) => {
+        if (!ok) {
+          setLoadError(data?.message ?? 'Failed to load governance settings');
+          return;
+        }
+        setSettings(data.settings);
+      })
+      .catch(() => setLoadError('Failed to load governance settings'));
   }, []);
 
   function patch<K extends keyof Settings>(key: K, value: Settings[K]) {
@@ -78,6 +86,11 @@ export default function GovernancePage() {
   if (!settings) {
     return (
       <div className="p-8">
+        {loadError && (
+          <div className="mb-4 text-sm text-red-400 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2">
+            {loadError}
+          </div>
+        )}
         <div className="h-4 w-32 bg-slate-800 rounded animate-pulse mb-6" />
         <div className="space-y-4">
           {[...Array(5)].map((_, i) => (

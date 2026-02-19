@@ -3,78 +3,71 @@ import { Pool } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { hash } from 'bcryptjs';
 import * as schema from './schema';
+import { GTAPHOTOPRO_COMPANY_PROFILE_DEFAULTS } from '../org/company-profile.defaults';
+import { PROFESSIONAL_SALES_CALL_AGENT_PROMPT } from '../calls/professional-sales-agent.prompt';
+import {
+  GTAPHOTOPRO_DEMO_AGENT_NAME,
+  GTAPHOTOPRO_DEMO_AGENT_PROMPT,
+} from '../agents/gtaphotopro-demo.agent';
 
 const STAGES = [
   {
     position: 0,
     name: 'Opening',
-    goals: 'Build rapport and establish credibility quickly.',
+    goals: 'Open clearly, get permission, and establish context fast.',
     checklistJson: [
       'Introduce yourself and company',
-      'State purpose of call clearly',
-      'Get permission to continue',
-      'Confirm prospect has 5 minutes',
+      'Confirm now is a good time',
+      'State purpose with one concrete value point',
+      'Ask one opening discovery question',
     ],
   },
   {
     position: 1,
     name: 'Discovery',
-    goals: 'Uncover pain points, current situation, and decision criteria.',
+    goals: 'Understand current process, friction, impact, and buying path.',
     checklistJson: [
-      'Identify current tool or process',
-      'Quantify pain or cost of status quo',
-      'Confirm decision-maker is on the call',
-      'Establish timeline for change',
-      'Uncover budget range',
+      'Ask how they handle listing media today',
+      'Identify biggest friction in current workflow',
+      'Quantify impact of delays or inconsistency',
+      'Confirm timeline for the next listing',
+      'Clarify who else is involved in decisions',
     ],
   },
   {
     position: 2,
-    name: 'Pitch',
-    goals: 'Present tailored value proposition aligned to discovered pain.',
+    name: 'Value Framing',
+    goals: "Map GTAPhotoPro services to the prospect's stated pain.",
     checklistJson: [
-      'Recap their pain before pitching',
-      'Present 2–3 relevant features only',
-      'Tie each feature to their specific pain',
-      'Share a relevant customer success story',
+      'Recap their pain in their own words',
+      'Tie one service to one pain point',
+      'Share one numeric proof point',
+      'Confirm the proposed approach is relevant',
     ],
   },
   {
     position: 3,
-    name: 'Objection',
-    goals: 'Acknowledge, clarify, and resolve blockers without pressure.',
+    name: 'Objection Handling',
+    goals: 'Handle objections with clarify-and-evidence flow.',
     checklistJson: [
-      'Let prospect finish objection fully',
-      'Acknowledge the concern genuinely',
+      'Acknowledge objection without arguing',
       'Ask a clarifying question',
-      'Address with evidence or reframe',
-      'Confirm objection is resolved before moving on',
+      'Respond with specific evidence',
+      'Confirm if the concern is addressed',
     ],
   },
   {
     position: 4,
-    name: 'Close',
-    goals: 'Secure a clear next step — demo, trial, or signed agreement.',
+    name: 'Next Step',
+    goals: 'Secure a concrete and scheduled follow-up action.',
     checklistJson: [
-      'Summarise agreed value',
-      'Propose a specific clear next step',
-      'Get date and time commitment',
-      'Confirm all stakeholders for next step',
-      'Send calendar invite before call ends',
+      'Propose one concrete next step',
+      'Offer two scheduling options',
+      'Confirm owner and timeline',
+      'Confirm follow-up channel',
     ],
   },
 ] as const;
-
-const DEFAULT_AGENT_PROMPT = `You are an expert B2B sales coach listening to live outbound calls.
-
-Rules:
-- Output the single best next thing to say, written as natural spoken dialogue.
-- Keep suggestions to one or two sentences maximum — never a list.
-- Personalize every suggestion using the prospect pain and context from the transcript.
-- When the rep talks too much, surfaces a SOFTEN_TONE or TOO_MUCH_TALKING nudge.
-- When no question has been asked in 90 seconds, surface an ASK_QUESTION nudge.
-- Never suggest filler phrases or generic pitches.
-- Match the energy and pace of the conversation.`;
 
 async function seed() {
   const pool = new Pool({
@@ -90,7 +83,7 @@ async function seed() {
 
   const [org] = await db
     .insert(schema.orgs)
-    .values({ name: 'Demo Organization' })
+    .values({ name: 'GTAPhotoPro' })
     .returning();
 
   if (!org) throw new Error('Failed to insert org');
@@ -102,6 +95,11 @@ async function seed() {
     publisherPolicy: 'ADMIN_AND_MANAGERS',
     liveLayoutDefault: 'STANDARD',
     retentionDays: 90,
+  });
+
+  await db.insert(schema.orgCompanyProfiles).values({
+    orgId: org.id,
+    ...GTAPHOTOPRO_COMPANY_PROFILE_DEFAULTS,
   });
 
   const adminEmail = process.env['SEED_ADMIN_EMAIL'] ?? 'admin@example.com';
@@ -150,17 +148,32 @@ async function seed() {
     scope: 'ORG',
     status: 'APPROVED',
     name: 'Default Coach',
-    prompt: DEFAULT_AGENT_PROMPT,
+    prompt: PROFESSIONAL_SALES_CALL_AGENT_PROMPT,
     configJson: {
       maxSuggestionTokens: 80,
       nudgesEnabled: true,
-      alternativeCount: 2,
+      alternativeCount: 3,
+    },
+  });
+
+  await db.insert(schema.agents).values({
+    orgId: org.id,
+    ownerUserId: null,
+    scope: 'ORG',
+    status: 'APPROVED',
+    name: GTAPHOTOPRO_DEMO_AGENT_NAME,
+    prompt: GTAPHOTOPRO_DEMO_AGENT_PROMPT,
+    configJson: {
+      maxSuggestionTokens: 120,
+      nudgesEnabled: false,
+      alternativeCount: 3,
+      style: 'specific-numeric',
     },
   });
 
   console.log('');
   console.log('Seed complete');
-  console.log(`  Org:      Demo Organization  (id: ${org.id})`);
+  console.log(`  Org:      GTAPhotoPro  (id: ${org.id})`);
   console.log(`  Admin:    ${adminEmail}`);
   console.log(`  Playbook: Default Sales Playbook  (${STAGES.length} stages)`);
   console.log(`  Agent:    Default Coach  [APPROVED, ORG]`);

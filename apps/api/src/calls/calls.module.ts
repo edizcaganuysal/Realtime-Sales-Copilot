@@ -7,6 +7,7 @@ import { TwilioService } from './twilio.service';
 import { SttService } from './stt.service';
 import { LlmService } from './llm.service';
 import { MediaStreamService } from './media-stream.service';
+import { MockCallService } from './mock-call.service';
 
 @Module({
   controllers: [TwilioWebhookController, CallsController],
@@ -18,6 +19,7 @@ import { MediaStreamService } from './media-stream.service';
     SttService,
     LlmService,
     MediaStreamService,
+    MockCallService,
   ],
 })
 export class CallsModule {}

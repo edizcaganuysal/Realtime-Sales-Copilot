@@ -1,9 +1,11 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Header,
   HttpCode,
+  Inject,
   Logger,
   Param,
   Patch,
@@ -13,15 +15,20 @@ import {
 } from '@nestjs/common';
 import { Role } from '@live-sales-coach/shared';
 import type { JwtPayload } from '@live-sales-coach/shared';
+import { and, eq } from 'drizzle-orm';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
+import { CallMode } from '@live-sales-coach/shared';
+import { DRIZZLE, DrizzleDb } from '../db/db.module';
+import * as schema from '../db/schema';
 import { CallsService } from './calls.service';
 import { EngineService } from './engine.service';
 import { TwilioService } from './twilio.service';
 import { SttService } from './stt.service';
 import { CallsGateway } from './calls.gateway';
+import { MockCallService } from './mock-call.service';
 import { CreateCallDto } from './dto/create-call.dto';
 import { UpdateCallDto } from './dto/update-call.dto';
 
@@ -50,11 +57,149 @@ export class CallsController {
     private readonly callsService: CallsService,
     private readonly engineService: EngineService,
     private readonly twilioService: TwilioService,
+    private readonly mockCallService: MockCallService,
+    @Inject(DRIZZLE) private readonly db: DrizzleDb,
   ) {}
+
+  @Get('practice-personas')
+  async getPracticePersonas(@CurrentUser() user: JwtPayload) {
+    const builtIn = this.mockCallService.getAvailablePersonas();
+
+    const customRows = await this.db
+      .select()
+      .from(schema.agents)
+      .where(
+        and(
+          eq(schema.agents.orgId, user.orgId),
+          eq(schema.agents.status, 'APPROVED'),
+        ),
+      );
+
+    const custom = customRows
+      .filter((r) => {
+        const cfg = r.configJson as Record<string, unknown> | null;
+        return cfg?.type === 'practice_persona';
+      })
+      .map((r) => {
+        const cfg = (r.configJson ?? {}) as Record<string, unknown>;
+        return {
+          id: `custom:${r.id}`,
+          name: r.name,
+          title: (cfg.title as string) || 'Custom Prospect',
+          description: (cfg.description as string) || '',
+          difficulty: (cfg.difficulty as string) || 'Medium',
+          color: (cfg.color as string) || 'slate',
+          isCustom: true,
+        };
+      });
+
+    return [...builtIn, ...custom];
+  }
+
+  @Post('practice-personas')
+  async createPracticePersona(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { name: string; title?: string; description?: string; difficulty?: string; prompt: string },
+  ) {
+    const [row] = await this.db
+      .insert(schema.agents)
+      .values({
+        orgId: user.orgId,
+        ownerUserId: user.sub,
+        scope: 'PERSONAL',
+        status: 'APPROVED',
+        name: body.name || 'Custom Prospect',
+        prompt: body.prompt,
+        configJson: {
+          type: 'practice_persona',
+          title: body.title || 'Custom Prospect',
+          description: body.description || '',
+          difficulty: body.difficulty || 'Medium',
+          color: 'slate',
+        },
+      })
+      .returning();
+
+    return {
+      id: `custom:${row.id}`,
+      name: row.name,
+      title: body.title || 'Custom Prospect',
+      description: body.description || '',
+      difficulty: body.difficulty || 'Medium',
+      color: 'slate',
+      isCustom: true,
+    };
+  }
+
+  @Patch('practice-personas/:id')
+  async updatePracticePersona(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') rawId: string,
+    @Body() body: { name?: string; title?: string; description?: string; difficulty?: string; prompt?: string },
+  ) {
+    const agentId = rawId.replace(/^custom:/, '');
+    const [existing] = await this.db
+      .select()
+      .from(schema.agents)
+      .where(and(eq(schema.agents.id, agentId), eq(schema.agents.orgId, user.orgId)))
+      .limit(1);
+
+    if (!existing) return { error: 'Not found' };
+
+    const oldCfg = (existing.configJson ?? {}) as Record<string, unknown>;
+    const newCfg = {
+      ...oldCfg,
+      type: 'practice_persona',
+      ...(body.title !== undefined ? { title: body.title } : {}),
+      ...(body.description !== undefined ? { description: body.description } : {}),
+      ...(body.difficulty !== undefined ? { difficulty: body.difficulty } : {}),
+    };
+
+    const [updated] = await this.db
+      .update(schema.agents)
+      .set({
+        ...(body.name !== undefined ? { name: body.name } : {}),
+        ...(body.prompt !== undefined ? { prompt: body.prompt } : {}),
+        configJson: newCfg,
+      })
+      .where(eq(schema.agents.id, agentId))
+      .returning();
+
+    return {
+      id: `custom:${updated.id}`,
+      name: updated.name,
+      title: (newCfg.title as string) || 'Custom Prospect',
+      description: (newCfg.description as string) || '',
+      difficulty: (newCfg.difficulty as string) || 'Medium',
+      color: 'slate',
+      isCustom: true,
+    };
+  }
+
+  @Delete('practice-personas/:id')
+  @HttpCode(200)
+  async deletePracticePersona(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') rawId: string,
+  ) {
+    const agentId = rawId.replace(/^custom:/, '');
+    await this.db
+      .delete(schema.agents)
+      .where(and(eq(schema.agents.id, agentId), eq(schema.agents.orgId, user.orgId)));
+    return { ok: true };
+  }
 
   @Post()
   async create(@CurrentUser() user: JwtPayload, @Body() dto: CreateCallDto) {
     const call = await this.callsService.create(user, dto);
+
+    if (dto.mode === CallMode.MOCK) {
+      // Mock call — browser will connect to /mock-stream WS, engine starts immediately
+      this.logger.log(`Call ${call.id} created in MOCK mode — waiting for browser WS`);
+      await this.callsService.setStatusImmediate(call.id, 'IN_PROGRESS');
+      this.engineService.start(call.id, false); // no stub transcript — OpenAI provides real transcript
+      return call;
+    }
 
     if (this.twilioService.available) {
       // Real call — engine starts only after Twilio confirms "answered" via webhook
@@ -151,14 +296,16 @@ export class TwilioWebhookController {
     const base = (process.env['TWILIO_WEBHOOK_BASE_URL'] ?? '').replace(/\/$/, '');
     // Convert http(s):// → ws(s)://
     const wsBase = base.replace(/^https/, 'wss').replace(/^http(?!s)/, 'ws');
-    const streamUrl = `${wsBase}/media-stream?callId=${callId}`;
+    const streamUrl = `${wsBase}/media-stream`;
 
     this.logger.log(`TwiML requested — callId: ${callId}, streamUrl: ${streamUrl}`);
 
     return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <Stream url="${streamUrl}" track="inbound_track" />
+    <Stream url="${streamUrl}" track="inbound_track">
+      <Parameter name="callId" value="${callId}" />
+    </Stream>
   </Connect>
 </Response>`;
   }

@@ -48,6 +48,24 @@ export class LlmService implements OnModuleInit {
     return this.client;
   }
 
+  /**
+   * Fast chat completion using gpt-4o-mini for real-time coaching.
+   * Uses low max_tokens and high temperature for snappy responses.
+   */
+  async chatFast(systemPrompt: string, userPrompt: string): Promise<string> {
+    const client = this.getClient();
+    const resp = await client.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      temperature: 0.35,
+      max_tokens: 200,
+    });
+    return ((resp.choices[0]?.message?.content as string | null | undefined) ?? '').trim();
+  }
+
   async chat(systemPrompt: string, userPrompt: string): Promise<string> {
     const client = this.getClient();
     const resp = await client.chat.completions.create({

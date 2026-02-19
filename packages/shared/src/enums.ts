@@ -33,6 +33,11 @@ export enum GuidanceLevel {
   GUIDED = 'GUIDED',
 }
 
+export enum CallMode {
+  OUTBOUND = 'OUTBOUND',
+  MOCK = 'MOCK',
+}
+
 export enum CallStatus {
   INITIATED = 'INITIATED',
   IN_PROGRESS = 'IN_PROGRESS',

@@ -11,8 +11,8 @@ import {
   Settings,
   ShieldCheck,
   Users,
-  ClipboardList,
   LogOut,
+  Building2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { MeResponse } from '@live-sales-coach/shared';
@@ -28,8 +28,8 @@ const NAV = [
 
 const ADMIN_NAV = [
   { href: '/app/admin/governance', label: 'Manage', icon: ShieldCheck },
+  { href: '/app/admin/company', label: 'Company', icon: Building2 },
   { href: '/app/admin/users', label: 'Users', icon: Users },
-  { href: '/app/admin/playbooks', label: 'Playbooks', icon: ClipboardList },
   { href: '/app/admin/agents', label: 'Agents', icon: Bot },
 ];
 

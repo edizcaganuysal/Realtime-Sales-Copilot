@@ -58,6 +58,7 @@ export class TwilioService implements OnModuleInit {
       to: phoneTo,
       from: this.fromNumber,
       url: twimlUrl,
+      method: 'GET',          // must match @Get('twiml') handler
       statusCallback,
       statusCallbackMethod: 'POST',
       statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],

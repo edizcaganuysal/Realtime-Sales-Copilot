@@ -8,26 +8,24 @@ async function token() {
   return store.get('access_token')?.value ?? '';
 }
 
-export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
+export async function GET() {
+  const res = await fetch(`${API}/org/company-profile`, {
+    headers: { Authorization: `Bearer ${await token()}` },
+    cache: 'no-store',
+  });
+  const data = await res.json();
+  return NextResponse.json(data, { status: res.status });
+}
+
+export async function PATCH(request: Request) {
   const body = await request.json();
-  const res = await fetch(`${API}/agents/${id}`, {
+  const res = await fetch(`${API}/org/company-profile`, {
     method: 'PATCH',
     headers: {
       Authorization: `Bearer ${await token()}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
-  });
-  const data = await res.json();
-  return NextResponse.json(data, { status: res.status });
-}
-
-export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
-  const res = await fetch(`${API}/agents/${id}`, {
-    method: 'DELETE',
-    headers: { Authorization: `Bearer ${await token()}` },
   });
   const data = await res.json();
   return NextResponse.json(data, { status: res.status });

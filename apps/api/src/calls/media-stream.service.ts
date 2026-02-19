@@ -7,7 +7,6 @@ import {
 } from '@nestjs/common';
 import { WebSocketServer as WsServer } from 'ws';
 import type WebSocket from 'ws';
-import { eq } from 'drizzle-orm';
 import { DRIZZLE, DrizzleDb } from '../db/db.module';
 import * as schema from '../db/schema';
 import { CallsGateway } from './calls.gateway';
@@ -18,7 +17,13 @@ type TwilioMsg =
   | { event: 'connected' }
   | {
       event: 'start';
-      start: { callSid: string; streamSid: string; tracks: string[]; mediaFormat: object };
+      start: {
+        callSid: string;
+        streamSid: string;
+        tracks: string[];
+        mediaFormat: object;
+        customParameters?: Record<string, string>;
+      };
     }
   | { event: 'media'; media: { track: string; payload: string; timestamp: string } }
   | { event: 'stop' };
@@ -28,8 +33,9 @@ type TwilioMsg =
  * Twilio Media Streams connect here, audio is forwarded to Deepgram, and
  * transcripts are emitted via socket.io and persisted to the DB.
  *
- * Coexists with socket.io (IoAdapter) because ws filters by path and
- * engine.io ignores paths it doesn't own.
+ * callId is extracted from the TwiML <Parameter name="callId"> which arrives
+ * in the `start.customParameters` object (NOT the URL query string — Twilio
+ * strips query params from WebSocket URLs).
  */
 @Injectable()
 export class MediaStreamService implements OnApplicationBootstrap {
@@ -46,13 +52,14 @@ export class MediaStreamService implements OnApplicationBootstrap {
   onApplicationBootstrap() {
     const httpServer = this.httpAdapterHost.httpAdapter.getHttpServer();
 
-    // Use noServer mode + manual upgrade interception so we don't interfere
-    // with engine.io's own upgrade handler for /socket.io paths.
     const wss = new WsServer({ noServer: true });
 
-    httpServer.on('upgrade', (req: { url?: string }, socket: unknown, head: unknown) => {
+    // prependListener ensures our handler fires BEFORE engine.io's upgrade
+    // handler, which would otherwise destroy non-socket.io sockets.
+    httpServer.prependListener('upgrade', (req: { url?: string }, socket: unknown, head: unknown) => {
       const pathname = req.url?.split('?')[0] ?? '';
       if (pathname !== '/media-stream') return;
+      this.logger.log(`WS upgrade intercepted for /media-stream (url: ${req.url})`);
       (wss as WsServer).handleUpgrade(
         req as Parameters<WsServer['handleUpgrade']>[0],
         socket as Parameters<WsServer['handleUpgrade']>[1],
@@ -61,35 +68,51 @@ export class MediaStreamService implements OnApplicationBootstrap {
       );
     });
 
-    wss.on('connection', (ws, req) => {
-      // Extract callId from query string: /media-stream?callId=uuid
-      const params = new URLSearchParams((req as { url?: string }).url?.split('?')[1] ?? '');
-      const callId = params.get('callId');
+    wss.on('connection', (ws) => {
+      this.logger.log('Media stream WS connected — waiting for start event to get callId');
 
-      if (!callId) {
-        this.logger.warn('Media stream connected without callId — closing');
-        ws.close();
-        return;
-      }
-
-      this.logger.log(`Media stream connected for call ${callId} (STT available: ${this.sttService.available})`);
-
-      // One Deepgram session per WS connection. track name (inbound/outbound)
-      // is mapped to speaker after the start event.
+      let callId: string | null = null;
       let deepgramWs: WebSocket | null = null;
       let speaker = 'PROSPECT';
+      // Buffer media messages received before the start event
+      const earlyMediaBuffer: Buffer[] = [];
 
       ws.on('message', (rawData) => {
-        const msg = JSON.parse(rawData.toString()) as TwilioMsg;
+        let msg: TwilioMsg;
+        try {
+          msg = JSON.parse(rawData.toString()) as TwilioMsg;
+        } catch {
+          this.logger.warn('Media stream: failed to parse message');
+          return;
+        }
 
         switch (msg.event) {
+          case 'connected': {
+            this.logger.log('Media stream: Twilio "connected" event received');
+            break;
+          }
+
           case 'start': {
-            // "inbound" track  = prospect speaking (called party)
-            // "outbound" track = rep speaking (goes to called party)
-            speaker = msg.start.tracks.includes('inbound') ? 'PROSPECT' : 'REP';
+            // Extract callId from customParameters (set via TwiML <Parameter>)
+            callId = msg.start.customParameters?.callId ?? null;
+
             this.logger.log(
-              `Stream started — call ${callId}, streamSid: ${msg.start.streamSid}, ` +
-              `callSid: ${msg.start.callSid}, tracks: ${msg.start.tracks.join(',')}, speaker: ${speaker}`,
+              `Media stream start — callId: ${callId ?? 'MISSING'}, ` +
+              `streamSid: ${msg.start.streamSid}, callSid: ${msg.start.callSid}, ` +
+              `tracks: [${msg.start.tracks.join(',')}], ` +
+              `customParams: ${JSON.stringify(msg.start.customParameters ?? {})}`,
+            );
+
+            if (!callId) {
+              this.logger.error('Media stream start event has no callId in customParameters — closing');
+              ws.close();
+              return;
+            }
+
+            // "inbound" track = prospect speaking (called party)
+            speaker = msg.start.tracks.some((t) => t.includes('inbound')) ? 'PROSPECT' : 'REP';
+            this.logger.log(
+              `Media stream identified — call ${callId}, speaker: ${speaker}, STT: ${this.sttService.available}`,
             );
 
             if (this.sttService.available) {
@@ -100,17 +123,20 @@ export class MediaStreamService implements OnApplicationBootstrap {
                   const tsMs = Date.now();
 
                   this.gateway.emitToCall(
-                    callId,
+                    callId!,
                     isFinal ? 'transcript.final' : 'transcript.partial',
                     { speaker: spk, text, tsMs, isFinal },
                   );
 
-                  if (isFinal) {
-                    // Push to engine buffer so LLM tick has real transcript context
-                    this.engineService.pushTranscript(callId, spk, text);
+                  if (!isFinal) {
+                    // Signal engine that someone is speaking (dims suggestions when prospect talks)
+                    this.engineService.signalSpeaking(callId!, spk);
+                  }
 
+                  if (isFinal) {
+                    this.engineService.pushTranscript(callId!, spk, text);
                     await this.db.insert(schema.callTranscript).values({
-                      callId,
+                      callId: callId!,
                       tsMs,
                       speaker: spk,
                       text,
@@ -119,20 +145,30 @@ export class MediaStreamService implements OnApplicationBootstrap {
                   }
                 },
               );
+
+              // Flush any buffered media that arrived before start
+              for (const buf of earlyMediaBuffer) {
+                if (deepgramWs?.readyState === 1) deepgramWs.send(buf);
+              }
+              earlyMediaBuffer.length = 0;
             }
             break;
           }
 
           case 'media': {
-            if (deepgramWs?.readyState === 1 /* OPEN */) {
-              const audio = Buffer.from(msg.media.payload, 'base64');
-              deepgramWs.send(audio);
+            if (!callId) {
+              // Buffer media until we get the start event
+              earlyMediaBuffer.push(Buffer.from(msg.media.payload, 'base64'));
+              break;
+            }
+            if (deepgramWs?.readyState === 1) {
+              deepgramWs.send(Buffer.from(msg.media.payload, 'base64'));
             }
             break;
           }
 
           case 'stop': {
-            this.logger.log(`Stream stopped — call ${callId}`);
+            this.logger.log(`Media stream stopped — call ${callId ?? 'unknown'}`);
             deepgramWs?.close();
             break;
           }
@@ -141,11 +177,11 @@ export class MediaStreamService implements OnApplicationBootstrap {
 
       ws.on('close', () => {
         deepgramWs?.close();
-        this.logger.log(`Media stream WS closed — call ${callId}`);
+        this.logger.log(`Media stream WS closed — call ${callId ?? 'unknown'}`);
       });
 
       ws.on('error', (err) =>
-        this.logger.error(`Media stream WS error — call ${callId}: ${err.message}`),
+        this.logger.error(`Media stream WS error — call ${callId ?? 'unknown'}: ${err.message}`),
       );
     });
 
