@@ -296,18 +296,21 @@ export class OrgService {
         orgId,
         companyName: null,
         whatWeSell: null,
+        howItWorks: null,
         offerCategory: null,
         targetCustomer: null,
         targetRoles: [],
         industries: [],
+        buyingTriggers: [],
         disqualifiers: [],
+        globalValueProps: [],
         proofPoints: [],
+        caseStudies: [],
         allowedClaims: [],
         forbiddenClaims: [],
         salesPolicies: [],
         escalationRules: [],
         nextSteps: [],
-        schedulingLink: null,
         competitors: [],
         positioningRules: [],
         discoveryQuestions: [],
@@ -323,12 +326,20 @@ export class OrgService {
 
     if (dto.companyName !== undefined) patch.companyName = dto.companyName.trim();
     if (dto.whatWeSell !== undefined) patch.whatWeSell = dto.whatWeSell.trim();
+    if (dto.howItWorks !== undefined) patch.howItWorks = dto.howItWorks.trim();
     if (dto.offerCategory !== undefined) patch.offerCategory = dto.offerCategory.trim();
     if (dto.targetCustomer !== undefined) patch.targetCustomer = dto.targetCustomer.trim();
     if (dto.targetRoles !== undefined) patch.targetRoles = this.normalizeTextArray(dto.targetRoles);
     if (dto.industries !== undefined) patch.industries = this.normalizeTextArray(dto.industries);
+    if (dto.buyingTriggers !== undefined) {
+      patch.buyingTriggers = this.normalizeTextArray(dto.buyingTriggers);
+    }
     if (dto.disqualifiers !== undefined) patch.disqualifiers = this.normalizeTextArray(dto.disqualifiers);
+    if (dto.globalValueProps !== undefined) {
+      patch.globalValueProps = this.normalizeTextArray(dto.globalValueProps);
+    }
     if (dto.proofPoints !== undefined) patch.proofPoints = this.normalizeTextArray(dto.proofPoints);
+    if (dto.caseStudies !== undefined) patch.caseStudies = this.normalizeTextArray(dto.caseStudies);
     if (dto.allowedClaims !== undefined) patch.allowedClaims = this.normalizeTextArray(dto.allowedClaims);
     if (dto.forbiddenClaims !== undefined) {
       patch.forbiddenClaims = this.normalizeTextArray(dto.forbiddenClaims);
@@ -338,7 +349,6 @@ export class OrgService {
       patch.escalationRules = this.normalizeTextArray(dto.escalationRules);
     }
     if (dto.nextSteps !== undefined) patch.nextSteps = this.normalizeTextArray(dto.nextSteps);
-    if (dto.schedulingLink !== undefined) patch.schedulingLink = dto.schedulingLink.trim();
     if (dto.competitors !== undefined) patch.competitors = this.normalizeTextArray(dto.competitors);
     if (dto.positioningRules !== undefined) {
       patch.positioningRules = this.normalizeTextArray(dto.positioningRules);

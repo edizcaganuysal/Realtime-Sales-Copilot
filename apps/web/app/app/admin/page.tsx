@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { ArrowRight, Users, Package, CreditCard, ClipboardList, BookOpen } from 'lucide-react';
+import { ArrowRight, Users, Building2, CreditCard, ClipboardList, BookOpen } from 'lucide-react';
 
 const QUICK_LINKS = [
   {
@@ -9,10 +9,10 @@ const QUICK_LINKS = [
     icon: Users,
   },
   {
-    href: '/app/admin/context/offerings',
-    title: 'Offerings',
-    description: 'Manage offerings context used across agents and calls.',
-    icon: Package,
+    href: '/app/admin/context',
+    title: 'Context',
+    description: 'Manage company context and offerings for call coaching.',
+    icon: Building2,
   },
   {
     href: '/app/billing',

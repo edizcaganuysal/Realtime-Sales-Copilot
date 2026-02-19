@@ -1,1 +1,5 @@
-export { default } from '../../products/page';
+import { redirect } from 'next/navigation';
+
+export default function ContextOfferingsRedirectPage() {
+  redirect('/app/admin/context');
+}
