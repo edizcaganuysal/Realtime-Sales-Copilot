@@ -46,7 +46,8 @@ export default function LoginPage() {
         return;
       }
 
-      router.push('/app/home');
+      router.replace('/app/home');
+      router.refresh();
     } catch {
       setError('Something went wrong. Please try again.');
       setLoading(false);
@@ -66,7 +67,7 @@ export default function LoginPage() {
           </div>
           <span className="text-slate-900 font-semibold text-lg">Sales AI</span>
         </div>
-        <p className="text-slate-600 text-sm">Sign in to your workspace</p>
+        <p className="text-slate-600 text-sm">Login to your workspace</p>
       </div>
 
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-8">
@@ -141,7 +142,7 @@ export default function LoginPage() {
             disabled={loading}
             className="w-full bg-sky-600 hover:bg-sky-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg py-2.5 text-sm transition-colors"
           >
-            {loading ? 'Signing in…' : 'Sign in'}
+            {loading ? 'Logging in…' : 'Login'}
           </button>
         </form>
       </div>
