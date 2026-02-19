@@ -143,6 +143,37 @@ export const products = pgTable('products', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
+export const plans = pgTable('plans', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  monthlyCredits: integer('monthly_credits').notNull(),
+  isActive: boolean('is_active').default(true).notNull(),
+});
+
+export const orgSubscription = pgTable('org_subscription', {
+  orgId: uuid('org_id')
+    .primaryKey()
+    .references(() => orgs.id, { onDelete: 'cascade' }),
+  planId: text('plan_id')
+    .notNull()
+    .references(() => plans.id),
+  status: text('status').default('active').notNull(),
+  creditsBalance: integer('credits_balance').default(0).notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const creditLedger = pgTable('credit_ledger', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id')
+    .notNull()
+    .references(() => orgs.id, { onDelete: 'cascade' }),
+  type: text('type').notNull(),
+  amount: integer('amount').notNull(),
+  balanceAfter: integer('balance_after').notNull(),
+  metadataJson: jsonb('metadata').default({}).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const calls = pgTable('calls', {
   id: uuid('id').primaryKey().defaultRandom(),
   orgId: uuid('org_id')

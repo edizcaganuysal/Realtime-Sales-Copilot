@@ -457,6 +457,7 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
   const [productSearch, setProductSearch] = useState('');
   const [productsSaving, setProductsSaving] = useState(false);
   const [productsError, setProductsError] = useState('');
+  const [creditsBalance, setCreditsBalance] = useState<number | null>(null);
 
   const socketRef = useRef<Socket | null>(null);
   const seqRef = useRef(0);
@@ -506,6 +507,31 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
         setSelectedProductIdsDraft(selected);
       });
   }, [id]);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadCredits() {
+      const res = await fetch('/api/org/credits', { cache: 'no-store' });
+      if (!active || !res.ok) return;
+      const data = await res.json().catch(() => null);
+      if (!active) return;
+      const balance = data?.balance;
+      if (typeof balance === 'number') {
+        setCreditsBalance(balance);
+      }
+    }
+
+    void loadCredits();
+    const intervalId = setInterval(() => {
+      void loadCredits();
+    }, 30000);
+
+    return () => {
+      active = false;
+      clearInterval(intervalId);
+    };
+  }, []);
 
   // Socket.io for coaching events
   useEffect(() => {
@@ -735,6 +761,10 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
     call.productsMode === 'SELECTED' && selectedProducts.length > 0
       ? selectedProducts.map((product) => product.name)
       : ['All products'];
+  const creditsLabel =
+    creditsBalance === null
+      ? 'Credits: --'
+      : `Credits: ${new Intl.NumberFormat('en-US').format(creditsBalance)}`;
 
   return (
     <div className="relative flex flex-col h-full bg-slate-950">
@@ -776,6 +806,9 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
               Change
             </button>
           </div>
+          <span className="text-[11px] px-2 py-0.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 text-emerald-300">
+            {creditsLabel}
+          </span>
           <MiniStats stats={stats} />
         </div>
         <button
