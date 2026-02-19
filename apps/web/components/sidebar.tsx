@@ -13,13 +13,14 @@ import {
   Users,
   LogOut,
   Building2,
+  Package,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { MeResponse } from '@live-sales-coach/shared';
 
 const NAV = [
   { href: '/app/home', label: 'Home', icon: Home },
-  { href: '/app/dialer', label: 'Dialer', icon: Phone },
+  { href: '/app/dialer/new', label: 'Dialer', icon: Phone },
   { href: '/app/calls', label: 'Calls', icon: PhoneCall },
   { href: '/app/agents', label: 'Agents', icon: Bot },
   { href: '/app/training', label: 'Training', icon: BookOpen },
@@ -29,6 +30,7 @@ const NAV = [
 const ADMIN_NAV = [
   { href: '/app/admin/governance', label: 'Manage', icon: ShieldCheck },
   { href: '/app/admin/company', label: 'Company', icon: Building2 },
+  { href: '/app/admin/products', label: 'Products', icon: Package },
   { href: '/app/admin/users', label: 'Users', icon: Users },
   { href: '/app/admin/agents', label: 'Agents', icon: Bot },
 ];

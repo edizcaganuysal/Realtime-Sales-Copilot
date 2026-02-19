@@ -28,6 +28,14 @@ type CallData = {
   mode: string;
   status: string;
   startedAt: string | null;
+  productsMode?: 'ALL' | 'SELECTED';
+  selectedProducts?: ProductRef[];
+  availableProducts?: ProductRef[];
+};
+
+type ProductRef = {
+  id: string;
+  name: string;
 };
 
 type TranscriptLine = { speaker: string; text: string; tsMs: number; isFinal?: boolean; _seq?: number };
@@ -443,6 +451,12 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
   const [prospectSpeaking, setProspectSpeaking] = useState(false);
   const [ending, setEnding] = useState(false);
   const [transcriptOpen, setTranscriptOpen] = useState(false);
+  const [productDrawerOpen, setProductDrawerOpen] = useState(false);
+  const [productsModeDraft, setProductsModeDraft] = useState<'ALL' | 'SELECTED'>('ALL');
+  const [selectedProductIdsDraft, setSelectedProductIdsDraft] = useState<string[]>([]);
+  const [productSearch, setProductSearch] = useState('');
+  const [productsSaving, setProductsSaving] = useState(false);
+  const [productsError, setProductsError] = useState('');
 
   const socketRef = useRef<Socket | null>(null);
   const seqRef = useRef(0);
@@ -484,6 +498,12 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
       .then((d) => {
         setCall(d);
         setCallStatus(d.status ?? 'INITIATED');
+        const mode = d.productsMode === 'SELECTED' ? 'SELECTED' : 'ALL';
+        setProductsModeDraft(mode);
+        const selected = Array.isArray(d.selectedProducts)
+          ? d.selectedProducts.map((product: ProductRef) => product.id)
+          : [];
+        setSelectedProductIdsDraft(selected);
       });
   }, [id]);
 
@@ -640,6 +660,58 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
     router.push('/app/calls');
   }
 
+  function openProductsDrawer() {
+    const mode = call?.productsMode === 'SELECTED' ? 'SELECTED' : 'ALL';
+    const selectedProducts = Array.isArray(call?.selectedProducts) ? call.selectedProducts : [];
+    const selected = selectedProducts.map((product) => product.id);
+    setProductsModeDraft(mode);
+    setSelectedProductIdsDraft(selected);
+    setProductSearch('');
+    setProductsError('');
+    setProductDrawerOpen(true);
+  }
+
+  function toggleDraftProduct(id: string) {
+    setSelectedProductIdsDraft((prev) =>
+      prev.includes(id) ? prev.filter((value) => value !== id) : [...prev, id],
+    );
+  }
+
+  async function saveProducts() {
+    if (productsModeDraft === 'SELECTED' && selectedProductIdsDraft.length === 0) {
+      setProductsError('Select at least one product or switch to All products.');
+      return;
+    }
+
+    setProductsSaving(true);
+    setProductsError('');
+    const res = await fetch(`/api/calls/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        products_mode: productsModeDraft,
+        selected_product_ids:
+          productsModeDraft === 'SELECTED' ? selectedProductIdsDraft : [],
+      }),
+    });
+    const data = await res.json();
+    setProductsSaving(false);
+
+    if (!res.ok) {
+      setProductsError(
+        Array.isArray(data?.message) ? data.message[0] : (data?.message ?? 'Failed to update products'),
+      );
+      return;
+    }
+
+    setCall(data);
+    setProductsModeDraft(data.productsMode === 'SELECTED' ? 'SELECTED' : 'ALL');
+    setSelectedProductIdsDraft(
+      Array.isArray(data.selectedProducts) ? data.selectedProducts.map((product: ProductRef) => product.id) : [],
+    );
+    setProductDrawerOpen(false);
+  }
+
   // Loading state
   if (!call) {
     return (
@@ -649,8 +721,23 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
     );
   }
 
+  const availableProducts = call.availableProducts ?? [];
+  const filteredAvailableProducts = availableProducts.filter((product) => {
+    const q = productSearch.trim().toLowerCase();
+    if (!q) return true;
+    return product.name.toLowerCase().includes(q);
+  });
+  const selectedProducts =
+    call.productsMode === 'SELECTED' && Array.isArray(call.selectedProducts)
+      ? call.selectedProducts
+      : [];
+  const productPills =
+    call.productsMode === 'SELECTED' && selectedProducts.length > 0
+      ? selectedProducts.map((product) => product.name)
+      : ['All products'];
+
   return (
-    <div className="flex flex-col h-full bg-slate-950">
+    <div className="relative flex flex-col h-full bg-slate-950">
       {/* ─── Top bar ─────────────────────────────────────────────────── */}
       <div className="shrink-0 flex items-center justify-between px-5 py-2 border-b border-slate-800/60 bg-slate-950">
         <div className="flex items-center gap-3">
@@ -667,6 +754,28 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
               {micActive ? (mockReady ? 'Live' : 'Connecting...') : 'No mic'}
             </span>
           )}
+          <div className="flex items-center gap-1.5">
+            {productPills.slice(0, 2).map((label) => (
+              <span
+                key={label}
+                className="text-[11px] px-2 py-0.5 rounded-full border border-cyan-500/30 bg-cyan-500/10 text-cyan-300"
+              >
+                {label}
+              </span>
+            ))}
+            {productPills.length > 2 && (
+              <span className="text-[11px] px-2 py-0.5 rounded-full border border-slate-700 text-slate-400">
+                +{productPills.length - 2}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={openProductsDrawer}
+              className="text-[11px] px-2 py-0.5 rounded-full border border-slate-700 hover:border-slate-500 text-slate-400 hover:text-slate-200 transition-colors"
+            >
+              Change
+            </button>
+          </div>
           <MiniStats stats={stats} />
         </div>
         <button
@@ -678,6 +787,106 @@ export default function LiveCallPage({ params }: { params: Promise<{ id: string 
           {ending ? 'Ending...' : 'End'}
         </button>
       </div>
+
+      {productDrawerOpen && (
+        <div className="absolute top-14 right-4 z-40 w-80 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl">
+          <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-white">Products</h3>
+            <button
+              type="button"
+              onClick={() => setProductDrawerOpen(false)}
+              className="text-slate-500 hover:text-slate-300 text-xs"
+            >
+              Close
+            </button>
+          </div>
+
+          <div className="p-3 space-y-3">
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setProductsModeDraft('ALL')}
+                className={`flex-1 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
+                  productsModeDraft === 'ALL'
+                    ? 'bg-emerald-600/20 border-emerald-500/40 text-emerald-300'
+                    : 'bg-slate-800 border-slate-700 text-slate-400'
+                }`}
+              >
+                All products
+              </button>
+              <button
+                type="button"
+                onClick={() => setProductsModeDraft('SELECTED')}
+                className={`flex-1 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
+                  productsModeDraft === 'SELECTED'
+                    ? 'bg-cyan-600/20 border-cyan-500/40 text-cyan-300'
+                    : 'bg-slate-800 border-slate-700 text-slate-400'
+                }`}
+              >
+                Selected
+              </button>
+            </div>
+
+            {productsModeDraft === 'SELECTED' && (
+              <div className="space-y-2">
+                <input
+                  value={productSearch}
+                  onChange={(e) => setProductSearch(e.target.value)}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                  placeholder="Search products..."
+                />
+                <div className="max-h-44 overflow-y-auto space-y-1 pr-1">
+                  {filteredAvailableProducts.length === 0 ? (
+                    <p className="text-xs text-slate-600 py-2">
+                      No products available.
+                    </p>
+                  ) : (
+                    filteredAvailableProducts.map((product) => {
+                      const selected = selectedProductIdsDraft.includes(product.id);
+                      return (
+                        <button
+                          key={product.id}
+                          type="button"
+                          onClick={() => toggleDraftProduct(product.id)}
+                          className={`w-full text-left px-2.5 py-2 rounded-lg border transition-colors ${
+                            selected
+                              ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
+                              : 'border-slate-700 bg-slate-800/70 text-slate-300'
+                          }`}
+                        >
+                          {product.name}
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            )}
+
+            {productsError && (
+              <p className="text-xs text-red-400">{productsError}</p>
+            )}
+
+            <div className="flex gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setProductDrawerOpen(false)}
+                className="flex-1 py-2 text-xs text-slate-400 border border-slate-700 rounded-lg hover:text-white transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={saveProducts}
+                disabled={productsSaving}
+                className="flex-1 py-2 text-xs text-white bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 rounded-lg transition-colors"
+              >
+                {productsSaving ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ─── Connecting overlay (outbound only) ──────────────────────── */}
       {callStatus === 'INITIATED' && !isMock && (

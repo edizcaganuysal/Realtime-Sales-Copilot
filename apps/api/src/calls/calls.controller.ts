@@ -234,12 +234,22 @@ export class CallsController {
   }
 
   @Patch(':id')
-  update(
+  async update(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
     @Body() dto: UpdateCallDto,
   ) {
-    return this.callsService.update(user, id, dto);
+    const updated = await this.callsService.update(user, id, dto);
+    if (
+      dto.notes !== undefined ||
+      dto.products_mode !== undefined ||
+      dto.selected_product_ids !== undefined
+    ) {
+      void this.engineService.refreshContext(id).catch((err: Error) =>
+        this.logger.error(`Engine context refresh failed for ${id}: ${err.message}`),
+      );
+    }
+    return updated;
   }
 
   @Get(':id/transcript')

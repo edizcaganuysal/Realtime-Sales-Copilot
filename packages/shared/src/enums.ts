@@ -38,6 +38,11 @@ export enum CallMode {
   MOCK = 'MOCK',
 }
 
+export enum ProductsMode {
+  ALL = 'ALL',
+  SELECTED = 'SELECTED',
+}
+
 export enum CallStatus {
   INITIATED = 'INITIATED',
   IN_PROGRESS = 'IN_PROGRESS',
