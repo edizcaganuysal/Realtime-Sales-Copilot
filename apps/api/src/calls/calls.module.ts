@@ -8,8 +8,10 @@ import { SttService } from './stt.service';
 import { LlmService } from './llm.service';
 import { MediaStreamService } from './media-stream.service';
 import { MockCallService } from './mock-call.service';
+import { CreditsModule } from '../credits/credits.module';
 
 @Module({
+  imports: [CreditsModule],
   controllers: [TwilioWebhookController, CallsController],
   providers: [
     CallsService,

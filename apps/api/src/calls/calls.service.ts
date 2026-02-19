@@ -12,12 +12,17 @@ import { DRIZZLE, DrizzleDb } from '../db/db.module';
 import * as schema from '../db/schema';
 import { CreateCallDto } from './dto/create-call.dto';
 import { UpdateCallDto } from './dto/update-call.dto';
+import { CreditsService } from '../credits/credits.service';
+import { getCreditCost } from '../config/credit-costs';
 
 type Tx = Parameters<Parameters<DrizzleDb['transaction']>[0]>[0];
 
 @Injectable()
 export class CallsService {
-  constructor(@Inject(DRIZZLE) private readonly db: DrizzleDb) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: DrizzleDb,
+    private readonly creditsService: CreditsService,
+  ) {}
 
   private async getOrgSettings(orgId: string) {
     const [settings] = await this.db
@@ -115,6 +120,22 @@ export class CallsService {
     const guidanceLevel = dto.guidanceLevel ?? GuidanceLevel.STANDARD;
     const productsMode = dto.products_mode ?? ProductsMode.ALL;
     const selectedProductIds = this.normalizeSelectedProductIds(dto.selected_product_ids);
+    const callMode = dto.mode ?? 'OUTBOUND';
+    const usageType =
+      callMode === 'MOCK' ? 'USAGE_CALL_PRACTICE' : 'USAGE_CALL_REAL';
+    const debitAmount =
+      callMode === 'MOCK'
+        ? getCreditCost('CALL_PRACTICE_PER_MIN')
+        : getCreditCost('CALL_REAL_PER_MIN');
+
+    await this.creditsService.requireAndDebit(
+      user.orgId,
+      debitAmount,
+      usageType,
+      {
+        mode: callMode,
+      },
+    );
 
     const contactJson: Record<string, unknown> = {};
     if (dto.practicePersonaId) contactJson.practicePersonaId = dto.practicePersonaId;
@@ -128,7 +149,7 @@ export class CallsService {
           userId: user.sub,
           agentId: dto.agentId ?? null,
           playbookId: null,
-          mode: dto.mode ?? 'OUTBOUND',
+          mode: callMode,
           guidanceLevel,
           layoutPreset,
           productsMode,

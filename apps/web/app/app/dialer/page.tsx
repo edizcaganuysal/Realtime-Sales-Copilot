@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { CallMode } from '@live-sales-coach/shared';
 import { Phone, Bot, Plus, ChevronRight, Shield, Zap, Users, Crown, Smile, X, Pencil, Trash2 } from 'lucide-react';
+import { OutOfCreditsModal } from '@/components/out-of-credits-modal';
 
 type Agent = { id: string; name: string };
 type ProductOption = { id: string; name: string; elevatorPitch?: string | null };
@@ -18,10 +19,10 @@ type PracticePersona = {
 };
 
 const INPUT =
-  'w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500';
+  'w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-sky-500';
 
 const DIFFICULTY_COLORS: Record<string, string> = {
-  Medium: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30',
+  Medium: 'text-sky-400 bg-sky-500/10 border-sky-500/30',
   Hard: 'text-amber-400 bg-amber-500/10 border-amber-500/30',
   Expert: 'text-red-400 bg-red-500/10 border-red-500/30',
 };
@@ -39,7 +40,7 @@ const PERSONA_COLORS: Record<string, string> = {
   red: 'border-red-500/30 hover:border-red-500/60 bg-red-500/5',
   blue: 'border-blue-500/30 hover:border-blue-500/60 bg-blue-500/5',
   violet: 'border-violet-500/30 hover:border-violet-500/60 bg-violet-500/5',
-  emerald: 'border-emerald-500/30 hover:border-emerald-500/60 bg-emerald-500/5',
+  emerald: 'border-sky-500/30 hover:border-sky-500/60 bg-sky-500/5',
   slate: 'border-slate-500/30 hover:border-slate-500/60 bg-slate-500/5',
 };
 
@@ -48,7 +49,7 @@ const PERSONA_ICON_COLORS: Record<string, string> = {
   red: 'text-red-400 bg-red-500/15',
   blue: 'text-blue-400 bg-blue-500/15',
   violet: 'text-violet-400 bg-violet-500/15',
-  emerald: 'text-emerald-400 bg-emerald-500/15',
+  emerald: 'text-sky-400 bg-sky-500/15',
   slate: 'text-slate-400 bg-slate-500/15',
 };
 
@@ -57,7 +58,7 @@ const PERSONA_SELECTED: Record<string, string> = {
   red: 'border-red-400 bg-red-500/15 ring-1 ring-red-500/30',
   blue: 'border-blue-400 bg-blue-500/15 ring-1 ring-blue-500/30',
   violet: 'border-violet-400 bg-violet-500/15 ring-1 ring-violet-500/30',
-  emerald: 'border-emerald-400 bg-emerald-500/15 ring-1 ring-emerald-500/30',
+  emerald: 'border-sky-400 bg-sky-500/15 ring-1 ring-sky-500/30',
   slate: 'border-slate-400 bg-slate-500/15 ring-1 ring-slate-500/30',
 };
 
@@ -79,6 +80,7 @@ export default function DialerPage() {
   const [form, setForm] = useState({ phoneTo: '', agentId: '', notes: '' });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [showOutOfCreditsModal, setShowOutOfCreditsModal] = useState(false);
 
   useEffect(() => {
     const modeParam = searchParams.get('mode');
@@ -242,12 +244,17 @@ export default function DialerPage() {
 
     if (!res.ok) {
       const d = await res.json();
-      setError(Array.isArray(d.message) ? d.message[0] : (d.message ?? 'Failed to start call'));
+      const message = Array.isArray(d?.message) ? d.message[0] : (d?.message ?? 'Failed to start call');
+      if (res.status === 402 || String(message).toLowerCase().includes('not enough credits')) {
+        setShowOutOfCreditsModal(true);
+      }
+      setError(message);
       setSubmitting(false);
       return;
     }
 
     const call = await res.json();
+    window.dispatchEvent(new Event('credits:refresh'));
     router.push(`/app/calls/${call.id}/live`);
   }
 
@@ -256,8 +263,8 @@ export default function DialerPage() {
   return (
     <div className="p-8 max-w-2xl">
       <div className="flex items-center gap-3 mb-6">
-        <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${isMock ? 'bg-violet-500/15' : 'bg-emerald-500/15'}`}>
-          {isMock ? <Bot size={18} className="text-violet-400" /> : <Phone size={18} className="text-emerald-400" />}
+        <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${isMock ? 'bg-violet-500/15' : 'bg-sky-500/15'}`}>
+          {isMock ? <Bot size={18} className="text-violet-400" /> : <Phone size={18} className="text-sky-400" />}
         </div>
         <div>
           <h1 className="text-lg font-semibold text-white">{isMock ? 'Practice call' : 'New call'}</h1>
@@ -274,7 +281,7 @@ export default function DialerPage() {
           onClick={() => setMode(CallMode.OUTBOUND)}
           className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-colors border ${
             !isMock
-              ? 'bg-emerald-600/20 border-emerald-500/40 text-emerald-400'
+              ? 'bg-sky-600/20 border-sky-500/40 text-sky-400'
               : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
           }`}
         >
@@ -406,12 +413,12 @@ export default function DialerPage() {
                 onClick={() => setAllProducts((prev) => !prev)}
                 className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-full border text-xs font-medium transition-colors ${
                   allProducts
-                    ? 'border-emerald-500/40 text-emerald-300 bg-emerald-500/10'
+                    ? 'border-sky-500/40 text-sky-300 bg-sky-500/10'
                     : 'border-slate-600 text-slate-300 bg-slate-800'
                 }`}
               >
                 <span
-                  className={`w-1.5 h-1.5 rounded-full ${allProducts ? 'bg-emerald-400' : 'bg-slate-400'}`}
+                  className={`w-1.5 h-1.5 rounded-full ${allProducts ? 'bg-sky-400' : 'bg-slate-400'}`}
                 />
                 {allProducts ? 'All products' : 'Selected products'}
               </button>
@@ -438,14 +445,14 @@ export default function DialerPage() {
                           onClick={() => toggleProductSelection(product.id)}
                           className={`w-full text-left px-3 py-2 rounded-lg border transition-colors ${
                             selected
-                              ? 'border-emerald-500/40 bg-emerald-500/10'
+                              ? 'border-sky-500/40 bg-sky-500/10'
                               : 'border-slate-700 hover:border-slate-500 bg-slate-800/60'
                           }`}
                         >
                           <div className="flex items-center justify-between gap-2">
                             <span className="text-sm text-white">{product.name}</span>
                             <span
-                              className={`text-[10px] px-1.5 py-0.5 rounded ${selected ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-700 text-slate-400'}`}
+                              className={`text-[10px] px-1.5 py-0.5 rounded ${selected ? 'bg-sky-500/20 text-sky-300' : 'bg-slate-700 text-slate-400'}`}
                             >
                               {selected ? 'Selected' : 'Pick'}
                             </span>
@@ -504,7 +511,7 @@ export default function DialerPage() {
           type="submit"
           disabled={submitting}
           className={`w-full flex items-center justify-center gap-2 py-2.5 disabled:opacity-50 text-white font-medium rounded-lg transition-colors ${
-            isMock ? 'bg-violet-600 hover:bg-violet-500' : 'bg-emerald-600 hover:bg-emerald-500'
+            isMock ? 'bg-violet-600 hover:bg-violet-500' : 'bg-sky-600 hover:bg-sky-500'
           }`}
         >
           {isMock ? <Bot size={15} /> : <Phone size={15} />}
@@ -605,6 +612,10 @@ export default function DialerPage() {
           </div>
         </div>
       )}
+      <OutOfCreditsModal
+        open={showOutOfCreditsModal}
+        onClose={() => setShowOutOfCreditsModal(false)}
+      />
     </div>
   );
 }
