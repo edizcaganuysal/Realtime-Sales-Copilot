@@ -118,7 +118,7 @@ type CrawlConfig = {
 };
 
 const PDF_TEXT_CAP = 120_000;
-const WEBSITE_PAGES_DEFAULT = 20;
+const WEBSITE_PAGES_DEFAULT = 30;
 const WEBSITE_MAX_PAGES_HARD_CAP = 80;
 const MAX_FILES = 5;
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
@@ -750,9 +750,9 @@ export class IngestService {
       return {
         focus,
         maxPages,
-        depth: 1,
-        pageCharCap: 14_000,
-        totalCharCap: 90_000,
+        depth: 2,
+        pageCharCap: 16_000,
+        totalCharCap: 120_000,
         timeCapMs: 60_000,
         userRequestedPages: requestedPages,
         clamped,
@@ -764,9 +764,9 @@ export class IngestService {
       return {
         focus,
         maxPages,
-        depth: 3,
-        pageCharCap: 22_000,
-        totalCharCap: 180_000,
+        depth: 4,
+        pageCharCap: 28_000,
+        totalCharCap: 320_000,
         timeCapMs: 120_000,
         userRequestedPages: requestedPages,
         clamped,
@@ -777,10 +777,10 @@ export class IngestService {
     return {
       focus: 'STANDARD',
       maxPages,
-      depth: 2,
-      pageCharCap: 18_000,
-      totalCharCap: 140_000,
-      timeCapMs: 90_000,
+      depth: 3,
+      pageCharCap: 24_000,
+      totalCharCap: 240_000,
+      timeCapMs: 105_000,
       userRequestedPages: requestedPages,
       clamped,
       note: clamped ? `Scanned first ${maxPages} pages for speed.` : null,
@@ -938,7 +938,7 @@ export class IngestService {
         this.pushRankedSitemapPage(loc, base, includePaths, excludePaths, focus, seen, pages);
       }
 
-      for (const nestedLoc of nested.slice(0, 4)) {
+      for (const nestedLoc of nested.slice(0, 12)) {
         const nestedXml = await this.fetchTextUrl(nestedLoc);
         if (!nestedXml) continue;
         const nestedLocs = this.extractSitemapLocs(nestedXml);
@@ -1106,10 +1106,41 @@ export class IngestService {
       'products',
       'solution',
       'solutions',
+      'offering',
+      'offerings',
       'virtual-tour',
       'drone',
+      'workflow',
+      'process',
+      'system',
+      'operations',
+      'orchestration',
+      'case-study',
+      'case-studies',
+      'testimonial',
+      'testimonials',
+      'client',
+      'clients',
+      'results',
+      'outcomes',
+      'implementation',
+      'approach',
     ];
-    const mediumSignal = ['docs', 'documentation', 'security', 'compliance', 'terms'];
+    const mediumSignal = [
+      'docs',
+      'documentation',
+      'security',
+      'compliance',
+      'terms',
+      'industry',
+      'industries',
+      'resources',
+      'insights',
+      'faq',
+      'faqs',
+      'about-us',
+      'who-we-are',
+    ];
     const lowSignal = ['privacy', 'accessibility', 'cookie', 'cookies'];
     const noisy = ['blog', 'news', 'career', 'jobs', 'press', 'login', 'signin', 'signup', 'account'];
 
@@ -1141,21 +1172,18 @@ export class IngestService {
 
   private extractPageText(html: string) {
     const mainSection = this.extractMainSection(html);
-    const stripped = mainSection
-      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-      .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
-      .replace(/<svg[\s\S]*?<\/svg>/gi, ' ')
-      .replace(/<nav[\s\S]*?<\/nav>/gi, ' ')
-      .replace(/<footer[\s\S]*?<\/footer>/gi, ' ')
-      .replace(/<header[\s\S]*?<\/header>/gi, ' ')
-      .replace(/<aside[\s\S]*?<\/aside>/gi, ' ')
-      .replace(/<form[\s\S]*?<\/form>/gi, ' ')
-      .replace(/<[^>]+>/g, ' ');
-    const decoded = this.decodeHtml(stripped);
-    const compact = this.compactWhitespace(decoded);
-    if (compact.length < 180) return '';
-    return compact;
+    const primaryLines = this.extractLinesFromHtml(mainSection);
+    const fallbackLines = this.extractLinesFromHtml(html).slice(0, 220);
+    const metaLines = this.extractMetaLines(html);
+    const structuredLines = this.extractStructuredDataLines(html);
+    const merged = this.pickSignalLines(
+      [...metaLines, ...structuredLines, ...primaryLines, ...fallbackLines],
+      600,
+    );
+    if (merged.length === 0) return '';
+    const text = merged.join('\n');
+    if (text.replace(/\s+/g, ' ').trim().length < 220) return '';
+    return text;
   }
 
   private extractMainSection(html: string) {
@@ -1183,6 +1211,227 @@ export class IngestService {
 
   private compactWhitespace(value: string) {
     return value.replace(/\s+/g, ' ').trim();
+  }
+
+  private extractLinesFromHtml(html: string) {
+    const stripped = html
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
+      .replace(/<svg[\s\S]*?<\/svg>/gi, ' ')
+      .replace(/<nav[\s\S]*?<\/nav>/gi, ' ')
+      .replace(/<footer[\s\S]*?<\/footer>/gi, ' ')
+      .replace(/<header[\s\S]*?<\/header>/gi, ' ')
+      .replace(/<aside[\s\S]*?<\/aside>/gi, ' ')
+      .replace(/<form[\s\S]*?<\/form>/gi, ' ')
+      .replace(/<\/(p|li|ul|ol|h1|h2|h3|h4|h5|h6|section|article|div|br|tr|td)>/gi, '\n')
+      .replace(/<[^>]+>/g, ' ');
+    const decoded = this.decodeHtml(stripped);
+    const lines = decoded
+      .split('\n')
+      .map((line) => this.compactWhitespace(line))
+      .filter((line) => line.length >= 20)
+      .filter((line) => !/^[-–•|]+$/.test(line));
+    return this.uniqueLines(lines, 2000);
+  }
+
+  private extractMetaLines(html: string) {
+    const lines: string[] = [];
+    const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    const title = titleMatch ? this.compactWhitespace(this.decodeHtml(titleMatch[1] || '')) : '';
+    if (title.length > 0) lines.push(`Title: ${title}`);
+
+    const metaRegex = /<meta\b[^>]*>/gi;
+    let match: RegExpExecArray | null;
+    while ((match = metaRegex.exec(html)) !== null) {
+      const tag = match[0] || '';
+      const key =
+        tag.match(/\b(?:name|property)=["']([^"']+)["']/i)?.[1]?.toLowerCase() || '';
+      const content = this.compactWhitespace(
+        this.decodeHtml(tag.match(/\bcontent=["']([^"']+)["']/i)?.[1] || ''),
+      );
+      if (!key || !content) continue;
+      if (
+        key.includes('description') ||
+        key.includes('og:title') ||
+        key.includes('og:description') ||
+        key.includes('twitter:description') ||
+        key.includes('keywords')
+      ) {
+        lines.push(`${key}: ${content}`);
+      }
+      if (lines.length >= 60) break;
+    }
+    return this.uniqueLines(lines, 80);
+  }
+
+  private extractStructuredDataLines(html: string) {
+    const lines: string[] = [];
+    const push = (value: string) => {
+      const clean = this.compactWhitespace(this.decodeHtml(value));
+      if (clean.length < 20 || clean.length > 320) return;
+      if (/^https?:\/\//i.test(clean)) return;
+      lines.push(clean);
+    };
+
+    const scriptRegex =
+      /<script\b[^>]*type=["'](?:application\/ld\+json|application\/json)["'][^>]*>([\s\S]*?)<\/script>/gi;
+    let scriptMatch: RegExpExecArray | null;
+    while ((scriptMatch = scriptRegex.exec(html)) !== null) {
+      const raw = this.compactWhitespace(scriptMatch[1] || '');
+      if (!raw) continue;
+      try {
+        const parsed = JSON.parse(raw) as unknown;
+        this.collectStructuredStrings(parsed, lines, '', 0, 1000);
+      } catch {
+        continue;
+      }
+      if (lines.length >= 700) break;
+    }
+
+    const nextDataMatch = html.match(
+      /<script\b[^>]*id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i,
+    );
+    if (nextDataMatch?.[1]) {
+      try {
+        const parsed = JSON.parse(nextDataMatch[1]) as unknown;
+        this.collectStructuredStrings(parsed, lines, '', 0, 1400);
+      } catch {
+        void 0;
+      }
+    }
+
+    return this.pickSignalLines(lines, 220);
+  }
+
+  private collectStructuredStrings(
+    value: unknown,
+    out: string[],
+    key: string,
+    depth: number,
+    max: number,
+  ) {
+    if (out.length >= max || depth > 7) return;
+    if (typeof value === 'string') {
+      const lowerKey = key.toLowerCase();
+      const includeByKey =
+        lowerKey.includes('title') ||
+        lowerKey.includes('name') ||
+        lowerKey.includes('description') ||
+        lowerKey.includes('service') ||
+        lowerKey.includes('offer') ||
+        lowerKey.includes('package') ||
+        lowerKey.includes('feature') ||
+        lowerKey.includes('benefit') ||
+        lowerKey.includes('industry') ||
+        lowerKey.includes('testimonial') ||
+        lowerKey.includes('result') ||
+        lowerKey.includes('policy') ||
+        lowerKey.includes('workflow') ||
+        lowerKey.includes('process');
+      if (includeByKey || value.length <= 260) {
+        const clean = this.compactWhitespace(this.decodeHtml(value));
+        if (clean.length >= 20 && clean.length <= 320) out.push(clean);
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value.slice(0, 220)) {
+        this.collectStructuredStrings(item, out, key, depth + 1, max);
+        if (out.length >= max) break;
+      }
+      return;
+    }
+    if (value && typeof value === 'object') {
+      for (const [entryKey, entryValue] of Object.entries(value).slice(0, 260)) {
+        this.collectStructuredStrings(entryValue, out, entryKey, depth + 1, max);
+        if (out.length >= max) break;
+      }
+    }
+  }
+
+  private pickSignalLines(lines: string[], limit: number) {
+    const unique = this.uniqueLines(lines, 3000);
+    if (unique.length <= limit) return unique;
+    const seeded = unique
+      .filter((line) => this.scoreSignalLine(line) > 0)
+      .slice(0, Math.min(80, unique.length));
+    const seededFallback = seeded.length > 0 ? seeded : unique.slice(0, Math.min(40, unique.length));
+    const scored = unique
+      .map((line, index) => ({ line, index, score: this.scoreSignalLine(line) }))
+      .sort((a, b) => {
+        if (b.score === a.score) return a.index - b.index;
+        return b.score - a.score;
+      })
+      .slice(0, Math.max(limit * 2, 260))
+      .sort((a, b) => a.index - b.index)
+      .map((entry) => entry.line);
+    return this.uniqueLines([...seededFallback, ...scored], limit);
+  }
+
+  private scoreSignalLine(line: string) {
+    const lower = line.toLowerCase();
+    let score = 0;
+    const strong = [
+      'we help',
+      'we provide',
+      'service',
+      'services',
+      'offering',
+      'offerings',
+      'package',
+      'packages',
+      'ai',
+      'automation',
+      'operations',
+      'workflow',
+      'orchestration',
+      'audit',
+      'implementation',
+      'support',
+      'industry',
+      'client',
+      'customer',
+      'proof',
+      'result',
+      'outcome',
+      'case study',
+      'testimonial',
+      'pricing',
+      'policy',
+      'delivery',
+      'turnaround',
+      'booking',
+      'cancellation',
+      'deposit',
+      'licensing',
+    ];
+    for (const token of strong) {
+      if (lower.includes(token)) score += 3;
+    }
+    if (/\d/.test(lower)) score += 2;
+    if (/\b(legal|wealth|marketing|it|accounting|hr|healthcare|finance)\b/.test(lower)) {
+      score += 2;
+    }
+    if (/(privacy|cookie|accessibility|gdpr|wcag)/.test(lower)) score -= 5;
+    if (line.length < 28) score -= 2;
+    if (line.length > 280) score -= 1;
+    return score;
+  }
+
+  private uniqueLines(lines: string[], max: number) {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const line of lines) {
+      const compact = this.compactWhitespace(line);
+      if (!compact) continue;
+      const key = compact.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(compact);
+      if (out.length >= max) break;
+    }
+    return out;
   }
 
   private fallbackTitle(url: string) {
@@ -1281,6 +1530,10 @@ export class IngestService {
         'Given these sources, produce JSON with key fields. Schema:\n' +
         '{ \"fields\": { \"company_name\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"what_we_sell\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"how_it_works\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"offer_category\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"target_customer\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"target_roles\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"industries\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"buying_triggers\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"disqualifiers\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"global_value_props\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"proof_points\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"case_studies\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"allowed_claims\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"sales_policies\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"forbidden_claims\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"competitors\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"positioning_rules\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"escalation_rules\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"discovery_questions\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"qualification_rubric\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"next_steps\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"knowledge_appendix\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"company_overview\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"target_customers\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"value_props\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"tone_style\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"compliance_and_policies\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"competitor_positioning\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"knowledge_base_appendix\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean} } }\n' +
         'Rules:\n' +
+        '- Extract as much relevant detail as possible from all sources. Avoid under-filling fields.\n' +
+        '- Prefer concrete wording copied or closely paraphrased from source language.\n' +
+        '- For array fields, include up to 12 concise items when evidence exists.\n' +
+        '- Pull delivery workflow details, operating model, implementation steps, credibility proof, industry focus, and objection-relevant context whenever present.\n' +
         '- compliance_and_policies means SALES & SERVICE POLICIES only: booking process, turnaround time, reschedule/cancellation, deposits/payment expectations, licensing/usage rights, service area/travel fees, on-site privacy expectations.\n' +
         '- Do not use privacy policy, WCAG, cookie, or generic legal site content as compliance_and_policies unless it directly impacts sales/service delivery.\n' +
         '- If no reliable evidence exists for competitor_positioning or escalation_rules, provide practical suggested defaults with low confidence, suggested=true, and citations=[].\n' +
@@ -1353,18 +1606,20 @@ export class IngestService {
         'Given these sources, return JSON with key "products" as an array. Each product item must contain:\n' +
         '{ "name": {"value": string, "confidence": number, "citations": string[], "suggested": boolean}, "elevator_pitch": {"value": string, "confidence": number, "citations": string[], "suggested": boolean}, "value_props": {"value": string[], "confidence": number, "citations": string[], "suggested": boolean}, "differentiators": {"value": string[], "confidence": number, "citations": string[], "suggested": boolean}, "pricing_rules": {"value": object, "confidence": number, "citations": string[], "suggested": boolean}, "dont_say": {"value": string[], "confidence": number, "citations": string[], "suggested": boolean}, "faqs": {"value": array, "confidence": number, "citations": string[], "suggested": boolean}, "objections": {"value": array, "confidence": number, "citations": string[], "suggested": boolean} }\n' +
         'Rules:\n' +
+        '- Extract as much offering detail as possible from all sources, including package names, service variants, deliverables, and workflow promises.\n' +
         '- For service businesses, detect multiple offerings/packages/services, not the company name as a product.\n' +
         '- Product names must be offering names such as package/service names found in sources.\n' +
+        '- Include up to 10 offerings when evidence exists.\n' +
         '- If a claim lacks evidence, keep it in value with suggested=true and citations=[].\n' +
         '- Never fabricate AI capabilities, pricing numbers, or unverified differentiators.\n' +
-        '- Return up to 8 distinct offerings and citations must be IDs like S1.\n' +
+        '- Return up to 10 distinct offerings and citations must be IDs like S1.\n' +
         this.renderSources(sources),
     });
 
     const valid = new Set(sources.map((source) => source.id));
     const rawProducts = Array.isArray(raw.products) ? raw.products : [];
     const products = rawProducts
-      .slice(0, 8)
+      .slice(0, 10)
       .map((item) => this.asRecord(item))
       .map((item) => ({
         id: randomUUID(),
@@ -1604,8 +1859,8 @@ export class IngestService {
 
     const response = await client.chat.completions.create({
       model,
-      temperature: 0.2,
-      max_tokens: 2600,
+      temperature: 0.15,
+      max_tokens: 3800,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: input.system },
