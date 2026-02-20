@@ -340,10 +340,14 @@ export default function LiveCallPage() {
   const pendingNudgesRef = useRef<string[] | null>(null);
   const prospectSpeakingRef = useRef(false);
   const partialProspectRef = useRef('');
-  const lastProspectActivityAtRef = useRef(0);
   const suggestionRef = useRef<string | null>(null);
   const repTurnCountRef = useRef(0);
   const openerRef = useRef<string | null>(null);
+  const shownPrimaryKeysRef = useRef<Set<string>>(new Set());
+  const cardShownForTurnRef = useRef(true);
+  const strictListeningRef = useRef(false);
+  const unlockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [strictListening, setStrictListening] = useState(false);
 
   const timer = useTimer(call?.startedAt ?? null);
   const isMock = call?.mode === 'MOCK';
@@ -370,20 +374,47 @@ export default function LiveCallPage() {
       : ['All offerings'];
 
   const topNudges = nudges.slice(0, 3);
-  const isListening = prospectSpeaking || listeningMode;
+  const isProspectTalking =
+    strictListening || prospectSpeaking || partialProspectText.trim().length > 0;
+  const isListening = isProspectTalking || listeningMode;
 
   useEffect(() => {
     suggestionRef.current = suggestion;
   }, [suggestion]);
 
-  const canRenderCoachUpdate = useCallback(() => {
-    const hasPartial = partialProspectRef.current.trim().length > 0;
-    const recentlyActive = Date.now() - lastProspectActivityAtRef.current < 700;
-    return !prospectSpeakingRef.current && !hasPartial && !recentlyActive;
+  const normalizePrimary = useCallback((text: string) => {
+    return text.replace(/\s+/g, ' ').trim().toLowerCase();
   }, []);
 
+  const clearUnlockTimer = useCallback(() => {
+    if (!unlockTimerRef.current) return;
+    clearTimeout(unlockTimerRef.current);
+    unlockTimerRef.current = null;
+  }, []);
+
+  const commitPrimary = useCallback(
+    (candidate: string) => {
+      const clean = candidate.replace(/\s+/g, ' ').trim();
+      if (!clean) return;
+      if (strictListeningRef.current) return;
+      if (cardShownForTurnRef.current) return;
+      const key = normalizePrimary(clean);
+      if (!key) return;
+      if (shownPrimaryKeysRef.current.has(key)) return;
+      shownPrimaryKeysRef.current.add(key);
+      if (shownPrimaryKeysRef.current.size > 80) {
+        const compacted = Array.from(shownPrimaryKeysRef.current).slice(-40);
+        shownPrimaryKeysRef.current = new Set(compacted);
+      }
+      cardShownForTurnRef.current = true;
+      setListeningMode(false);
+      setSuggestion(clean);
+    },
+    [normalizePrimary],
+  );
+
   const flushPendingCoachUi = useCallback(() => {
-    if (!canRenderCoachUpdate()) return;
+    if (strictListeningRef.current) return;
     if (pendingMomentRef.current) {
       setMomentTag(pendingMomentRef.current);
       pendingMomentRef.current = null;
@@ -393,11 +424,34 @@ export default function LiveCallPage() {
       pendingNudgesRef.current = null;
     }
     if (pendingPrimaryRef.current) {
-      setListeningMode(false);
-      setSuggestion(pendingPrimaryRef.current);
+      const queued = pendingPrimaryRef.current;
       pendingPrimaryRef.current = null;
+      commitPrimary(queued);
     }
-  }, [canRenderCoachUpdate]);
+  }, [commitPrimary]);
+
+  const enterStrictListening = useCallback(() => {
+    clearUnlockTimer();
+    strictListeningRef.current = true;
+    setStrictListening(true);
+    setListeningMode(true);
+    cardShownForTurnRef.current = false;
+    pendingPrimaryRef.current = null;
+    pendingMomentRef.current = null;
+    pendingNudgesRef.current = null;
+  }, [clearUnlockTimer]);
+
+  const scheduleStrictListeningRelease = useCallback(() => {
+    clearUnlockTimer();
+    unlockTimerRef.current = setTimeout(() => {
+      unlockTimerRef.current = null;
+      if (prospectSpeakingRef.current) return;
+      if (partialProspectRef.current.trim().length > 0) return;
+      strictListeningRef.current = false;
+      setStrictListening(false);
+      flushPendingCoachUi();
+    }, 160);
+  }, [clearUnlockTimer, flushPendingCoachUi]);
 
   useEffect(() => {
     let active = true;
@@ -410,14 +464,19 @@ export default function LiveCallPage() {
       setCall(data);
       setCallStatus(data.status ?? 'INITIATED');
       repTurnCountRef.current = 0;
+      shownPrimaryKeysRef.current = new Set();
+      cardShownForTurnRef.current = true;
+      clearUnlockTimer();
+      strictListeningRef.current = false;
+      setStrictListening(false);
       pendingPrimaryRef.current = null;
       pendingMomentRef.current = null;
       pendingNudgesRef.current = null;
       partialProspectRef.current = '';
-      lastProspectActivityAtRef.current = 0;
       if (typeof data.preparedOpenerText === 'string' && data.preparedOpenerText.trim().length > 0) {
         const opener = data.preparedOpenerText.trim();
         openerRef.current = opener;
+        shownPrimaryKeysRef.current.add(normalizePrimary(opener));
         setSuggestion(opener);
         setListeningMode(false);
       } else {
@@ -437,7 +496,7 @@ export default function LiveCallPage() {
     return () => {
       active = false;
     };
-  }, [id]);
+  }, [clearUnlockTimer, id, normalizePrimary]);
 
   useEffect(() => {
     let active = true;
@@ -496,9 +555,9 @@ export default function LiveCallPage() {
       if (data.speaker === 'PROSPECT') {
         setPartialProspectText(data.text);
         partialProspectRef.current = data.text;
-        lastProspectActivityAtRef.current = Date.now();
         setProspectSpeaking(true);
         prospectSpeakingRef.current = true;
+        enterStrictListening();
       }
     });
 
@@ -511,10 +570,9 @@ export default function LiveCallPage() {
       if (data.speaker === 'PROSPECT') {
         setPartialProspectText('');
         partialProspectRef.current = '';
-        lastProspectActivityAtRef.current = Date.now();
         setProspectSpeaking(false);
         prospectSpeakingRef.current = false;
-        flushPendingCoachUi();
+        scheduleStrictListeningRelease();
       } else if (data.speaker === 'REP') {
         repTurnCountRef.current += 1;
         pendingPrimaryRef.current = null;
@@ -529,17 +587,18 @@ export default function LiveCallPage() {
       if (nextPrimary === suggestionRef.current) return;
       const opener = openerRef.current;
       if (opener && repTurnCountRef.current > 0 && nextPrimary === opener) return;
-      if (!canRenderCoachUpdate()) {
-        pendingPrimaryRef.current = nextPrimary;
+      if (strictListeningRef.current || prospectSpeakingRef.current || partialProspectRef.current.trim().length > 0) {
+        if (!pendingPrimaryRef.current) {
+          pendingPrimaryRef.current = nextPrimary;
+        }
         return;
       }
-      setListeningMode(false);
-      setSuggestion(nextPrimary);
+      commitPrimary(nextPrimary);
     });
 
     socket.on('engine.nudges', (data: { nudges: string[] }) => {
       const nextNudges = parseNudges(data.nudges ?? []);
-      if (!canRenderCoachUpdate()) {
+      if (strictListeningRef.current || prospectSpeakingRef.current || partialProspectRef.current.trim().length > 0) {
         pendingNudgesRef.current = nextNudges;
         return;
       }
@@ -548,7 +607,7 @@ export default function LiveCallPage() {
 
     socket.on('engine.moment', (data: { tag?: string }) => {
       if (!data?.tag) return;
-      if (!canRenderCoachUpdate()) {
+      if (strictListeningRef.current || prospectSpeakingRef.current || partialProspectRef.current.trim().length > 0) {
         pendingMomentRef.current = data.tag;
         return;
       }
@@ -578,9 +637,9 @@ export default function LiveCallPage() {
       setProspectSpeaking(data.speaking);
       prospectSpeakingRef.current = data.speaking;
       if (data.speaking) {
-        lastProspectActivityAtRef.current = Date.now();
-      } else if (canRenderCoachUpdate()) {
-        flushPendingCoachUi();
+        enterStrictListening();
+      } else {
+        scheduleStrictListeningRelease();
       }
     });
 
@@ -608,8 +667,9 @@ export default function LiveCallPage() {
     return () => {
       socket.emit('leave', id);
       socket.disconnect();
+      clearUnlockTimer();
     };
-  }, [canRenderCoachUpdate, flushPendingCoachUi, id]);
+  }, [clearUnlockTimer, commitPrimary, enterStrictListening, id, scheduleStrictListeningRelease]);
 
   const handleMoreOptions = useCallback(async () => {
     setMoreOptionsOpen(true);
@@ -827,7 +887,7 @@ export default function LiveCallPage() {
               </div>
             </div>
             <p className="min-h-[66px] text-lg font-medium leading-relaxed text-white">
-              {isListening ? 'Listening...' : suggestion ?? 'Preparing your opening line...'}
+              {isProspectTalking ? 'Listening...' : suggestion ?? 'Preparing your opening line...'}
             </p>
           </div>
 
