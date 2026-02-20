@@ -6,7 +6,7 @@ import { CallMode } from '@live-sales-coach/shared';
 import { Phone, Bot, Plus, ChevronRight, Shield, Zap, Users, Crown, Smile, X, Pencil, Trash2 } from 'lucide-react';
 import { OutOfCreditsModal } from '@/components/out-of-credits-modal';
 
-type Agent = { id: string; name: string };
+type Agent = { id: string; name: string; openers?: string[] | null };
 type ProductOption = { id: string; name: string; elevatorPitch?: string | null };
 type PracticePersona = {
   id: string;
@@ -78,6 +78,7 @@ export default function DialerPage() {
   const [modalForm, setModalForm] = useState({ name: '', title: '', description: '', prompt: '', difficulty: 'Medium' });
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ phoneTo: '', agentId: '', notes: '' });
+  const [selectedOpenerIdx, setSelectedOpenerIdx] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [showOutOfCreditsModal, setShowOutOfCreditsModal] = useState(false);
@@ -227,6 +228,11 @@ export default function DialerPage() {
     };
     if (form.agentId) body.agentId = form.agentId;
     if (form.notes) body.notes = form.notes;
+    const selectedAgent = agents.find((a) => a.id === form.agentId);
+    const agentOpeners = Array.isArray(selectedAgent?.openers) ? selectedAgent.openers.filter((o) => typeof o === 'string' && o.trim()) : [];
+    if (agentOpeners.length > 0) {
+      body.customOpener = agentOpeners[selectedOpenerIdx] ?? agentOpeners[0];
+    }
 
     if (mode === CallMode.MOCK && selectedPersonaId) {
       body.practicePersonaId = selectedPersonaId;
@@ -478,7 +484,7 @@ export default function DialerPage() {
           <select
             className={INPUT}
             value={form.agentId}
-            onChange={(e) => setForm({ ...form, agentId: e.target.value })}
+            onChange={(e) => { setForm({ ...form, agentId: e.target.value }); setSelectedOpenerIdx(0); }}
           >
             <option value="">— Default coach —</option>
             {agents.map((a) => (
@@ -486,6 +492,39 @@ export default function DialerPage() {
             ))}
           </select>
         </div>
+
+        {/* Opener selection when agent has openers */}
+        {(() => {
+          const selectedAgent = agents.find((a) => a.id === form.agentId);
+          const agentOpeners = Array.isArray(selectedAgent?.openers) ? selectedAgent.openers.filter((o) => typeof o === 'string' && o.trim()) : [];
+          if (agentOpeners.length === 0) return null;
+          return (
+            <div>
+              <label className="block text-xs text-slate-400 mb-1.5">Opening line</label>
+              <div className="space-y-1.5">
+                {agentOpeners.map((opener, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => setSelectedOpenerIdx(idx)}
+                    className={`w-full text-left rounded-lg border px-3 py-2 text-xs transition-colors ${
+                      selectedOpenerIdx === idx
+                        ? 'border-sky-500/50 bg-sky-500/10 text-sky-200'
+                        : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-slate-500'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      {idx === 0 && (
+                        <span className="shrink-0 rounded bg-sky-500/20 px-1 py-0.5 text-[10px] text-sky-300">Default</span>
+                      )}
+                      <span className="truncate">{opener}</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Notes */}
         <div>

@@ -42,12 +42,12 @@ export class CallsService {
     const companyName = input.companyName || 'our team';
     const offering = input.offeringName || 'our offering';
     if (input.callType === 'follow_up' || /follow|existing|check-in/i.test(input.notes ?? '')) {
-      return `Hi, this is ${companyName} following up on ${offering}. Before we continue, what changed since our last conversation?`;
+      return `Hi, quick follow-up on ${offering}—what changed since we last spoke?`;
     }
     if (input.callType === 'discovery') {
-      return `Hi, this is ${companyName}. I want to understand your current process around ${offering}. What is the biggest blocker today?`;
+      return `Hi, this is ${companyName}—what's your biggest challenge with ${offering} right now?`;
     }
-    return `Hi, this is ${companyName}. Quick reason for my call about ${offering}: I think we can help improve outcomes. Is now a bad time, or do you have a minute?`;
+    return `Hi, this is ${companyName}—quick question: is improving ${offering} a priority this quarter?`;
   }
 
   private async generatePreparedOpener(
@@ -119,13 +119,74 @@ export class CallsService {
         `Offerings: ${names.length > 0 ? names.join(', ') : 'None'}\n` +
         `Offering summary: ${summary || 'None'}\n` +
         `Notes: ${notes ?? 'None'}\n` +
-        'Generate one opener in 1-2 sentences for the rep. It must include rapport, reason, and one question. Keep it speakable and concrete. Do not use markdown or labels.';
+        'Generate exactly ONE sentence opener for the rep, max 18 words. Structure: "Hi [Name]—quick question: are you the right person for [topic]?" Use the company context. Output plain text only, no markdown, no labels.';
       const raw = await this.llm.chatFast(system, user);
       const opener = raw.replace(/\s+/g, ' ').trim();
       if (!opener) return deterministic;
       return opener;
     } catch {
       return deterministic;
+    }
+  }
+
+  private async generateFollowupSeed(
+    orgId: string,
+    callId: string,
+    productsMode: ProductsMode,
+  ): Promise<string> {
+    const FALLBACK = JSON.stringify([
+      'What outcome matters most to you right now?',
+      "What's your timeline for making a decision?",
+      'What does your current process look like?',
+    ]);
+
+    try {
+      const [contextRow, selectedProducts, allProducts] = await Promise.all([
+        this.db
+          .select()
+          .from(schema.salesContext)
+          .where(eq(schema.salesContext.orgId, orgId))
+          .limit(1)
+          .then((rows) => rows[0] ?? null),
+        productsMode === ProductsMode.SELECTED
+          ? this.db
+              .select({ name: schema.products.name })
+              .from(schema.callProducts)
+              .innerJoin(schema.products, eq(schema.callProducts.productId, schema.products.id))
+              .where(and(eq(schema.callProducts.callId, callId), eq(schema.products.orgId, orgId)))
+              .orderBy(asc(schema.products.name))
+          : Promise.resolve([]),
+        this.db
+          .select({ name: schema.products.name })
+          .from(schema.products)
+          .where(eq(schema.products.orgId, orgId))
+          .orderBy(asc(schema.products.name))
+          .limit(4),
+      ]);
+
+      const selected = productsMode === ProductsMode.SELECTED && selectedProducts.length > 0 ? selectedProducts : allProducts;
+      const names = selected.map((item) => item.name).slice(0, 3);
+      const companyName = contextRow?.companyName?.trim() || '';
+      const whatWeSell = contextRow?.whatWeSell?.trim() || '';
+
+      if (!this.llm.available) return FALLBACK;
+
+      const system = 'You are a sales coach. Generate short, high-signal discovery questions. Return a valid JSON array of strings only. No markdown.';
+      const user =
+        `Company: ${companyName || 'Unknown'}\n` +
+        `What we sell: ${whatWeSell || 'Not provided'}\n` +
+        `Offerings: ${names.length > 0 ? names.join(', ') : 'None'}\n` +
+        'Generate 3 short discovery questions (max 12 words each) a rep can ask after the prospect responds to the opener. Return a JSON array of 3 strings.';
+
+      const raw = await this.llm.chatFast(system, user);
+      const parsed = this.llm.parseJson<string[]>(raw, []);
+      const questions = Array.isArray(parsed)
+        ? parsed.map((q) => (typeof q === 'string' ? q.trim() : '')).filter((q) => q.length > 0).slice(0, 3)
+        : [];
+
+      return questions.length > 0 ? JSON.stringify(questions) : FALLBACK;
+    } catch {
+      return FALLBACK;
     }
   }
 
@@ -273,22 +334,47 @@ export class CallsService {
       return created;
     });
 
-    const opener = await this.generatePreparedOpener(
-      user.orgId,
-      call.id,
-      callType,
-      dto.notes ?? null,
-      productsMode,
-    );
+    let agentOpeners: string[] = [];
+    if (dto.agentId) {
+      const [agentRow] = await this.db
+        .select({ openers: schema.agents.openers })
+        .from(schema.agents)
+        .where(and(eq(schema.agents.id, dto.agentId), eq(schema.agents.orgId, user.orgId)))
+        .limit(1);
+      agentOpeners = Array.isArray(agentRow?.openers) ? (agentRow.openers as string[]).filter((o) => typeof o === 'string' && o.trim().length > 0) : [];
+    }
 
-    const [withOpener] = await this.db
-      .update(schema.calls)
-      .set({
-        preparedOpenerText: opener,
-        preparedOpenerGeneratedAt: new Date(),
-      })
-      .where(eq(schema.calls.id, call.id))
-      .returning();
+    let opener: string;
+    if (dto.customOpener?.trim()) {
+      opener = dto.customOpener.trim();
+    } else if (agentOpeners.length > 0) {
+      opener = agentOpeners[0]!;
+    } else {
+      opener = await this.generatePreparedOpener(
+        user.orgId,
+        call.id,
+        callType,
+        dto.notes ?? null,
+        productsMode,
+      );
+    }
+
+    const [followupSeed, withOpener] = await Promise.all([
+      this.generateFollowupSeed(user.orgId, call.id, productsMode),
+      this.db
+        .update(schema.calls)
+        .set({ preparedOpenerText: opener, preparedOpenerGeneratedAt: new Date() })
+        .where(eq(schema.calls.id, call.id))
+        .returning()
+        .then((rows) => rows[0]),
+    ]);
+
+    if (followupSeed) {
+      await this.db
+        .update(schema.calls)
+        .set({ preparedFollowupSeed: followupSeed } as Record<string, unknown>)
+        .where(eq(schema.calls.id, call.id));
+    }
 
     return this.hydrateCall(user.orgId, withOpener ?? call);
   }

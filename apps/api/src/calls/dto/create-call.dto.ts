@@ -50,4 +50,9 @@ export class CreateCallDto {
   @IsArray()
   @IsUUID('4', { each: true })
   selected_product_ids?: string[];
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  customOpener?: string;
 }

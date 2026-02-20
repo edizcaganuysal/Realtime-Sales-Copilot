@@ -38,4 +38,9 @@ export class AgentsController {
   remove(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.agentsService.remove(user, id);
   }
+
+  @Post(':id/draft-openers')
+  draftOpeners(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.agentsService.draftOpeners(user, id);
+  }
 }

@@ -27,6 +27,7 @@ type CallContext = {
   agentFullPrompt: string | null;
   notes: string | null;
   preparedOpenerText: string | null;
+  preparedFollowupSeed: string | null;
   stages: StageInfo[];
   companyProfile: CompanyProfile;
   productContext: ProductContext;
@@ -935,6 +936,7 @@ export class EngineService implements OnModuleDestroy {
       agentFullPrompt: agentConfig.agentFullPrompt,
       notes: input.notes ?? null,
       preparedOpenerText: null,
+      preparedFollowupSeed: null,
       stages: FALLBACK_STAGES,
       companyProfile,
       productContext,
@@ -1202,6 +1204,7 @@ export class EngineService implements OnModuleDestroy {
       agentFullPrompt,
       notes: call.notes ?? null,
       preparedOpenerText: call.preparedOpenerText ?? null,
+      preparedFollowupSeed: (call as Record<string, unknown>)['preparedFollowupSeed'] as string | null ?? null,
       stages: state.context?.stages ?? FALLBACK_STAGES,
       companyProfile,
       productContext,
@@ -1733,7 +1736,40 @@ export class EngineService implements OnModuleDestroy {
 
     try {
       const llmStartedAt = Date.now();
-      const raw = await this.llm.chatFast(systemPrompt, userPrompt);
+      const isFirstProspectTick = state.stats.prospectTurns === 1;
+      const FAST_INTERIM_MS = 1500;
+      const llmPromise = this.llm.chatFast(systemPrompt, userPrompt);
+      const timeoutPromise: Promise<null | '__skip__'> = isFirstProspectTick
+        ? new Promise<null>((resolve) => setTimeout(() => resolve(null), FAST_INTERIM_MS))
+        : Promise.resolve('__skip__' as const);
+
+      const raceResult = await Promise.race([llmPromise, timeoutPromise]);
+
+      let fastInterimEmitted = false;
+      if (raceResult === null && context.preparedFollowupSeed) {
+        const seedQuestions = this.parseFollowupSeed(context.preparedFollowupSeed);
+        const fastInterim = seedQuestions[0] ?? 'Tell me more about what you just said.';
+        if (!state.prospectSpeaking) {
+          this.emitTickPayload(
+            callId,
+            state,
+            {
+              suggestions: [fastInterim],
+              nudges: [],
+              cards: [],
+              objection: state.stats.objectionDetected ?? null,
+              sentiment: state.stats.sentiment,
+              checklistUpdates: {},
+              momentTag: state.lastMomentTag,
+            },
+            opts.reason,
+            opts.utteranceSeq ?? state.prospectUtteranceSeq,
+          );
+          fastInterimEmitted = true;
+        }
+      }
+
+      const raw = raceResult !== null && raceResult !== '__skip__' ? raceResult : await llmPromise;
       const llmLatency = Date.now() - llmStartedAt;
       state.avgLlmLatencyMs =
         state.avgLlmLatencyMs === 0
@@ -1766,6 +1802,20 @@ export class EngineService implements OnModuleDestroy {
         );
         parsed = this.llm.parseJson(retryRaw, parsed);
       }
+
+      if (parsed.primary && !this.isOutputComplete(parsed.primary)) {
+        const completionRetryPrompt =
+          `${userPrompt}\nIMPORTANT: Your last primary was cut off mid-sentence. Finish the sentence. End with . or ? or !. Do not trail off. Return JSON only.`;
+        const completionRaw = await this.llm.chatFast(systemPrompt, completionRetryPrompt);
+        const completionParsed = this.llm.parseJson<typeof parsed>(completionRaw, {});
+        if (completionParsed.primary && this.isOutputComplete(completionParsed.primary)) {
+          parsed = completionParsed;
+        } else if (lastProspectLine) {
+          parsed.primary = this.buildDeterministicFallback(lastProspectLine, slots);
+        }
+      }
+
+      void fastInterimEmitted;
 
       if (parsed.primary && this.isGenericPrimary(parsed.primary)) {
         const specificityRetryPrompt =
@@ -3054,6 +3104,29 @@ export class EngineService implements OnModuleDestroy {
     );
     const firstSentence = withoutFiller.split(/(?<=[.!?])\s+/)[0] ?? '';
     return firstSentence.replace(/\s+/g, ' ').trim();
+  }
+
+  private isOutputComplete(primary: string): boolean {
+    const t = primary.trimEnd();
+    if (!t) return false;
+    const last = t[t.length - 1];
+    if (!['.', '?', '!'].includes(last ?? '')) return false;
+    if (/(?:such as|like|for example|including|:)\s*$/i.test(t)) return false;
+    if (/,\s*$/.test(t)) return false;
+    const opens = (t.match(/["'(]/g) ?? []).length;
+    const closes = (t.match(/["')\]]/g) ?? []).length;
+    if (opens > closes + 1) return false;
+    return true;
+  }
+
+  private parseFollowupSeed(seed: string): string[] {
+    try {
+      const parsed = JSON.parse(seed) as unknown;
+      if (Array.isArray(parsed)) return parsed.filter((item) => typeof item === 'string') as string[];
+      return [seed];
+    } catch {
+      return [seed];
+    }
   }
 
   private extractProspectSlots(utterance: string): {
