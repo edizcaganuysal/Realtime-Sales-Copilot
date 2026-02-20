@@ -117,6 +117,9 @@ type EngineState = {
   sessionStarted: boolean;
   recentPrimarySuggestions: string[];
   pendingTickPayload: { reason: TickReason; utteranceSeq: number; payload: EngineTickPayload } | null;
+  pendingTickRequest:
+    | { reason: 'prospect_final' | 'prospect_silence'; utteranceSeq: number }
+    | null;
   coachMemory: CoachMemory;
   stubTick: number;
   stubInterval: ReturnType<typeof setInterval> | null;
@@ -350,6 +353,7 @@ export class EngineService implements OnModuleDestroy {
       sessionStarted: false,
       recentPrimarySuggestions: [],
       pendingTickPayload: null,
+      pendingTickRequest: null,
       coachMemory: {
         used_value_props: [],
         used_differentiators: [],
@@ -577,6 +581,7 @@ export class EngineService implements OnModuleDestroy {
     }
 
     if (state.llmInFlight) {
+      state.pendingTickRequest = { reason, utteranceSeq };
       this.gateway.emitToCall(callId, 'engine.debug', {
         reason,
         lastProspectUtterance: state.lastProspectUtteranceText,
@@ -1679,6 +1684,17 @@ export class EngineService implements OnModuleDestroy {
       }
     } finally {
       state.llmInFlight = false;
+      if (state.cancelled || state.prospectSpeaking) return;
+      if (!state.pendingTickRequest) return;
+      const pending = state.pendingTickRequest;
+      state.pendingTickRequest = null;
+      this.runEngineTick(callId, state, {
+        reason: pending.reason,
+        requireTranscript: false,
+        utteranceSeq: pending.utteranceSeq,
+      }).catch((err: Error) =>
+        this.logger.error(`Engine tick (${pending.reason}) retry error (${callId}): ${err.message}`),
+      );
     }
   }
 
@@ -1736,10 +1752,11 @@ export class EngineService implements OnModuleDestroy {
 
     try {
       const llmStartedAt = Date.now();
-      const isFirstProspectTick = state.stats.prospectTurns === 1;
-      const FAST_INTERIM_MS = 1500;
+      const shouldUseFastInterim =
+        opts.reason === 'prospect_final' || opts.reason === 'prospect_silence';
+      const FAST_INTERIM_MS = 900;
       const llmPromise = this.llm.chatFast(systemPrompt, userPrompt);
-      const timeoutPromise: Promise<null | '__skip__'> = isFirstProspectTick
+      const timeoutPromise: Promise<null | '__skip__'> = shouldUseFastInterim
         ? new Promise<null>((resolve) => setTimeout(() => resolve(null), FAST_INTERIM_MS))
         : Promise.resolve('__skip__' as const);
 
@@ -1762,21 +1779,7 @@ export class EngineService implements OnModuleDestroy {
               )[0] ?? 'Tell me more about what you just said.';
         const fastInterim = seedQuestions[0] ?? fallbackInterim;
         if (!state.prospectSpeaking) {
-          this.emitTickPayload(
-            callId,
-            state,
-            {
-              suggestions: [fastInterim],
-              nudges: [],
-              cards: [],
-              objection: state.stats.objectionDetected ?? null,
-              sentiment: state.stats.sentiment,
-              checklistUpdates: {},
-              momentTag: state.lastMomentTag,
-            },
-            opts.reason,
-            opts.utteranceSeq ?? state.prospectUtteranceSeq,
-          );
+          this.emitInterimPrimary(callId, fastInterim);
           fastInterimEmitted = true;
         }
       }
@@ -1934,6 +1937,20 @@ export class EngineService implements OnModuleDestroy {
       this.logger.error(`LLM tick error (${callId}): ${(err as Error).message}`);
       this.runStubTick(callId, state, opts.reason, opts.utteranceSeq);
     }
+  }
+
+  private emitInterimPrimary(callId: string, text: string) {
+    const clean = text.trim();
+    if (!clean) return;
+    const tsMs = Date.now();
+    this.gateway.emitToCall(callId, 'engine.suggestions', {
+      suggestions: [clean],
+      tsMs,
+    });
+    this.gateway.emitToCall(callId, 'engine.primary_suggestion', {
+      text: clean,
+      tsMs,
+    });
   }
 
   private emitTickPayload(

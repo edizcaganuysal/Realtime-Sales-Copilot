@@ -120,6 +120,7 @@ export class MockCallService implements OnApplicationBootstrap {
     let partialAiText = '';
     let userSpeechStartedAt: number | null = null;
     let aiSpeechStartedAt: number | null = null;
+    let repHasSpoken = false;
     let lastFinalTsMs = 0;
     const nextFinalTs = (candidate: number) => {
       const normalized = Math.max(candidate, Date.now());
@@ -186,6 +187,9 @@ export class MockCallService implements OnApplicationBootstrap {
         }
 
         case 'response.audio.delta': {
+          if (!repHasSpoken) {
+            break;
+          }
           // Stream AI audio back to browser
           const delta = event.delta as string;
           if (delta && browserWs.readyState === WebSocket.OPEN) {
@@ -195,6 +199,11 @@ export class MockCallService implements OnApplicationBootstrap {
         }
 
         case 'response.audio_transcript.delta': {
+          if (!repHasSpoken) {
+            partialAiText = '';
+            aiSpeechStartedAt = null;
+            break;
+          }
           // Accumulate partial AI transcript
           const text = event.delta as string;
           if (text) {
@@ -212,24 +221,30 @@ export class MockCallService implements OnApplicationBootstrap {
         }
 
         case 'response.audio_transcript.done': {
+          if (!repHasSpoken) {
+            partialAiText = '';
+            aiSpeechStartedAt = null;
+            break;
+          }
           // Final AI transcript
           const text = event.transcript as string;
+          const finalText = (text?.trim() || partialAiText.trim());
           partialAiText = '';
-          if (text?.trim()) {
+          if (finalText) {
             const tsMs = nextFinalTs(aiSpeechStartedAt ?? Date.now());
             aiSpeechStartedAt = null;
             this.gateway.emitToCall(callId, 'transcript.final', {
               speaker: 'PROSPECT',
-              text,
+              text: finalText,
               tsMs,
               isFinal: true,
             });
-            this.engineService.pushTranscript(callId, 'PROSPECT', text);
+            this.engineService.pushTranscript(callId, 'PROSPECT', finalText);
             this.db.insert(schema.callTranscript).values({
               callId,
               tsMs,
               speaker: 'PROSPECT',
-              text,
+              text: finalText,
               isFinal: true,
             }).catch((err: Error) =>
               this.logger.error(`Failed to persist AI transcript: ${err.message}`),
@@ -242,6 +257,7 @@ export class MockCallService implements OnApplicationBootstrap {
           // REP's speech transcribed
           const text = event.transcript as string;
           if (text?.trim()) {
+            repHasSpoken = true;
             const tsMs = nextFinalTs(userSpeechStartedAt ?? Date.now());
             userSpeechStartedAt = null;
             this.gateway.emitToCall(callId, 'transcript.final', {
