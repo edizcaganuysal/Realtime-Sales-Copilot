@@ -293,6 +293,7 @@ export const calls = pgTable('calls', {
   preparedOpenerGeneratedAt: timestamp('prepared_opener_generated_at', {
     withTimezone: true,
   }),
+  preparedFollowupSeed: text('prepared_followup_seed'),
   coachMemory: jsonb('coach_memory').default({}).notNull(),
   startedAt: timestamp('started_at', { withTimezone: true }),
   endedAt: timestamp('ended_at', { withTimezone: true }),
