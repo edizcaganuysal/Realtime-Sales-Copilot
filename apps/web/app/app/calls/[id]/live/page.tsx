@@ -98,6 +98,7 @@ function useMockAudio(callId: string, isMock: boolean, isActive: boolean) {
 
   const audioQueueRef = useRef<Float32Array[]>([]);
   const isPlayingRef = useRef(false);
+  const remoteAudioUntilRef = useRef(0);
 
   const playNextChunk = useCallback(() => {
     const ctx = ctxRef.current;
@@ -110,8 +111,14 @@ function useMockAudio(callId: string, isMock: boolean, isActive: boolean) {
     const chunk = audioQueueRef.current.shift();
     if (!chunk) {
       isPlayingRef.current = false;
+      remoteAudioUntilRef.current = Math.max(remoteAudioUntilRef.current, Date.now() + 120);
       return;
     }
+    const chunkDurationMs = Math.ceil((chunk.length / 24000) * 1000);
+    remoteAudioUntilRef.current = Math.max(
+      remoteAudioUntilRef.current,
+      Date.now() + chunkDurationMs + 120,
+    );
 
     const buffer = ctx.createBuffer(1, chunk.length, 24000);
     buffer.copyToChannel(new Float32Array(chunk), 0);
@@ -174,6 +181,9 @@ function useMockAudio(callId: string, isMock: boolean, isActive: boolean) {
         wsRef.current = ws;
 
         ws.onopen = () => {
+          if (ctx.state === 'suspended') {
+            void ctx.resume();
+          }
           source.connect(processor);
           processor.connect(ctx.destination);
         };
@@ -194,7 +204,7 @@ function useMockAudio(callId: string, isMock: boolean, isActive: boolean) {
               return;
             }
             if (msg.type === 'error') {
-              console.error(msg.message ?? 'Mock stream error');
+              console.warn(msg.message ?? 'Mock stream warning');
             }
           } catch {
             return;
@@ -202,7 +212,7 @@ function useMockAudio(callId: string, isMock: boolean, isActive: boolean) {
         };
 
         ws.onerror = () => {
-          console.error('Mock stream websocket error');
+          console.warn('Mock stream websocket warning');
         };
 
         ws.onclose = () => {
@@ -211,6 +221,7 @@ function useMockAudio(callId: string, isMock: boolean, isActive: boolean) {
 
         processor.onaudioprocess = (event) => {
           if (ws.readyState !== WebSocket.OPEN) return;
+          if (Date.now() < remoteAudioUntilRef.current) return;
           const input = event.inputBuffer.getChannelData(0);
           const pcm16 = new Int16Array(input.length);
           for (let i = 0; i < input.length; i += 1) {
