@@ -121,6 +121,7 @@ export class MockCallService implements OnApplicationBootstrap {
     let userSpeechStartedAt: number | null = null;
     let aiSpeechStartedAt: number | null = null;
     let repHasSpoken = false;
+    let responseKickTimer: ReturnType<typeof setTimeout> | null = null;
     let lastFinalTsMs = 0;
     const nextFinalTs = (candidate: number) => {
       const normalized = Math.max(candidate, Date.now());
@@ -130,6 +131,29 @@ export class MockCallService implements OnApplicationBootstrap {
         lastFinalTsMs = normalized;
       }
       return lastFinalTsMs;
+    };
+    const clearResponseKickTimer = () => {
+      if (!responseKickTimer) return;
+      clearTimeout(responseKickTimer);
+      responseKickTimer = null;
+    };
+    const scheduleResponseKick = () => {
+      clearResponseKickTimer();
+      if (!openaiReady || !repHasSpoken || openaiWs.readyState !== WebSocket.OPEN) return;
+      responseKickTimer = setTimeout(() => {
+        responseKickTimer = null;
+        if (!openaiReady || !repHasSpoken || openaiWs.readyState !== WebSocket.OPEN) return;
+        if (aiSpeechStartedAt || partialAiText.trim().length > 0) return;
+        openaiWs.send(
+          JSON.stringify({
+            type: 'response.create',
+            response: {
+              modalities: ['audio', 'text'],
+              temperature: 1.15,
+            },
+          }),
+        );
+      }, 650);
     };
 
     openaiWs.on('open', () => {
@@ -176,14 +200,18 @@ export class MockCallService implements OnApplicationBootstrap {
         }
 
         case 'input_audio_buffer.speech_started': {
+          repHasSpoken = true;
           userSpeechStartedAt = Date.now();
+          clearResponseKickTimer();
           break;
         }
 
         case 'input_audio_buffer.speech_stopped': {
+          repHasSpoken = true;
           if (!userSpeechStartedAt) {
             userSpeechStartedAt = Date.now();
           }
+          scheduleResponseKick();
           break;
         }
 
@@ -194,6 +222,7 @@ export class MockCallService implements OnApplicationBootstrap {
           // Stream AI audio back to browser
           const delta = event.delta as string;
           if (delta && browserWs.readyState === WebSocket.OPEN) {
+            clearResponseKickTimer();
             browserWs.send(JSON.stringify({ type: 'audio', data: delta }));
           }
           break;
@@ -210,6 +239,7 @@ export class MockCallService implements OnApplicationBootstrap {
           if (text) {
             if (!aiSpeechStartedAt) aiSpeechStartedAt = Date.now();
             partialAiText += text;
+            clearResponseKickTimer();
             this.engineService.signalSpeaking(callId, 'PROSPECT');
             this.gateway.emitToCall(callId, 'transcript.partial', {
               speaker: 'PROSPECT',
@@ -232,6 +262,7 @@ export class MockCallService implements OnApplicationBootstrap {
           const finalText = (text?.trim() || partialAiText.trim());
           partialAiText = '';
           if (finalText) {
+            clearResponseKickTimer();
             const tsMs = nextFinalTs(aiSpeechStartedAt ?? Date.now());
             aiSpeechStartedAt = null;
             this.gateway.emitToCall(callId, 'transcript.final', {
@@ -277,6 +308,7 @@ export class MockCallService implements OnApplicationBootstrap {
             }).catch((err: Error) =>
               this.logger.error(`Failed to persist REP transcript: ${err.message}`),
             );
+            scheduleResponseKick();
           }
           break;
         }
@@ -291,11 +323,19 @@ export class MockCallService implements OnApplicationBootstrap {
 
     openaiWs.on('error', (err) => {
       this.logger.error(`OpenAI Realtime WS error — call ${callId}: ${err.message}`);
+      if (responseKickTimer) {
+        clearTimeout(responseKickTimer);
+        responseKickTimer = null;
+      }
       browserWs.send(JSON.stringify({ type: 'error', message: 'AI connection error' }));
     });
 
     openaiWs.on('close', () => {
       this.logger.log(`OpenAI Realtime WS closed — call ${callId}`);
+      if (responseKickTimer) {
+        clearTimeout(responseKickTimer);
+        responseKickTimer = null;
+      }
     });
 
     browserWs.on('message', (rawData) => {
@@ -316,11 +356,13 @@ export class MockCallService implements OnApplicationBootstrap {
 
     browserWs.on('close', () => {
       this.logger.log(`Mock stream browser WS closed — call ${callId}`);
+      clearResponseKickTimer();
       openaiWs.close();
     });
 
     browserWs.on('error', (err) => {
       this.logger.error(`Mock stream browser WS error — call ${callId}: ${err.message}`);
+      clearResponseKickTimer();
       openaiWs.close();
     });
   }

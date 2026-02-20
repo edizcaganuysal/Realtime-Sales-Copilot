@@ -353,6 +353,7 @@ export default function LiveCallPage() {
       : ['All offerings'];
 
   const topNudges = nudges.slice(0, 3);
+  const isListening = prospectSpeaking || listeningMode;
 
   useEffect(() => {
     suggestionRef.current = suggestion;
@@ -444,6 +445,8 @@ export default function LiveCallPage() {
     socket.on('transcript.partial', (data: TranscriptLine) => {
       if (data.speaker === 'PROSPECT') {
         setPartialProspectText(data.text);
+        setProspectSpeaking(true);
+        prospectSpeakingRef.current = true;
       }
     });
 
@@ -455,6 +458,13 @@ export default function LiveCallPage() {
 
       if (data.speaker === 'PROSPECT') {
         setPartialProspectText('');
+        setProspectSpeaking(false);
+        prospectSpeakingRef.current = false;
+        if (pendingPrimaryRef.current) {
+          setListeningMode(false);
+          setSuggestion(pendingPrimaryRef.current);
+          pendingPrimaryRef.current = null;
+        }
       } else if (data.speaker === 'REP') {
         setListeningMode(true);
         setSuggestion(null);
@@ -757,7 +767,7 @@ export default function LiveCallPage() {
                 <span className="text-[11px] font-semibold uppercase tracking-widest text-sky-400">
                   Primary next line
                 </span>
-                {(prospectSpeaking || listeningMode) && (
+                {isListening && (
                   <span className="rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[10px] text-sky-300">
                     Listening
                   </span>
@@ -765,7 +775,7 @@ export default function LiveCallPage() {
               </div>
             </div>
             <p className="min-h-[66px] text-lg font-medium leading-relaxed text-white">
-              {listeningMode ? 'Listening...' : suggestion ?? 'Preparing your opening line...'}
+              {isListening ? 'Listening...' : suggestion ?? 'Preparing your opening line...'}
             </p>
           </div>
 
