@@ -338,6 +338,8 @@ export default function LiveCallPage() {
   const pendingPrimaryRef = useRef<string | null>(null);
   const prospectSpeakingRef = useRef(false);
   const suggestionRef = useRef<string | null>(null);
+  const repTurnCountRef = useRef(0);
+  const openerRef = useRef<string | null>(null);
 
   const timer = useTimer(call?.startedAt ?? null);
   const isMock = call?.mode === 'MOCK';
@@ -380,9 +382,15 @@ export default function LiveCallPage() {
       if (!active) return;
       setCall(data);
       setCallStatus(data.status ?? 'INITIATED');
+      repTurnCountRef.current = 0;
+      pendingPrimaryRef.current = null;
       if (typeof data.preparedOpenerText === 'string' && data.preparedOpenerText.trim().length > 0) {
-        setSuggestion(data.preparedOpenerText.trim());
+        const opener = data.preparedOpenerText.trim();
+        openerRef.current = opener;
+        setSuggestion(opener);
         setListeningMode(false);
+      } else {
+        openerRef.current = null;
       }
       const mode = data.productsMode === 'SELECTED' ? 'SELECTED' : 'ALL';
       setProductsModeDraft(mode);
@@ -477,32 +485,25 @@ export default function LiveCallPage() {
           pendingPrimaryRef.current = null;
         }
       } else if (data.speaker === 'REP') {
+        repTurnCountRef.current += 1;
+        pendingPrimaryRef.current = null;
         setListeningMode(true);
         setSuggestion(null);
       }
     });
 
     socket.on('engine.primary_suggestion', (data: { text: string }) => {
-      if (!data.text) return;
+      const nextPrimary = data.text?.trim() ?? '';
+      if (!nextPrimary) return;
+      if (nextPrimary === suggestionRef.current) return;
+      const opener = openerRef.current;
+      if (opener && repTurnCountRef.current > 0 && nextPrimary === opener) return;
       if (prospectSpeakingRef.current) {
-        pendingPrimaryRef.current = data.text;
+        pendingPrimaryRef.current = nextPrimary;
         return;
       }
       setListeningMode(false);
-      setSuggestion(data.text);
-    });
-
-    socket.on('engine.suggestions', (data: { suggestions: string[] }) => {
-      const first = (data.suggestions ?? [])[0];
-      if (!first) return;
-      if (prospectSpeakingRef.current) {
-        pendingPrimaryRef.current = first;
-        return;
-      }
-      if (!suggestionRef.current) {
-        setListeningMode(false);
-        setSuggestion(first);
-      }
+      setSuggestion(nextPrimary);
     });
 
     socket.on('engine.nudges', (data: { nudges: string[] }) => {
