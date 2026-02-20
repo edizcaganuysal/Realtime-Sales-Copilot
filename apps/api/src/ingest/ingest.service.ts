@@ -13,7 +13,6 @@ import { DRIZZLE, DrizzleDb } from '../db/db.module';
 import * as schema from '../db/schema';
 import { EMPTY_COMPANY_PROFILE_DEFAULTS } from '../org/company-profile.defaults';
 import { CreditsService } from '../credits/credits.service';
-import { getCreditCost } from '../config/credit-costs';
 import { CreateWebsiteIngestDto } from './dto/create-website-ingest.dto';
 import { QualityCompanyDto } from './dto/quality-company.dto';
 import { QualityProductDto } from './dto/quality-product.dto';
@@ -160,17 +159,7 @@ export class IngestService {
   ) {
     this.ensureOpenAiConfigured();
     const normalizedInput = this.normalizeWebsiteInput(dto);
-    await this.creditsService.requireAndDebit(
-      user.orgId,
-      getCreditCost('IMPORT_WEBSITE'),
-      'USAGE_IMPORT_WEBSITE',
-      {
-        target,
-        url: normalizedInput.url,
-        pages_to_scan: normalizedInput.pagesToScan,
-        focus: normalizedInput.focus,
-      },
-    );
+    await this.creditsService.requireAvailable(user.orgId, 1);
     const [job] = await this.db
       .insert(schema.ingestionJobs)
       .values({
@@ -222,15 +211,7 @@ export class IngestService {
       }
     }
 
-    await this.creditsService.requireAndDebit(
-      user.orgId,
-      getCreditCost('IMPORT_PDF'),
-      'USAGE_IMPORT_PDF',
-      {
-        target,
-        files: files.map((file) => ({ name: file.originalname, size: file.size })),
-      },
-    );
+    await this.creditsService.requireAvailable(user.orgId, 1);
 
     const [job] = await this.db
       .insert(schema.ingestionJobs)
@@ -324,7 +305,7 @@ export class IngestService {
     return { ok: true, applied };
   }
 
-  async qualityCompany(dto: QualityCompanyDto) {
+  async qualityCompany(orgId: string, dto: QualityCompanyDto) {
     this.ensureOpenAiConfigured();
     const payload = {
       companyName: dto.companyName ?? '',
@@ -351,12 +332,15 @@ export class IngestService {
       user:
         'Review this company profile payload and suggest 3 to 6 edits. Output JSON with key suggestions as an array of objects: {id, field, title, message, proposedValue}. Keep each message actionable and concise.\n' +
         JSON.stringify(payload),
+    }, {
+      orgId,
+      ledgerType: 'USAGE_LLM_QUALITY_COMPANY',
     });
 
     return { suggestions: this.normalizeSuggestions(raw) };
   }
 
-  async qualityProduct(dto: QualityProductDto) {
+  async qualityProduct(orgId: string, dto: QualityProductDto) {
     this.ensureOpenAiConfigured();
     const payload = {
       name: typeof dto.name === 'string' ? dto.name : '',
@@ -375,6 +359,9 @@ export class IngestService {
       user:
         'Review this product payload and suggest 3 to 6 edits. Output JSON with key suggestions as an array of objects: {id, field, title, message, proposedValue}. Keep each message actionable and concise.\n' +
         JSON.stringify(payload),
+    }, {
+      orgId,
+      ledgerType: 'USAGE_LLM_QUALITY_PRODUCT',
     });
 
     return { suggestions: this.normalizeSuggestions(raw) };
@@ -390,7 +377,7 @@ export class IngestService {
     };
   }
 
-  async aiFieldDraft(input: {
+  async aiFieldDraft(orgId: string, input: {
     target: 'company' | 'product';
     fieldKey: string;
     currentState?: Record<string, unknown>;
@@ -417,6 +404,13 @@ export class IngestService {
         '- If uncertain, use cautious language like "Typically..." or placeholders.\n' +
         'Return JSON: {"text": string, "notes": string[], "warnings": string[]}\n' +
         `currentState:\n${JSON.stringify(currentState).slice(0, 16000)}`,
+    }, {
+      orgId,
+      ledgerType: 'USAGE_LLM_FIELD_DRAFT',
+      metadata: {
+        target,
+        field_key: fieldKey,
+      },
     });
 
     return {
@@ -426,7 +420,7 @@ export class IngestService {
     };
   }
 
-  async aiFieldImprove(input: {
+  async aiFieldImprove(orgId: string, input: {
     target: 'company' | 'product';
     fieldKey: string;
     text: string;
@@ -459,6 +453,13 @@ export class IngestService {
         `Original text:\n${text}\n\n` +
         `currentState:\n${JSON.stringify(currentState).slice(0, 16000)}\n\n` +
         'Return JSON: {"text": string, "notes": string[], "warnings": string[]}',
+    }, {
+      orgId,
+      ledgerType: 'USAGE_LLM_FIELD_IMPROVE',
+      metadata: {
+        target,
+        field_key: fieldKey,
+      },
     });
 
     return {
@@ -499,7 +500,13 @@ export class IngestService {
         },
       });
 
-      const structured = await this.structureResult(job.target as IngestionTarget, crawl.assets);
+      const structured = await this.structureResult(
+        job.orgId,
+        job.id,
+        job.target as IngestionTarget,
+        'WEBSITE',
+        crawl.assets,
+      );
 
       await this.db
         .update(schema.ingestionJobs)
@@ -592,7 +599,13 @@ export class IngestService {
         },
       });
 
-      const structured = await this.structureResult(job.target as IngestionTarget, assets);
+      const structured = await this.structureResult(
+        job.orgId,
+        job.id,
+        job.target as IngestionTarget,
+        'PDF',
+        assets,
+      );
 
       await this.db
         .update(schema.ingestionJobs)
@@ -1508,7 +1521,13 @@ export class IngestService {
     return text.slice(0, PDF_TEXT_CAP);
   }
 
-  private async structureResult(target: IngestionTarget, assets: CrawledAsset[]): Promise<IngestionResult> {
+  private async structureResult(
+    orgId: string,
+    jobId: string,
+    target: IngestionTarget,
+    sourceType: 'WEBSITE' | 'PDF',
+    assets: CrawledAsset[],
+  ): Promise<IngestionResult> {
     const sourceRefs = assets.map((asset, index) => ({
       id: `S${index + 1}`,
       title: asset.title,
@@ -1517,12 +1536,17 @@ export class IngestService {
     }));
 
     if (target === 'COMPANY') {
-      return this.structureCompany(sourceRefs);
+      return this.structureCompany(orgId, sourceType, sourceRefs, jobId);
     }
-    return this.structureProducts(sourceRefs);
+    return this.structureProducts(orgId, sourceType, sourceRefs, jobId);
   }
 
-  private async structureCompany(sources: SourceRef[]): Promise<CompanyExtractionResult> {
+  private async structureCompany(
+    orgId: string,
+    sourceType: 'WEBSITE' | 'PDF',
+    sources: SourceRef[],
+    jobId: string,
+  ): Promise<CompanyExtractionResult> {
     const raw = await this.runJsonCompletion({
       system:
         'You are a sales enablement analyst. Extract concise company messaging with confidence and citations from sources. Do not fabricate claims.',
@@ -1540,6 +1564,18 @@ export class IngestService {
         '- Prefer extracting concrete service packages and delivery process details when present.\n' +
         '- Keep text concise and citations must be source IDs like S1.\n' +
         this.renderSources(sources),
+    }, {
+      orgId,
+      ledgerType:
+        sourceType === 'WEBSITE'
+          ? 'USAGE_LLM_IMPORT_WEBSITE'
+          : 'USAGE_LLM_IMPORT_PDF',
+      metadata: {
+        target: 'COMPANY',
+        source_type: sourceType,
+        source_count: sources.length,
+        job_id: jobId,
+      },
     });
 
     const valid = new Set(sources.map((source) => source.id));
@@ -1598,7 +1634,12 @@ export class IngestService {
     };
   }
 
-  private async structureProducts(sources: SourceRef[]): Promise<ProductExtractionResult> {
+  private async structureProducts(
+    orgId: string,
+    sourceType: 'WEBSITE' | 'PDF',
+    sources: SourceRef[],
+    jobId: string,
+  ): Promise<ProductExtractionResult> {
     const raw = await this.runJsonCompletion({
       system:
         'You are a sales offering extraction analyst. Extract offerings/packages/services with citations and avoid hallucinations.',
@@ -1614,6 +1655,18 @@ export class IngestService {
         '- Never fabricate AI capabilities, pricing numbers, or unverified differentiators.\n' +
         '- Return up to 10 distinct offerings and citations must be IDs like S1.\n' +
         this.renderSources(sources),
+    }, {
+      orgId,
+      ledgerType:
+        sourceType === 'WEBSITE'
+          ? 'USAGE_LLM_IMPORT_WEBSITE'
+          : 'USAGE_LLM_IMPORT_PDF',
+      metadata: {
+        target: 'PRODUCT',
+        source_type: sourceType,
+        source_count: sources.length,
+        job_id: jobId,
+      },
     });
 
     const valid = new Set(sources.map((source) => source.id));
@@ -1849,13 +1902,29 @@ export class IngestService {
     }
   }
 
-  private async runJsonCompletion(input: { system: string; user: string }) {
+  private estimateTokenCount(parts: string[]) {
+    const chars = parts.reduce((sum, part) => sum + part.length, 0);
+    return Math.max(1, Math.ceil(chars / 4));
+  }
+
+  private async runJsonCompletion(
+    input: { system: string; user: string },
+    debit?: {
+      orgId: string;
+      ledgerType: string;
+      metadata?: Record<string, unknown>;
+    },
+  ) {
     const client = this.getOpenAiClient();
     const model =
       process.env['INGEST_LLM_MODEL'] ||
       process.env['LLM_MODEL'] ||
       process.env['OPENAI_MODEL'] ||
       'gpt-4o-mini';
+
+    if (debit) {
+      await this.creditsService.requireAvailable(debit.orgId, 1);
+    }
 
     const response = await client.chat.completions.create({
       model,
@@ -1871,6 +1940,36 @@ export class IngestService {
     const text = response.choices[0]?.message?.content;
     if (!text || typeof text !== 'string') {
       throw new InternalServerErrorException('OpenAI returned an empty response.');
+    }
+
+    if (debit) {
+      const usage = (response as { usage?: { total_tokens?: number; prompt_tokens?: number; completion_tokens?: number } }).usage;
+      const usageTotal = Number(usage?.total_tokens ?? 0);
+      const fallbackTotal = this.estimateTokenCount([input.system, input.user, text]);
+      const totalTokens = Number.isFinite(usageTotal) && usageTotal > 0 ? usageTotal : fallbackTotal;
+      const promptTokensRaw = Number(usage?.prompt_tokens ?? 0);
+      const completionTokensRaw = Number(usage?.completion_tokens ?? 0);
+      const promptTokens =
+        Number.isFinite(promptTokensRaw) && promptTokensRaw > 0
+          ? promptTokensRaw
+          : this.estimateTokenCount([input.system, input.user]);
+      const completionTokens =
+        Number.isFinite(completionTokensRaw) && completionTokensRaw > 0
+          ? completionTokensRaw
+          : Math.max(1, totalTokens - promptTokens);
+
+      await this.creditsService.requireAndDebitByTokens(
+        debit.orgId,
+        totalTokens,
+        debit.ledgerType,
+        {
+          ...(debit.metadata ?? {}),
+          model,
+          prompt_tokens: promptTokens,
+          completion_tokens: completionTokens,
+          total_tokens: totalTokens,
+        },
+      );
     }
 
     try {

@@ -97,14 +97,14 @@ export class QualityController {
 
   @Post('company')
   @Roles(Role.MANAGER)
-  company(@Body() dto: QualityCompanyDto) {
-    return this.ingestService.qualityCompany(dto);
+  company(@CurrentUser() user: JwtPayload, @Body() dto: QualityCompanyDto) {
+    return this.ingestService.qualityCompany(user.orgId, dto);
   }
 
   @Post('product')
   @Roles(Role.MANAGER)
-  product(@Body() dto: QualityProductDto) {
-    return this.ingestService.qualityProduct(dto);
+  product(@CurrentUser() user: JwtPayload, @Body() dto: QualityProductDto) {
+    return this.ingestService.qualityProduct(user.orgId, dto);
   }
 }
 
@@ -120,12 +120,12 @@ export class AiFieldsController {
   }
 
   @Post('draft')
-  draft(@Body() dto: AiFieldDraftDto) {
-    return this.ingestService.aiFieldDraft(dto);
+  draft(@CurrentUser() user: JwtPayload, @Body() dto: AiFieldDraftDto) {
+    return this.ingestService.aiFieldDraft(user.orgId, dto);
   }
 
   @Post('improve')
-  improve(@Body() dto: AiFieldImproveDto) {
-    return this.ingestService.aiFieldImprove(dto);
+  improve(@CurrentUser() user: JwtPayload, @Body() dto: AiFieldImproveDto) {
+    return this.ingestService.aiFieldImprove(user.orgId, dto);
   }
 }

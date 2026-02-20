@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { and, asc, desc, eq, inArray } from 'drizzle-orm';
@@ -20,6 +21,8 @@ type Tx = Parameters<Parameters<DrizzleDb['transaction']>[0]>[0];
 
 @Injectable()
 export class CallsService {
+  private readonly logger = new Logger(CallsService.name);
+
   constructor(
     @Inject(DRIZZLE) private readonly db: DrizzleDb,
     private readonly creditsService: CreditsService,
@@ -373,6 +376,80 @@ export class CallsService {
     };
   }
 
+  private getCallUsageCost(mode: string) {
+    return mode === 'MOCK'
+      ? getCreditCost('CALL_PRACTICE_PER_MIN')
+      : getCreditCost('CALL_REAL_PER_MIN');
+  }
+
+  private getCallUsageType(mode: string) {
+    return mode === 'MOCK'
+      ? 'USAGE_CALL_PRACTICE_DURATION'
+      : 'USAGE_CALL_REAL_DURATION';
+  }
+
+  private calculateBillableMinutes(
+    startedAt: Date | null,
+    endedAt: Date,
+  ) {
+    if (!startedAt) {
+      return {
+        durationSeconds: 0,
+        billableMinutes: 0,
+      };
+    }
+    const durationMs = Math.max(0, endedAt.getTime() - startedAt.getTime());
+    const durationSeconds = Math.ceil(durationMs / 1000);
+    const billableMinutes = Math.max(1, Math.ceil(durationMs / 60_000));
+    return {
+      durationSeconds,
+      billableMinutes,
+    };
+  }
+
+  private async debitCallUsage(
+    orgId: string,
+    call: Pick<typeof schema.calls.$inferSelect, 'id' | 'mode' | 'startedAt'>,
+    endedAt: Date,
+  ) {
+    const { durationSeconds, billableMinutes } = this.calculateBillableMinutes(
+      call.startedAt,
+      endedAt,
+    );
+    if (billableMinutes <= 0) {
+      return {
+        debited: 0,
+        requested: 0,
+      };
+    }
+    const creditsPerMinute = this.getCallUsageCost(call.mode);
+    const requested = billableMinutes * creditsPerMinute;
+    const usageType = this.getCallUsageType(call.mode);
+    const debit = await this.creditsService.debitUpToAvailable(
+      orgId,
+      requested,
+      usageType,
+      {
+        call_id: call.id,
+        mode: call.mode,
+        duration_seconds: durationSeconds,
+        billable_minutes: billableMinutes,
+        credits_per_minute: creditsPerMinute,
+      },
+    );
+
+    if (debit.debited < requested) {
+      this.logger.warn(
+        `Call ${call.id} usage debit partial: requested=${requested}, debited=${debit.debited}`,
+      );
+    }
+
+    return {
+      debited: debit.debited,
+      requested,
+    };
+  }
+
   async create(user: JwtPayload, dto: CreateCallDto) {
     const orgSettings = await this.getOrgSettings(user.orgId);
     const layoutPreset = dto.layoutPreset ?? (orgSettings.liveLayoutDefault as LiveLayout);
@@ -381,21 +458,7 @@ export class CallsService {
     const selectedProductIds = this.normalizeSelectedProductIds(dto.selected_product_ids);
     const callMode = dto.mode ?? 'OUTBOUND';
     const callType = dto.call_type ?? 'cold_outbound';
-    const usageType =
-      callMode === 'MOCK' ? 'USAGE_CALL_PRACTICE' : 'USAGE_CALL_REAL';
-    const debitAmount =
-      callMode === 'MOCK'
-        ? getCreditCost('CALL_PRACTICE_PER_MIN')
-        : getCreditCost('CALL_REAL_PER_MIN');
-
-    await this.creditsService.requireAndDebit(
-      user.orgId,
-      debitAmount,
-      usageType,
-      {
-        mode: callMode,
-      },
-    );
+    await this.creditsService.requireAvailable(user.orgId, 1);
 
     const contactJson: Record<string, unknown> = {};
     if (dto.practicePersonaId) contactJson.practicePersonaId = dto.practicePersonaId;
@@ -556,12 +619,19 @@ export class CallsService {
 
     if (!call) throw new NotFoundException('Call not found');
     if (call.userId !== user.sub) throw new ForbiddenException();
+    if (call.endedAt) return call;
+
+    const endedAt = new Date();
 
     const [updated] = await this.db
       .update(schema.calls)
-      .set({ status: 'COMPLETED', endedAt: new Date() })
+      .set({ status: 'COMPLETED', endedAt })
       .where(eq(schema.calls.id, id))
       .returning();
+
+    if (call.mode === 'MOCK' || call.status === 'IN_PROGRESS') {
+      await this.debitCallUsage(user.orgId, call, endedAt);
+    }
 
     return updated;
   }
@@ -609,12 +679,38 @@ export class CallsService {
     status: string,
     extra: { startedAt?: Date; endedAt?: Date } = {},
   ) {
+    const [existing] = await this.db
+      .select()
+      .from(schema.calls)
+      .where(eq(schema.calls.twilioCallSid, callSid))
+      .limit(1);
+
+    if (!existing) return null;
+
     const [updated] = await this.db
       .update(schema.calls)
       .set({ status, ...extra })
       .where(eq(schema.calls.twilioCallSid, callSid))
       .returning();
-    return updated ?? null;
+
+    if (!updated) return null;
+
+    if (
+      extra.endedAt &&
+      !existing.endedAt &&
+      (status === 'COMPLETED' || status === 'FAILED') &&
+      (existing.status === 'IN_PROGRESS' || status === 'COMPLETED')
+    ) {
+      try {
+        await this.debitCallUsage(existing.orgId, existing, extra.endedAt);
+      } catch (error) {
+        this.logger.error(
+          `Failed to debit usage for call ${existing.id}: ${(error as Error).message}`,
+        );
+      }
+    }
+
+    return updated;
   }
 
   async setStatusImmediate(callId: string, status: string) {
