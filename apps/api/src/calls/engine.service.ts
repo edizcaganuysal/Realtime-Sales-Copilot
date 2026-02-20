@@ -1204,7 +1204,7 @@ export class EngineService implements OnModuleDestroy {
       agentFullPrompt,
       notes: call.notes ?? null,
       preparedOpenerText: call.preparedOpenerText ?? null,
-      preparedFollowupSeed: (call as Record<string, unknown>)['preparedFollowupSeed'] as string | null ?? null,
+      preparedFollowupSeed: call.preparedFollowupSeed ?? null,
       stages: state.context?.stages ?? FALLBACK_STAGES,
       companyProfile,
       productContext,
@@ -1746,9 +1746,21 @@ export class EngineService implements OnModuleDestroy {
       const raceResult = await Promise.race([llmPromise, timeoutPromise]);
 
       let fastInterimEmitted = false;
-      if (raceResult === null && context.preparedFollowupSeed) {
-        const seedQuestions = this.parseFollowupSeed(context.preparedFollowupSeed);
-        const fastInterim = seedQuestions[0] ?? 'Tell me more about what you just said.';
+      if (raceResult === null) {
+        const seedQuestions = context.preparedFollowupSeed
+          ? this.parseFollowupSeed(context.preparedFollowupSeed)
+          : [];
+        const fallbackInterim =
+          lastProspectLine.length > 0
+            ? this.buildDeterministicFallback(lastProspectLine, slots)
+            : this.buildStageFallbackSuggestions(
+                context.companyProfile,
+                context.productContext,
+                stageForPrompt.name,
+                state.stats.objectionDetected,
+                lastProspectLine,
+              )[0] ?? 'Tell me more about what you just said.';
+        const fastInterim = seedQuestions[0] ?? fallbackInterim;
         if (!state.prospectSpeaking) {
           this.emitTickPayload(
             callId,
@@ -2752,6 +2764,7 @@ export class EngineService implements OnModuleDestroy {
       `Coach memory:\n${memorySection}\n\n` +
       `Rules:\n` +
       `- Never invent company/product claims.\n` +
+      `- Never invent numeric metrics unless explicitly present in proof points.\n` +
       `- If uncertain, ask a clarifying question.\n` +
       `- Do not repeat recent arguments unless prospect asks again.\n` +
       `- Primary must be 1-2 sentences and speakable.\n` +
@@ -2768,28 +2781,23 @@ export class EngineService implements OnModuleDestroy {
     callMode: string,
     notes: string | null,
   ): string[] {
-    const numericProof =
-      this
-        .splitToSnippets(company.proofPoints)
-        .find((line) => /\d/.test(line)) ?? '24-hour turnaround available on standard listings.';
-    const productLabel =
-      productContext.names[0] || company.productName || 'your service';
-    const companyName = company.companyName || 'our team';
+    const productLabel = productContext.names[0] || company.productName || 'your goals';
+    const safeTopic = this.compactText(productLabel, 48);
     const isDiscovery = /follow|discovery|existing|renewal|next step|check-in/i.test(
       `${notes ?? ''}`.toLowerCase(),
     );
     if (isDiscovery) {
       return [
-        `Hi, this is ${companyName} following up on ${productLabel}. Would it help if we start with your current process and one goal for this week?`,
+        `Hi there—quick follow-up: are you still the right person for ${safeTopic}?`,
       ];
     }
     if (callMode === 'OUTBOUND') {
       return [
-        `Hi, this is ${companyName}. Quick reason for my call on ${productLabel}: ${numericProof} What is the biggest blocker in your current process today?`,
+        `Hi there—quick question: are you the right person for ${safeTopic}?`,
       ];
     }
     return [
-      `Hi, this is ${companyName} on ${productLabel}. Is now a bad time, or can I ask one quick question about your current workflow?`,
+      `Hi there—quick question: are you the right person for ${safeTopic}?`,
     ];
   }
 
@@ -2907,7 +2915,7 @@ export class EngineService implements OnModuleDestroy {
 
     if (stage.includes('opening')) {
       return [
-        `Hi, this is ${company.companyName || 'our team'} about ${primaryProduct}. Is now a bad time, or do you have 60 seconds?`,
+        `Hi there—quick question: are you the right person for ${primaryProduct}?`,
         `Quick context: ${proofA}`,
         `Can I ask 2 quick questions to see if ${primaryProduct} fits your current workflow?`,
       ];
@@ -2985,10 +2993,6 @@ export class EngineService implements OnModuleDestroy {
       out = fallbackTight;
     }
 
-    const words = out.split(/\s+/).filter(Boolean);
-    if (words.length > 20) {
-      out = words.slice(0, 20).join(' ');
-    }
     out = out.replace(/\s+/g, ' ').trim();
     if (out.length === 0) {
       out = fallbackTight;
@@ -3111,11 +3115,16 @@ export class EngineService implements OnModuleDestroy {
     if (!t) return false;
     const last = t[t.length - 1];
     if (!['.', '?', '!'].includes(last ?? '')) return false;
-    if (/(?:such as|like|for example|including|:)\s*$/i.test(t)) return false;
+    if (/(?:such as|like|for example|including|which|:)\s*$/i.test(t)) return false;
     if (/,\s*$/.test(t)) return false;
-    const opens = (t.match(/["'(]/g) ?? []).length;
-    const closes = (t.match(/["')\]]/g) ?? []).length;
-    if (opens > closes + 1) return false;
+    const doubleQuotes = (t.match(/"/g) ?? []).length;
+    if (doubleQuotes % 2 !== 0) return false;
+    const openParens = (t.match(/\(/g) ?? []).length;
+    const closeParens = (t.match(/\)/g) ?? []).length;
+    if (openParens !== closeParens) return false;
+    const openBrackets = (t.match(/\[/g) ?? []).length;
+    const closeBrackets = (t.match(/\]/g) ?? []).length;
+    if (openBrackets !== closeBrackets) return false;
     return true;
   }
 

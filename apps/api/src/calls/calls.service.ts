@@ -32,22 +32,96 @@ export class CallsService {
     return `${cleaned.slice(0, max - 1).trimEnd()}...`;
   }
 
+  private normalizeBrand(value: string) {
+    return value.toLowerCase().replace(/[^a-z0-9]/g, '');
+  }
+
+  private normalizeTopic(value: string) {
+    const cleaned = value.replace(/\s+/g, ' ').trim();
+    if (!cleaned) return 'your current priorities';
+    const words = cleaned.split(/\s+/).filter(Boolean);
+    return words.slice(0, 6).join(' ');
+  }
+
+  private extractProspectIdentity(
+    contactJson: Record<string, unknown> | null | undefined,
+  ): { name: string; companyName: string } {
+    const source = contactJson ?? {};
+    const read = (keys: string[]) => {
+      for (const key of keys) {
+        const value = source[key];
+        if (typeof value === 'string' && value.trim().length > 0) {
+          return value.trim();
+        }
+      }
+      return '';
+    };
+    return {
+      name: read(['name', 'firstName', 'first_name', 'contactName', 'contact_name']),
+      companyName: read([
+        'company',
+        'companyName',
+        'company_name',
+        'organization',
+        'organizationName',
+        'org_name',
+        'accountName',
+      ]),
+    };
+  }
+
+  private isOpenerValid(
+    opener: string,
+    context: {
+      sellerCompanyName: string;
+      prospectCompanyName: string;
+    },
+  ) {
+    const text = opener.replace(/\s+/g, ' ').trim();
+    if (!text) return false;
+    if (!/[.?!]$/.test(text)) return false;
+    const sellerNorm = this.normalizeBrand(context.sellerCompanyName);
+    const prospectNorm = this.normalizeBrand(context.prospectCompanyName);
+    const normalized = this.normalizeBrand(text);
+    if (sellerNorm && normalized.includes(sellerNorm)) return false;
+    const mentionsCompanyPattern = /\b(?:at|from)\s+[A-Za-z]/i.test(text);
+    if (!prospectNorm) {
+      if (mentionsCompanyPattern) return false;
+      return true;
+    }
+    if (sellerNorm && sellerNorm === prospectNorm) {
+      return !mentionsCompanyPattern;
+    }
+    if (!mentionsCompanyPattern) return true;
+    return normalized.includes(prospectNorm);
+  }
+
   private buildDeterministicOpener(input: {
-    companyName: string;
+    prospectName: string;
+    prospectCompanyName: string;
+    sellerCompanyName: string;
     whatWeSell: string;
     callType: string;
     notes: string | null;
     offeringName: string;
   }) {
-    const companyName = input.companyName || 'our team';
-    const offering = input.offeringName || 'our offering';
+    const topic = this.normalizeTopic(input.offeringName || input.whatWeSell);
+    const leadName = input.prospectName || 'there';
+    const salutation = `Hi ${leadName}`;
+    const prospectNorm = this.normalizeBrand(input.prospectCompanyName);
+    const sellerNorm = this.normalizeBrand(input.sellerCompanyName);
+    const canUseProspectCompany =
+      prospectNorm.length > 0 && prospectNorm !== sellerNorm;
     if (input.callType === 'follow_up' || /follow|existing|check-in/i.test(input.notes ?? '')) {
-      return `Hi, quick follow-up on ${offering}—what changed since we last spoke?`;
+      if (canUseProspectCompany) {
+        return `${salutation} at ${input.prospectCompanyName}—quick follow-up: are you still the right person for ${topic}?`;
+      }
+      return `${salutation}—quick follow-up: are you still the right person for ${topic}?`;
     }
-    if (input.callType === 'discovery') {
-      return `Hi, this is ${companyName}—what's your biggest challenge with ${offering} right now?`;
+    if (canUseProspectCompany) {
+      return `${salutation} at ${input.prospectCompanyName}—quick question: are you the right person for ${topic}?`;
     }
-    return `Hi, this is ${companyName}—quick question: is improving ${offering} a priority this quarter?`;
+    return `${salutation}—quick question: are you the right person for ${topic}?`;
   }
 
   private async generatePreparedOpener(
@@ -57,11 +131,17 @@ export class CallsService {
     notes: string | null,
     productsMode: ProductsMode,
   ) {
-    const [contextRow, selectedProducts, allProducts] = await Promise.all([
+    const [contextRow, callRow, selectedProducts, allProducts] = await Promise.all([
       this.db
         .select()
         .from(schema.salesContext)
         .where(eq(schema.salesContext.orgId, orgId))
+        .limit(1)
+        .then((rows) => rows[0] ?? null),
+      this.db
+        .select({ contactJson: schema.calls.contactJson })
+        .from(schema.calls)
+        .where(eq(schema.calls.id, callId))
         .limit(1)
         .then((rows) => rows[0] ?? null),
       productsMode === ProductsMode.SELECTED
@@ -95,9 +175,14 @@ export class CallsService {
       .map((item) => `${item.name}${item.elevatorPitch ? `: ${this.compactText(item.elevatorPitch, 120)}` : ''}`)
       .slice(0, 4)
       .join(' | ');
+    const identity = this.extractProspectIdentity(
+      callRow?.contactJson as Record<string, unknown> | null | undefined,
+    );
 
     const context = {
-      companyName: contextRow?.companyName?.trim() || '',
+      sellerCompanyName: contextRow?.companyName?.trim() || '',
+      prospectName: identity.name,
+      prospectCompanyName: identity.companyName,
       whatWeSell: contextRow?.whatWeSell?.trim() || '',
       callType,
       notes,
@@ -114,16 +199,24 @@ export class CallsService {
         'You are an expert sales coach that drafts a concise opening line before a live call starts. Output plain text only.';
       const user =
         `Call type: ${callType}\n` +
-        `Company: ${context.companyName || 'Unknown'}\n` +
+        `Seller company: ${context.sellerCompanyName || 'Unknown'}\n` +
+        `Prospect name: ${context.prospectName || 'Unknown'}\n` +
+        `Prospect company: ${context.prospectCompanyName || 'Unknown'}\n` +
         `What we sell: ${context.whatWeSell || 'Not provided'}\n` +
         `Offerings: ${names.length > 0 ? names.join(', ') : 'None'}\n` +
         `Offering summary: ${summary || 'None'}\n` +
         `Notes: ${notes ?? 'None'}\n` +
-        'Generate exactly ONE sentence opener for the rep, max 18 words. Structure: "Hi [Name]—quick question: are you the right person for [topic]?" Use the company context. Output plain text only, no markdown, no labels.';
+        'Generate exactly ONE sentence opener for the rep, max 18 words. Prefer: "Hi [Name]—quick question: are you the right person for [topic]?" Do not mention the seller company name. Mention a company name only if prospect company is known and different from seller company. If prospect company is unknown, use "your team" or "your org". Output plain text only, no markdown, no labels.';
       const raw = await this.llm.chatFast(system, user);
       const opener = raw.replace(/\s+/g, ' ').trim();
-      if (!opener) return deterministic;
-      return opener;
+      if (this.isOpenerValid(opener, context)) return opener;
+      const retryRaw = await this.llm.chatFast(
+        system,
+        `${user}\nHard rule: never include the seller company name. Keep one complete sentence only.`,
+      );
+      const retry = retryRaw.replace(/\s+/g, ' ').trim();
+      if (this.isOpenerValid(retry, context)) return retry;
+      return deterministic;
     } catch {
       return deterministic;
     }
@@ -372,7 +465,7 @@ export class CallsService {
     if (followupSeed) {
       await this.db
         .update(schema.calls)
-        .set({ preparedFollowupSeed: followupSeed } as Record<string, unknown>)
+        .set({ preparedFollowupSeed: followupSeed })
         .where(eq(schema.calls.id, call.id));
     }
 

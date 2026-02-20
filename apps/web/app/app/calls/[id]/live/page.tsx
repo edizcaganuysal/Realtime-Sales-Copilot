@@ -6,7 +6,6 @@ import { io, Socket } from 'socket.io-client';
 import {
   AlertTriangle,
   Bot,
-  Copy,
   MessageSquare,
   Mic,
   MicOff,
@@ -269,15 +268,6 @@ function parseNudges(raw: string[]): string[] {
     if (picked.length === 3) break;
   }
   return picked;
-}
-
-function shortenSuggestion(text: string) {
-  const sentence = text.split(/(?<=[.!?])\s+/)[0] ?? text;
-  const words = sentence.trim().split(/\s+/).filter(Boolean);
-  if (words.length <= 16) {
-    return sentence.trim();
-  }
-  return `${words.slice(0, 16).join(' ')}...`;
 }
 
 function formatCredits(value: number | null) {
@@ -559,25 +549,6 @@ export default function LiveCallPage() {
     };
   }, [id]);
 
-  const handleSwap = useCallback(async () => {
-    const res = await fetch(`/api/calls/${id}/suggestions/more`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode: 'SWAP' }),
-    });
-    if (!res.ok) return;
-    const data = (await res.json().catch(() => null)) as { texts?: string[] } | null;
-    const next = data?.texts?.[0];
-    if (next) {
-      if (prospectSpeakingRef.current) {
-        pendingPrimaryRef.current = next;
-      } else {
-        setListeningMode(false);
-        setSuggestion(next);
-      }
-    }
-  }, [id]);
-
   const handleMoreOptions = useCallback(async () => {
     setMoreOptionsOpen(true);
     setMoreOptionsLoading(true);
@@ -593,26 +564,6 @@ export default function LiveCallPage() {
       setMoreOptions(next);
     }
     setMoreOptionsLoading(false);
-  }, [id]);
-
-  const handleCopyPrimary = useCallback(async () => {
-    if (!suggestion) return;
-    try {
-      await navigator.clipboard.writeText(suggestion);
-    } catch {
-      return;
-    }
-  }, [suggestion]);
-
-  const handleShorten = useCallback(() => {
-    if (!suggestion) return;
-    setSuggestion(shortenSuggestion(suggestion));
-  }, [suggestion]);
-
-  const handleMarkAsSaid = useCallback(async () => {
-    setListeningMode(true);
-    setSuggestion(null);
-    await fetch(`/api/calls/${id}/suggestions/consumed`, { method: 'POST' });
   }, [id]);
 
   const openProductsDrawer = useCallback(() => {
@@ -811,38 +762,6 @@ export default function LiveCallPage() {
                     Listening
                   </span>
                 )}
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => void handleCopyPrimary()}
-                  className="inline-flex items-center gap-1 rounded border border-slate-700 px-2 py-1 text-[11px] text-slate-300 transition-colors hover:border-slate-500 hover:text-white"
-                >
-                  <Copy size={11} />
-                  Copy
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleSwap()}
-                  disabled={prospectSpeaking}
-                  className="rounded border border-slate-700 px-2 py-1 text-[11px] text-slate-300 transition-colors hover:border-slate-500 hover:text-white"
-                >
-                  Swap
-                </button>
-                <button
-                  type="button"
-                  onClick={handleShorten}
-                  className="rounded border border-slate-700 px-2 py-1 text-[11px] text-slate-300 transition-colors hover:border-slate-500 hover:text-white"
-                >
-                  Shorten
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleMarkAsSaid()}
-                  className="rounded border border-slate-700 px-2 py-1 text-[11px] text-slate-300 transition-colors hover:border-slate-500 hover:text-white"
-                >
-                  Mark as said
-                </button>
               </div>
             </div>
             <p className="min-h-[66px] text-lg font-medium leading-relaxed text-white">
