@@ -140,6 +140,7 @@ export class MockCallService implements OnApplicationBootstrap {
         session: {
           modalities: ['text', 'audio'],
           instructions: prospectPersona,
+          temperature: 1.15,
           voice: 'shimmer',
           input_audio_format: 'pcm16',
           output_audio_format: 'pcm16',
@@ -337,8 +338,10 @@ export class MockCallService implements OnApplicationBootstrap {
 
   private buildProspectPersona(personaId: string | null, notes: string | null): string {
     const persona = getPersonaById(personaId);
+    const variation = this.buildSessionVariation();
     return (
       persona.prompt +
+      `\nSESSION VARIATION:\n${variation}\n` +
       (notes
         ? `\nSCENARIO CONTEXT from the rep: ${notes}\nAdapt your persona to match this scenario while keeping your core personality.\n`
         : '')
@@ -346,11 +349,51 @@ export class MockCallService implements OnApplicationBootstrap {
   }
 
   private buildCustomPersona(customPrompt: string, notes: string | null): string {
+    const variation = this.buildSessionVariation();
     return (
       customPrompt +
+      `\nSESSION VARIATION:\n${variation}\n` +
       (notes
         ? `\nSCENARIO CONTEXT from the rep: ${notes}\nAdapt your persona to match this scenario.\n`
         : '')
     );
+  }
+
+  private buildSessionVariation() {
+    const tones = [
+      'You are impatient and concise.',
+      'You are skeptical and blunt.',
+      'You are cautious and analytical.',
+      'You are polite but resistant.',
+      'You are direct and time-constrained.',
+    ];
+    const firstPushbacks = [
+      "We're fine as is right now.",
+      "Not a priority for us today.",
+      "We already have something in place.",
+      "I don't see a strong reason to switch.",
+      "Honestly, this sounds like what everyone says.",
+    ];
+    const challengeModes = [
+      'Press for concrete proof and examples from similar companies.',
+      'Test for differentiation versus current alternatives.',
+      'Challenge timeline urgency and ask why now matters.',
+      'Push on risk, implementation burden, and team adoption.',
+      'Push on ROI credibility and total effort required.',
+    ];
+    const styleShifts = [
+      'Use short, skeptical follow-up questions.',
+      'Interrupt generic answers and ask for specifics.',
+      'Avoid agreeing quickly; ask one hard question before softening.',
+      'If the rep is vague, become more resistant immediately.',
+      'If the rep is specific, soften slightly but keep pressure.',
+    ];
+    const pick = <T>(arr: T[]) => arr[Math.floor(Math.random() * arr.length)]!;
+    return [
+      pick(tones),
+      `First response style: "${pick(firstPushbacks)}"`,
+      pick(challengeModes),
+      pick(styleShifts),
+    ].join('\n');
   }
 }
