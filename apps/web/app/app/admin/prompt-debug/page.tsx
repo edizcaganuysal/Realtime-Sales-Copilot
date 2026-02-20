@@ -12,7 +12,50 @@ type DebugOutput = {
   cards: string[];
   objection: string | null;
   sentiment: string;
+  moveType?: string | null;
 };
+
+type Slots = {
+  objection_type: string;
+  entities: string[];
+  intent: string;
+};
+
+const CANNED_CASES = [
+  {
+    label: 'Pricing objection',
+    transcript: 'REP: Thanks for your time today.\nPROSPECT: This is too expensive.',
+  },
+  {
+    label: 'Timing objection',
+    transcript: 'REP: Would this be a good fit for your team?\nPROSPECT: Maybe next quarter.',
+  },
+  {
+    label: 'Competitor',
+    transcript: 'REP: How are you handling that today?\nPROSPECT: We use HubSpot already.',
+  },
+  {
+    label: 'Authority',
+    transcript: "REP: Does this align with your goals?\nPROSPECT: I'm not the decision maker.",
+  },
+  {
+    label: 'No need',
+    transcript: "REP: What challenges are you running into?\nPROSPECT: We're fine, not looking.",
+  },
+  {
+    label: 'Info request',
+    transcript: "REP: Happy to walk you through it.\nPROSPECT: How does this work?",
+  },
+  {
+    label: 'Confusion',
+    transcript:
+      "REP: We focus on live call coaching.\nPROSPECT: I don't get what you actually do.",
+  },
+  {
+    label: 'Soft interest',
+    transcript: 'REP: There are a few ways we can help.\nPROSPECT: Ok, tell me more.',
+  },
+];
 
 export default function PromptDebugPage() {
   const [transcript, setTranscript] = useState('PROSPECT: What is included in your full package?');
@@ -29,6 +72,8 @@ export default function PromptDebugPage() {
     userPrompt?: string;
     llmAvailable?: boolean;
     raw?: string;
+    slots?: Slots;
+    specificityPassed?: boolean | null;
     error?: string;
   } | null>(null);
 
@@ -115,6 +160,21 @@ export default function PromptDebugPage() {
 
       <div className="rounded-xl border border-slate-800 bg-slate-900 p-4 space-y-3">
         <div>
+          <label className="block text-xs text-slate-400 mb-1.5">Canned test cases</label>
+          <div className="flex flex-wrap gap-2">
+            {CANNED_CASES.map((c) => (
+              <button
+                key={c.label}
+                onClick={() => setTranscript(c.transcript)}
+                className="rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1 text-xs text-slate-300 hover:border-sky-500/50 hover:text-sky-300 transition-colors"
+              >
+                {c.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
           <label className="block text-xs text-slate-400 mb-1.5">Transcript snippet</label>
           <textarea
             rows={8}
@@ -187,11 +247,52 @@ export default function PromptDebugPage() {
 
       {result && (
         <div className="space-y-4">
-          <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
-            <p className="text-xs text-slate-500 mb-2">LLM available: {String(Boolean(result.llmAvailable))}</p>
-            <p className="text-xs text-slate-500 mb-2">Primary suggestion</p>
-            <p className="text-sm text-white">{result.output?.primarySuggestion || 'No suggestion generated.'}</p>
-            <div className="mt-3 grid md:grid-cols-2 gap-3">
+          <div className="rounded-xl border border-slate-800 bg-slate-900 p-4 space-y-3">
+            <div className="flex items-center gap-3 flex-wrap">
+              <p className="text-xs text-slate-500">LLM available: {String(Boolean(result.llmAvailable))}</p>
+              {result.specificityPassed !== null && result.specificityPassed !== undefined && (
+                <span
+                  className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ${
+                    result.specificityPassed
+                      ? 'bg-green-500/15 text-green-400 border border-green-500/30'
+                      : 'bg-red-500/15 text-red-400 border border-red-500/30'
+                  }`}
+                >
+                  Specificity: {result.specificityPassed ? 'PASSED' : 'FAILED'}
+                </span>
+              )}
+              {result.output?.moveType && (
+                <span className="inline-flex items-center rounded-md border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-xs text-sky-300">
+                  move: {result.output.moveType}
+                </span>
+              )}
+            </div>
+
+            {result.slots && (
+              <div className="rounded-lg border border-slate-700 bg-slate-800/50 px-3 py-2 space-y-1">
+                <p className="text-xs font-medium text-slate-400">Extracted slots</p>
+                <div className="flex flex-wrap gap-2 text-xs">
+                  <span className="text-slate-300">
+                    <span className="text-slate-500">objection:</span> {result.slots.objection_type}
+                  </span>
+                  <span className="text-slate-300">
+                    <span className="text-slate-500">intent:</span> {result.slots.intent}
+                  </span>
+                  {result.slots.entities.length > 0 && (
+                    <span className="text-slate-300">
+                      <span className="text-slate-500">entities:</span> {result.slots.entities.join(', ')}
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <div>
+              <p className="text-xs text-slate-500 mb-1">Primary suggestion</p>
+              <p className="text-sm text-white">{result.output?.primarySuggestion || 'No suggestion generated.'}</p>
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-3">
               <div>
                 <p className="text-xs text-slate-500 mb-1">Nudges</p>
                 <ul className="text-sm text-slate-300 space-y-1">
