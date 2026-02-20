@@ -14,6 +14,7 @@ type Agent = {
   useDefaultTemplate?: boolean;
   promptDelta?: string | null;
   fullPromptOverride?: string | null;
+  openers?: string[] | null;
   createdAt: string;
 };
 
@@ -22,6 +23,7 @@ type AgentForm = {
   useDefaultTemplate: boolean;
   promptDelta: string;
   fullPromptOverride: string;
+  openers: string[];
 };
 
 const DEFAULT_FORM: AgentForm = {
@@ -29,6 +31,7 @@ const DEFAULT_FORM: AgentForm = {
   useDefaultTemplate: true,
   promptDelta: '',
   fullPromptOverride: '',
+  openers: [],
 };
 
 function toForm(agent: Agent): AgentForm {
@@ -38,6 +41,7 @@ function toForm(agent: Agent): AgentForm {
     useDefaultTemplate,
     promptDelta: agent.promptDelta?.trim() || agent.prompt.trim(),
     fullPromptOverride: agent.fullPromptOverride?.trim() || agent.prompt.trim(),
+    openers: Array.isArray(agent.openers) ? agent.openers : [],
   };
 }
 
@@ -54,6 +58,7 @@ function toPayload(form: AgentForm) {
     useDefaultTemplate,
     promptDelta: useDefaultTemplate ? delta : '',
     fullPromptOverride: useDefaultTemplate ? null : full,
+    openers: form.openers.map((o) => o.trim()).filter((o) => o.length > 0),
   };
 }
 
@@ -65,6 +70,8 @@ export default function AgentsPage() {
   const [form, setForm] = useState<AgentForm>(DEFAULT_FORM);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [newOpener, setNewOpener] = useState('');
+  const [draftingOpeners, setDraftingOpeners] = useState(false);
 
   useEffect(() => {
     void loadAgents();
@@ -81,6 +88,7 @@ export default function AgentsPage() {
   function openCreate() {
     setEditAgent(null);
     setForm(DEFAULT_FORM);
+    setNewOpener('');
     setError('');
     setShowModal(true);
   }
@@ -88,6 +96,7 @@ export default function AgentsPage() {
   function openEdit(agent: Agent) {
     setEditAgent(agent);
     setForm(toForm(agent));
+    setNewOpener('');
     setError('');
     setShowModal(true);
   }
@@ -134,6 +143,7 @@ export default function AgentsPage() {
     setShowModal(false);
     setEditAgent(null);
     setForm(DEFAULT_FORM);
+    setNewOpener('');
     await loadAgents();
   }
 
@@ -142,6 +152,28 @@ export default function AgentsPage() {
     const res = await fetch(`/api/agents/${agentId}`, { method: 'DELETE' });
     if (res.ok) {
       setAgents((prev) => prev.filter((agent) => agent.id !== agentId));
+    }
+  }
+
+  function addOpener() {
+    const trimmed = newOpener.trim();
+    if (!trimmed) return;
+    setForm((prev) => ({ ...prev, openers: [...prev.openers, trimmed] }));
+    setNewOpener('');
+  }
+
+  function removeOpener(idx: number) {
+    setForm((prev) => ({ ...prev, openers: prev.openers.filter((_, i) => i !== idx) }));
+  }
+
+  async function handleDraftOpeners() {
+    if (!editAgent) return;
+    setDraftingOpeners(true);
+    const res = await fetch(`/api/agents/${editAgent.id}/draft-openers`, { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    setDraftingOpeners(false);
+    if (res.ok && Array.isArray(data?.openers)) {
+      setForm((prev) => ({ ...prev, openers: data.openers as string[] }));
     }
   }
 
@@ -176,6 +208,11 @@ export default function AgentsPage() {
                     <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[11px] text-slate-300">
                       {(agent.useDefaultTemplate ?? true) ? 'Default template' : 'Full prompt'}
                     </span>
+                    {Array.isArray(agent.openers) && agent.openers.length > 0 && (
+                      <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-[11px] text-sky-300">
+                        {agent.openers.length} opener{agent.openers.length !== 1 ? 's' : ''}
+                      </span>
+                    )}
                   </div>
                   <p className="line-clamp-2 text-xs text-slate-500">
                     {(agent.useDefaultTemplate ?? true)
@@ -204,8 +241,8 @@ export default function AgentsPage() {
       )}
 
       {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-          <div className="w-full max-w-xl rounded-xl border border-slate-800 bg-slate-900 p-6">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 overflow-y-auto py-8">
+          <div className="w-full max-w-xl rounded-xl border border-slate-800 bg-slate-900 p-6 mx-4">
             <div className="mb-5 flex items-center justify-between">
               <h2 className="text-base font-semibold text-white">{editAgent ? 'Edit agent' : 'New agent'}</h2>
               <button onClick={() => setShowModal(false)} className="text-slate-500 hover:text-white">
@@ -268,6 +305,60 @@ export default function AgentsPage() {
                   />
                 </div>
               )}
+
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <div>
+                    <label className="text-xs text-slate-400">Openers</label>
+                    <p className="text-[11px] text-slate-600 mt-0.5">1 sentence openers. Keep under ~18 words.</p>
+                  </div>
+                  {editAgent && (
+                    <button
+                      type="button"
+                      disabled={draftingOpeners}
+                      onClick={handleDraftOpeners}
+                      className="text-[11px] rounded-md border border-sky-500/30 bg-sky-500/10 px-2 py-1 text-sky-300 transition-colors hover:border-sky-500/60 disabled:opacity-50"
+                    >
+                      {draftingOpeners ? 'Drafting...' : 'AI Draft Openers'}
+                    </button>
+                  )}
+                </div>
+                <div className="space-y-1.5">
+                  {form.openers.map((opener, idx) => (
+                    <div key={idx} className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-800/60 px-2.5 py-1.5">
+                      {idx === 0 && (
+                        <span className="shrink-0 rounded bg-sky-500/20 px-1 py-0.5 text-[10px] text-sky-300">Default</span>
+                      )}
+                      <span className="flex-1 text-xs text-slate-300 truncate">{opener}</span>
+                      <button
+                        type="button"
+                        onClick={() => removeOpener(idx)}
+                        className="shrink-0 text-slate-600 hover:text-red-400 transition-colors"
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ))}
+                  <div className="flex gap-2">
+                    <input
+                      className={INPUT_BASE + ' text-xs py-1.5'}
+                      placeholder="Type an opener and press Add..."
+                      value={newOpener}
+                      onChange={(e) => setNewOpener(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') { e.preventDefault(); addOpener(); }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={addOpener}
+                      className="shrink-0 rounded-lg border border-slate-600 px-3 py-1.5 text-xs text-slate-300 hover:border-slate-400 transition-colors"
+                    >
+                      Add
+                    </button>
+                  </div>
+                </div>
+              </div>
 
               {error && <p className="text-sm text-red-400">{error}</p>}
 

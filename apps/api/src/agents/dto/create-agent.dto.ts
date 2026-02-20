@@ -1,4 +1,4 @@
-import { IsBoolean, IsEnum, IsObject, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsArray, IsBoolean, IsEnum, IsObject, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { AgentScope } from '@live-sales-coach/shared';
 
 export class CreateAgentDto {
@@ -30,4 +30,10 @@ export class CreateAgentDto {
   @IsOptional()
   @IsString()
   fullPromptOverride?: string | null;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @MaxLength(120, { each: true })
+  openers?: string[];
 }

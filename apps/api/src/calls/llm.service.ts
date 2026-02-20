@@ -64,7 +64,7 @@ export class LlmService implements OnModuleInit {
         { role: 'user', content: userPrompt },
       ],
       temperature: 0.35,
-      max_tokens: 200,
+      max_tokens: 350,
     });
     return ((resp.choices[0]?.message?.content as string | null | undefined) ?? '').trim();
   }

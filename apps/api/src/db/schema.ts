@@ -156,6 +156,7 @@ export const agents = pgTable('agents', {
   promptDelta: text('prompt_delta').default('').notNull(),
   fullPromptOverride: text('full_prompt_override'),
   configJson: jsonb('config_json').default({}).notNull(),
+  openers: jsonb('openers').default([]).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
