@@ -86,6 +86,7 @@ type CoachMemory = {
   used_objection_responses: string[];
   questions_asked: string[];
   last_5_primary_suggestions: string[];
+  last_move_type: string;
 };
 
 type EngineState = {
@@ -354,6 +355,7 @@ export class EngineService implements OnModuleDestroy {
         used_objection_responses: [],
         questions_asked: [],
         last_5_primary_suggestions: [],
+        last_move_type: '',
       },
       stubTick: 0,
       stubInterval: null,
@@ -952,11 +954,13 @@ export class EngineService implements OnModuleDestroy {
       [],
     );
     const lastProspectLine = this.extractLastProspectLine(transcript);
+    const slots = this.extractProspectSlots(lastProspectLine ?? '');
     const userPrompt =
       `Transcript:\n${transcript}\n\n` +
-      (lastProspectLine
-        ? `IMPORTANT — The prospect just said: "${lastProspectLine}"\nRespond directly.\n\n`
-        : '') +
+      `prospect_last_final_utterance: "${lastProspectLine ?? 'None'}"\n` +
+      `objection_type: ${slots.objection_type}\n` +
+      `entities: ${slots.entities.length > 0 ? slots.entities.join(', ') : 'none'}\n` +
+      `intent: ${slots.intent}\n` +
       'Provide the JSON coaching output now.';
 
     if (!this.llm.available) {
@@ -973,6 +977,8 @@ export class EngineService implements OnModuleDestroy {
         llmAvailable: false,
         systemPrompt,
         userPrompt,
+        slots,
+        specificityPassed: null,
         output: {
           primarySuggestion: fallback[0] ?? '',
           suggestions: fallback,
@@ -989,9 +995,11 @@ export class EngineService implements OnModuleDestroy {
       const parsed = this.llm.parseJson<{
         primary?: string;
         moment?: string;
+        move_type?: string;
         nudges?: string[];
         context_toast?: { title?: string; bullets?: string[] } | null;
       }>(raw, {});
+      const specificityPassed = parsed.primary ? !this.isGenericPrimary(parsed.primary) : null;
       const suggestions = this.normalizeSuggestions(
         parsed.primary ? [parsed.primary] : [],
         companyProfile,
@@ -1019,6 +1027,8 @@ export class EngineService implements OnModuleDestroy {
         systemPrompt,
         userPrompt,
         raw,
+        slots,
+        specificityPassed,
         output: {
           primarySuggestion: suggestions[0] ?? '',
           suggestions,
@@ -1026,6 +1036,7 @@ export class EngineService implements OnModuleDestroy {
           cards: cards.length > 0 ? cards : fallbackCards,
           objection: null,
           sentiment: 'neutral',
+          moveType: parsed.move_type ?? null,
         },
       };
     } catch (error) {
@@ -1042,6 +1053,8 @@ export class EngineService implements OnModuleDestroy {
         llmAvailable: false,
         systemPrompt,
         userPrompt,
+        slots,
+        specificityPassed: null,
         error: error instanceof Error ? error.message : 'Prompt debug failed',
         output: {
           primarySuggestion: fallback[0] ?? '',
@@ -1050,6 +1063,7 @@ export class EngineService implements OnModuleDestroy {
           cards: this.buildOpeningContextCards(companyProfile, productContext),
           objection: null,
           sentiment: 'neutral',
+          moveType: null,
         },
       };
     }
@@ -1225,6 +1239,7 @@ export class EngineService implements OnModuleDestroy {
         0,
         5,
       ),
+      last_move_type: typeof record['last_move_type'] === 'string' ? record['last_move_type'] : '',
     };
   }
 
@@ -1704,9 +1719,15 @@ export class EngineService implements OnModuleDestroy {
       (state.lastProspectUtteranceText ||
         [...state.transcriptBuffer].reverse().find((t) => t.speaker === 'PROSPECT')?.text) ??
       '';
+    const slots = this.extractProspectSlots(lastProspectLine);
+    const requiredMove = this.resolveRequiredMove(state.coachMemory.last_move_type);
     const userPrompt =
       `Conversation window (REP/PROSPECT only):\n${recentTurns}\n\n` +
-      `Last prospect final utterance: ${lastProspectLine || 'None'}\n` +
+      `prospect_last_final_utterance: "${lastProspectLine || 'None'}"\n` +
+      `objection_type: ${slots.objection_type}\n` +
+      `entities: ${slots.entities.length > 0 ? slots.entities.join(', ') : 'none'}\n` +
+      `intent: ${slots.intent}\n` +
+      (requiredMove ? `required_next_move: ${requiredMove}\n` : '') +
       `Update trigger: ${opts.reason}\n` +
       `Return JSON only now.`;
 
@@ -1724,6 +1745,9 @@ export class EngineService implements OnModuleDestroy {
       let parsed = this.llm.parseJson<{
         moment?: string;
         primary?: string;
+        follow_up_question?: string | null;
+        micro_commitment_close?: string | null;
+        move_type?: string;
         nudges?: string[];
         context_toast?: { title?: string; bullets?: string[] } | null;
         ask?: string[] | null;
@@ -1738,9 +1762,31 @@ export class EngineService implements OnModuleDestroy {
       if (!parsed.primary || !parsed.moment) {
         const retryRaw = await this.llm.chatFast(
           systemPrompt,
-          `${userPrompt}\nReturn strictly valid JSON with keys: moment, primary, nudges, context_toast, ask, used_updates.`,
+          `${userPrompt}\nReturn strictly valid JSON with keys: moment, primary, move_type, nudges, context_toast, ask, used_updates.`,
         );
         parsed = this.llm.parseJson(retryRaw, parsed);
+      }
+
+      if (parsed.primary && this.isGenericPrimary(parsed.primary)) {
+        const specificityRetryPrompt =
+          `${userPrompt}\n` +
+          `IMPORTANT: Your last primary was too generic. ` +
+          `The prospect said: "${lastProspectLine}". ` +
+          `Your new primary MUST reference something specific from that utterance or ask a pointed question using their exact words. ` +
+          `Return JSON only.`;
+        const retryRaw = await this.llm.chatFast(systemPrompt, specificityRetryPrompt);
+        const retryParsed = this.llm.parseJson<typeof parsed>(retryRaw, {});
+        if (retryParsed.primary && !this.isGenericPrimary(retryParsed.primary)) {
+          parsed = retryParsed;
+        } else if (lastProspectLine) {
+          parsed.primary = this.buildDeterministicFallback(lastProspectLine, slots);
+        }
+      }
+
+      if (parsed.move_type && typeof parsed.move_type === 'string') {
+        state.coachMemory.last_move_type = parsed.move_type.toLowerCase();
+      } else if (parsed.primary) {
+        state.coachMemory.last_move_type = this.classifyMoveType(parsed.primary);
       }
 
       const normalizedSuggestions = this.normalizeSuggestions(
@@ -3008,6 +3054,136 @@ export class EngineService implements OnModuleDestroy {
     );
     const firstSentence = withoutFiller.split(/(?<=[.!?])\s+/)[0] ?? '';
     return firstSentence.replace(/\s+/g, ' ').trim();
+  }
+
+  private extractProspectSlots(utterance: string): {
+    objection_type: string;
+    entities: string[];
+    intent: string;
+  } {
+    const lower = utterance.toLowerCase();
+    const entities: string[] = [];
+    let objection_type = 'other';
+    if (/expensive|cost|price|budget|afford|too much|too pricey/.test(lower))
+      objection_type = 'pricing';
+    else if (/next quarter|next month|not now|later|busy|bad timing|wait|not ready/.test(lower))
+      objection_type = 'timing';
+    else if (
+      /we use|already have|switched to|use \w+|hubspot|salesforce|zoho|pipedrive|monday|notion|jira/.test(
+        lower,
+      )
+    )
+      objection_type = 'competitor';
+    else if (
+      /not the decision|need to check|check with|manager|boss|partner|team first|not up to me/.test(
+        lower,
+      )
+    )
+      objection_type = 'authority';
+    else if (/not interested|we.re fine|don.t need|happy with|no thanks|not looking/.test(lower))
+      objection_type = 'need';
+    else if (/how does|how do you|what is|what does|explain|tell me|describe/.test(lower))
+      objection_type = 'info_request';
+    const priceMatch = utterance.match(/\$[\d,]+k?|\d[\d,]*\s*(?:k|dollars|per month|\/month|monthly)/gi);
+    if (priceMatch) entities.push(...priceMatch.map((m) => m.trim()));
+    const timeMatch = utterance.match(
+      /\bq[1-4]\b|next quarter|this quarter|next month|next year|next week|\d+\s*(?:days?|weeks?|months?)/gi,
+    );
+    if (timeMatch) entities.push(...timeMatch.map((m) => m.trim()));
+    const toolMatch = utterance.match(
+      /\b(?:HubSpot|Salesforce|Zoho|Pipedrive|Monday|Notion|Jira|Asana|Teams|Slack|Outlook|Zoom|Intercom|Zendesk|Airtable)\b/gi,
+    );
+    if (toolMatch) entities.push(...toolMatch.map((m) => m.trim()));
+    const roleMatch = utterance.match(
+      /\b(?:CEO|CTO|CFO|VP|director|manager|owner|founder|partner|head of)\b/gi,
+    );
+    if (roleMatch) entities.push(...roleMatch.map((m) => m.trim()));
+    let intent = 'other';
+    if (
+      /\?/.test(utterance) &&
+      /how|what|why|when|where|can you|would you|could you|do you/.test(lower)
+    )
+      intent = 'asking_info';
+    else if (
+      /expensive|too much|don.t need|not now|not the|we use|already|fine|no thanks/.test(lower)
+    )
+      intent = 'pushing_back';
+    else if (/let.s|schedule|book|send me|next step|demo|more info|follow up/.test(lower))
+      intent = 'requesting_next_steps';
+    else if (/tell me more|interested|sounds good|ok|interesting|keep going/.test(lower))
+      intent = 'soft_interest';
+    return { objection_type, entities: [...new Set(entities)], intent };
+  }
+
+  private readonly BANNED_GENERIC_PATTERNS = [
+    /^i\s+understand\s+your\s+concern\b/i,
+    /^that\s+makes\s+sense\b/i,
+    /^i\s+hear\s+you\b/i,
+    /^i\s+appreciate\s+that\b/i,
+    /^great\s+question\b/i,
+    /^totally\b(?:\.|,|\s|$)/i,
+  ];
+
+  private isGenericPrimary(primary: string): boolean {
+    const trimmed = primary.trim();
+    for (const pattern of this.BANNED_GENERIC_PATTERNS) {
+      if (!pattern.test(trimmed)) continue;
+      const remainder = trimmed.replace(pattern, '').replace(/^[,.\s]+/, '');
+      if (remainder.length < 25) return true;
+    }
+    return false;
+  }
+
+  private buildDeterministicFallback(
+    utterance: string,
+    slots: { objection_type: string; entities: string[]; intent: string },
+  ): string {
+    const shortUtterance = utterance.length > 80 ? utterance.slice(0, 77) + '...' : utterance;
+    const entityHint =
+      slots.entities.length > 0
+        ? ` — specifically around ${slots.entities.slice(0, 2).join(' and ')}`
+        : '';
+    if (slots.objection_type === 'pricing')
+      return `When you say "${shortUtterance}${entityHint}", is your concern the upfront cost, the ongoing fee, or whether the return justifies it?`;
+    if (slots.objection_type === 'timing') {
+      return `You mentioned ${slots.entities[0] ?? 'timing as a factor'} — what would need to change for this to become a priority before then?`;
+    }
+    if (slots.objection_type === 'competitor') {
+      const tool = slots.entities[0] ?? 'your current tool';
+      return `What does ${tool} handle well for you today, and where do you feel the gaps?`;
+    }
+    if (slots.objection_type === 'authority')
+      return `Understood — what information would be most useful for your decision-maker, and would it help to loop them in on a short call?`;
+    if (slots.objection_type === 'need')
+      return `Given that you said "${shortUtterance}", what would a measurably better outcome look like in the next 90 days?`;
+    if (slots.objection_type === 'info_request')
+      return `Great question on how this works — which part matters most to you: the workflow, the results, or the timeline to see impact?`;
+    return `When you say "${shortUtterance}", can you help me understand what would make this a clear yes or clear no for you?`;
+  }
+
+  private classifyMoveType(primary: string): string {
+    const lower = primary.toLowerCase();
+    if (/\?/.test(primary) && /what|how|which|when|why|who|where|can you|could you/.test(lower))
+      return 'clarify';
+    if (/book|schedule|calendar|next step|this week|pilot|15.min|demo|let.s|should we/.test(lower))
+      return 'next_step_close';
+    if (
+      /value|deliver|proof|benchmark|result|outcome|help you|benefit|advantage|typically|usually/.test(
+        lower,
+      )
+    )
+      return 'value_map';
+    return 'clarify';
+  }
+
+  private resolveRequiredMove(lastMove: string): string {
+    const sequence: Record<string, string> = {
+      empathize: 'clarify',
+      clarify: 'value_map',
+      value_map: 'next_step_close',
+      next_step_close: 'clarify',
+    };
+    return sequence[lastMove] ?? '';
   }
 
   private looksEnglish(text: string): boolean {
