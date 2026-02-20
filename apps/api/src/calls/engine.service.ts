@@ -400,6 +400,7 @@ export class EngineService implements OnModuleDestroy {
   emitSessionStart(callId: string) {
     const state = this.engines.get(callId);
     if (!state || state.cancelled) return;
+    if (state.sessionStarted) return;
     state.sessionStarted = true;
     this.gateway.emitToCall(callId, 'session_start', { tsMs: Date.now() });
     if (!state.context) return;

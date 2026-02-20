@@ -189,7 +189,8 @@ export class MockCallService implements OnApplicationBootstrap {
             type: 'response.create',
             response: {
               modalities: ['audio', 'text'],
-              temperature: 1.15,
+              temperature: 1.05,
+              max_output_tokens: 150,
             },
           }),
         );
@@ -203,8 +204,16 @@ export class MockCallService implements OnApplicationBootstrap {
         type: 'session.update',
         session: {
           modalities: ['text', 'audio'],
-          instructions: prospectPersona,
-          temperature: 1.15,
+          instructions:
+            `${prospectPersona}\n` +
+            `TURN STYLE:\n` +
+            `- Keep each reply concise and relevant to the rep's last line.\n` +
+            `- Default to one sentence; use two short sentences only if needed.\n` +
+            `- Maximum 26 words total per reply.\n` +
+            `- Ask at most one question in a reply.\n` +
+            `- Do not monologue or list multiple ideas in one turn.\n`,
+          temperature: 1.05,
+          max_response_output_tokens: 150,
           voice: 'shimmer',
           input_audio_format: 'pcm16',
           output_audio_format: 'pcm16',
@@ -262,8 +271,6 @@ export class MockCallService implements OnApplicationBootstrap {
             userSpeechStartedAt = null;
             break;
           }
-          repHasSpoken = true;
-          scheduleResponseKick();
           break;
         }
 
