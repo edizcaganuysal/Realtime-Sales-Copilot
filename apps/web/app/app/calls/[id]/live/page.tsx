@@ -336,7 +336,11 @@ export default function LiveCallPage() {
   const socketRef = useRef<Socket | null>(null);
   const seqRef = useRef(0);
   const pendingPrimaryRef = useRef<string | null>(null);
+  const pendingMomentRef = useRef<string | null>(null);
+  const pendingNudgesRef = useRef<string[] | null>(null);
   const prospectSpeakingRef = useRef(false);
+  const partialProspectRef = useRef('');
+  const lastProspectActivityAtRef = useRef(0);
   const suggestionRef = useRef<string | null>(null);
   const repTurnCountRef = useRef(0);
   const openerRef = useRef<string | null>(null);
@@ -372,6 +376,29 @@ export default function LiveCallPage() {
     suggestionRef.current = suggestion;
   }, [suggestion]);
 
+  const canRenderCoachUpdate = useCallback(() => {
+    const hasPartial = partialProspectRef.current.trim().length > 0;
+    const recentlyActive = Date.now() - lastProspectActivityAtRef.current < 700;
+    return !prospectSpeakingRef.current && !hasPartial && !recentlyActive;
+  }, []);
+
+  const flushPendingCoachUi = useCallback(() => {
+    if (!canRenderCoachUpdate()) return;
+    if (pendingMomentRef.current) {
+      setMomentTag(pendingMomentRef.current);
+      pendingMomentRef.current = null;
+    }
+    if (pendingNudgesRef.current) {
+      setNudges(pendingNudgesRef.current);
+      pendingNudgesRef.current = null;
+    }
+    if (pendingPrimaryRef.current) {
+      setListeningMode(false);
+      setSuggestion(pendingPrimaryRef.current);
+      pendingPrimaryRef.current = null;
+    }
+  }, [canRenderCoachUpdate]);
+
   useEffect(() => {
     let active = true;
 
@@ -384,6 +411,10 @@ export default function LiveCallPage() {
       setCallStatus(data.status ?? 'INITIATED');
       repTurnCountRef.current = 0;
       pendingPrimaryRef.current = null;
+      pendingMomentRef.current = null;
+      pendingNudgesRef.current = null;
+      partialProspectRef.current = '';
+      lastProspectActivityAtRef.current = 0;
       if (typeof data.preparedOpenerText === 'string' && data.preparedOpenerText.trim().length > 0) {
         const opener = data.preparedOpenerText.trim();
         openerRef.current = opener;
@@ -464,6 +495,8 @@ export default function LiveCallPage() {
     socket.on('transcript.partial', (data: TranscriptLine) => {
       if (data.speaker === 'PROSPECT') {
         setPartialProspectText(data.text);
+        partialProspectRef.current = data.text;
+        lastProspectActivityAtRef.current = Date.now();
         setProspectSpeaking(true);
         prospectSpeakingRef.current = true;
       }
@@ -477,13 +510,11 @@ export default function LiveCallPage() {
 
       if (data.speaker === 'PROSPECT') {
         setPartialProspectText('');
+        partialProspectRef.current = '';
+        lastProspectActivityAtRef.current = Date.now();
         setProspectSpeaking(false);
         prospectSpeakingRef.current = false;
-        if (pendingPrimaryRef.current) {
-          setListeningMode(false);
-          setSuggestion(pendingPrimaryRef.current);
-          pendingPrimaryRef.current = null;
-        }
+        flushPendingCoachUi();
       } else if (data.speaker === 'REP') {
         repTurnCountRef.current += 1;
         pendingPrimaryRef.current = null;
@@ -498,7 +529,7 @@ export default function LiveCallPage() {
       if (nextPrimary === suggestionRef.current) return;
       const opener = openerRef.current;
       if (opener && repTurnCountRef.current > 0 && nextPrimary === opener) return;
-      if (prospectSpeakingRef.current) {
+      if (!canRenderCoachUpdate()) {
         pendingPrimaryRef.current = nextPrimary;
         return;
       }
@@ -507,11 +538,20 @@ export default function LiveCallPage() {
     });
 
     socket.on('engine.nudges', (data: { nudges: string[] }) => {
-      setNudges(parseNudges(data.nudges ?? []));
+      const nextNudges = parseNudges(data.nudges ?? []);
+      if (!canRenderCoachUpdate()) {
+        pendingNudgesRef.current = nextNudges;
+        return;
+      }
+      setNudges(nextNudges);
     });
 
     socket.on('engine.moment', (data: { tag?: string }) => {
       if (!data?.tag) return;
+      if (!canRenderCoachUpdate()) {
+        pendingMomentRef.current = data.tag;
+        return;
+      }
       setMomentTag(data.tag);
     });
 
@@ -537,10 +577,10 @@ export default function LiveCallPage() {
     socket.on('engine.prospect_speaking', (data: { speaking: boolean }) => {
       setProspectSpeaking(data.speaking);
       prospectSpeakingRef.current = data.speaking;
-      if (!data.speaking && pendingPrimaryRef.current) {
-        setListeningMode(false);
-        setSuggestion(pendingPrimaryRef.current);
-        pendingPrimaryRef.current = null;
+      if (data.speaking) {
+        lastProspectActivityAtRef.current = Date.now();
+      } else if (canRenderCoachUpdate()) {
+        flushPendingCoachUi();
       }
     });
 
@@ -569,7 +609,7 @@ export default function LiveCallPage() {
       socket.emit('leave', id);
       socket.disconnect();
     };
-  }, [id]);
+  }, [canRenderCoachUpdate, flushPendingCoachUi, id]);
 
   const handleMoreOptions = useCallback(async () => {
     setMoreOptionsOpen(true);
