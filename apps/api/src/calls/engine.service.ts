@@ -1764,9 +1764,6 @@ export class EngineService implements OnModuleDestroy {
 
       let fastInterimEmitted = false;
       if (raceResult === null) {
-        const seedQuestions = context.preparedFollowupSeed
-          ? this.parseFollowupSeed(context.preparedFollowupSeed)
-          : [];
         const fallbackInterim =
           lastProspectLine.length > 0
             ? this.buildDeterministicFallback(lastProspectLine, slots)
@@ -1777,7 +1774,7 @@ export class EngineService implements OnModuleDestroy {
                 state.stats.objectionDetected,
                 lastProspectLine,
               )[0] ?? 'Tell me more about what you just said.';
-        const fastInterim = seedQuestions[0] ?? fallbackInterim;
+        const fastInterim = fallbackInterim;
         if (!state.prospectSpeaking) {
           this.emitInterimPrimary(callId, fastInterim);
           fastInterimEmitted = true;
@@ -3011,6 +3008,10 @@ export class EngineService implements OnModuleDestroy {
     }
 
     out = out.replace(/\s+/g, ' ').trim();
+    out = out.replace(
+      /what operational challenges (?:are you facing|do you face)\??/i,
+      'what part of your current process is hardest right now?',
+    );
     if (out.length === 0) {
       out = fallbackTight;
     }
@@ -3143,16 +3144,6 @@ export class EngineService implements OnModuleDestroy {
     const closeBrackets = (t.match(/\]/g) ?? []).length;
     if (openBrackets !== closeBrackets) return false;
     return true;
-  }
-
-  private parseFollowupSeed(seed: string): string[] {
-    try {
-      const parsed = JSON.parse(seed) as unknown;
-      if (Array.isArray(parsed)) return parsed.filter((item) => typeof item === 'string') as string[];
-      return [seed];
-    } catch {
-      return [seed];
-    }
   }
 
   private extractProspectSlots(utterance: string): {
