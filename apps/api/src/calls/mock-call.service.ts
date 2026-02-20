@@ -271,6 +271,8 @@ export class MockCallService implements OnApplicationBootstrap {
             userSpeechStartedAt = null;
             break;
           }
+          repHasSpoken = true;
+          scheduleResponseKick();
           break;
         }
 

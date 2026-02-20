@@ -496,9 +496,10 @@ export class EngineService implements OnModuleDestroy {
     }
 
     this.clearSilenceTimer(state);
+    const silenceMs = state.context?.callMode === 'MOCK' ? 1700 : 1000;
     state.prospectSilenceTimer = setTimeout(() => {
       this.finalizeProspectUtterance(callId, state, 'prospect_silence');
-    }, 1000);
+    }, silenceMs);
   }
 
   stop(callId: string) {
