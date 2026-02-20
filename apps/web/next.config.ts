@@ -17,6 +17,7 @@ const nextConfig: NextConfig = {
   transpilePackages: ['@live-sales-coach/shared'],
   outputFileTracingRoot: path.join(__dirname, '../../'),
   output: 'standalone',
+  distDir: process.env['NODE_ENV'] === 'development' ? '.next-dev' : '.next',
   env: {
     NEXT_PUBLIC_API_URL: apiBaseUrl || (process.env['NODE_ENV'] === 'production' ? '' : 'http://localhost:3001'),
     NEXT_PUBLIC_APP_BASE_URL: appBaseUrl,
