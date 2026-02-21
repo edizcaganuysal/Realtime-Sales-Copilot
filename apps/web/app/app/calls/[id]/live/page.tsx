@@ -352,6 +352,7 @@ export default function LiveCallPage() {
   const [productsSaving, setProductsSaving] = useState(false);
   const [productsError, setProductsError] = useState('');
   const [debugPayload, setDebugPayload] = useState<DebugPayload | null>(null);
+  const [awaitingTurnPrimary, setAwaitingTurnPrimary] = useState(false);
 
   const socketRef = useRef<Socket | null>(null);
   const seqRef = useRef(0);
@@ -437,6 +438,7 @@ export default function LiveCallPage() {
       }
       cardShownForTurnRef.current = true;
       setListeningMode(false);
+      setAwaitingTurnPrimary(false);
       setSuggestion(clean);
     },
     [normalizePrimary],
@@ -465,6 +467,7 @@ export default function LiveCallPage() {
     setStrictListening(true);
     setListeningMode(true);
     cardShownForTurnRef.current = false;
+    setAwaitingTurnPrimary(true);
     pendingPrimaryRef.current = null;
     pendingMomentRef.current = null;
     pendingNudgesRef.current = null;
@@ -502,6 +505,7 @@ export default function LiveCallPage() {
       clearUnlockTimer();
       strictListeningRef.current = false;
       setStrictListening(false);
+      setAwaitingTurnPrimary(false);
       pendingPrimaryRef.current = null;
       pendingMomentRef.current = null;
       pendingNudgesRef.current = null;
@@ -513,6 +517,7 @@ export default function LiveCallPage() {
         shownPrimaryKeysRef.current.add(normalizePrimary(opener));
         setSuggestion(opener);
         setListeningMode(false);
+        setAwaitingTurnPrimary(false);
       } else {
         openerRef.current = null;
       }
@@ -936,7 +941,9 @@ export default function LiveCallPage() {
               </div>
             </div>
             <p className="min-h-[66px] text-lg font-medium leading-relaxed text-white">
-              {isProspectTalking ? 'Listening...' : suggestion ?? 'Preparing your opening line...'}
+              {isProspectTalking || awaitingTurnPrimary
+                ? 'Listening...'
+                : suggestion ?? 'Preparing your opening line...'}
             </p>
           </div>
 
