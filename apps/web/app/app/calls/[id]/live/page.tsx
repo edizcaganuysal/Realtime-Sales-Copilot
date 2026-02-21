@@ -95,6 +95,7 @@ function useMockAudio(callId: string, isMock: boolean, isActive: boolean) {
   const ctxRef = useRef<AudioContext | null>(null);
   const [micActive, setMicActive] = useState(false);
   const [mockReady, setMockReady] = useState(false);
+  const [remoteTalking, setRemoteTalking] = useState(false);
 
   const audioQueueRef = useRef<Float32Array[]>([]);
   const isPlayingRef = useRef(false);
@@ -104,6 +105,7 @@ function useMockAudio(callId: string, isMock: boolean, isActive: boolean) {
     const ctx = ctxRef.current;
     if (!ctx || audioQueueRef.current.length === 0) {
       isPlayingRef.current = false;
+      setRemoteTalking(false);
       return;
     }
 
@@ -112,8 +114,10 @@ function useMockAudio(callId: string, isMock: boolean, isActive: boolean) {
     if (!chunk) {
       isPlayingRef.current = false;
       remoteAudioUntilRef.current = Math.max(remoteAudioUntilRef.current, Date.now() + 120);
+      setRemoteTalking(false);
       return;
     }
+    setRemoteTalking(true);
     const chunkDurationMs = Math.ceil((chunk.length / 24000) * 1000);
     remoteAudioUntilRef.current = Math.max(
       remoteAudioUntilRef.current,
@@ -253,10 +257,11 @@ function useMockAudio(callId: string, isMock: boolean, isActive: boolean) {
       isPlayingRef.current = false;
       setMicActive(false);
       setMockReady(false);
+      setRemoteTalking(false);
     };
   }, [callId, enqueueAudio, isActive, isMock]);
 
-  return { micActive, mockReady };
+  return { micActive, mockReady, remoteTalking };
 }
 
 const NUDGE_LABELS: Record<string, string> = {
@@ -347,13 +352,14 @@ export default function LiveCallPage() {
   const cardShownForTurnRef = useRef(true);
   const strictListeningRef = useRef(false);
   const unlockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const remoteTalkingRef = useRef(false);
   const [strictListening, setStrictListening] = useState(false);
 
   const timer = useTimer(call?.startedAt ?? null);
   const isMock = call?.mode === 'MOCK';
   const isActive = callStatus !== 'INITIATED';
   const debugEnabled = searchParams.get('debug') === '1';
-  const { micActive, mockReady } = useMockAudio(id, isMock, isActive);
+  const { micActive, mockReady, remoteTalking } = useMockAudio(id, isMock, isActive);
 
   const availableProducts = call?.availableProducts ?? [];
   const filteredProducts = useMemo(() => {
@@ -375,12 +381,19 @@ export default function LiveCallPage() {
 
   const topNudges = nudges.slice(0, 3);
   const isProspectTalking =
-    strictListening || prospectSpeaking || partialProspectText.trim().length > 0;
+    strictListening ||
+    prospectSpeaking ||
+    partialProspectText.trim().length > 0 ||
+    remoteTalking;
   const isListening = isProspectTalking || listeningMode;
 
   useEffect(() => {
     suggestionRef.current = suggestion;
   }, [suggestion]);
+
+  useEffect(() => {
+    remoteTalkingRef.current = remoteTalking;
+  }, [remoteTalking]);
 
   const normalizePrimary = useCallback((text: string) => {
     return text.replace(/\s+/g, ' ').trim().toLowerCase();
@@ -397,6 +410,7 @@ export default function LiveCallPage() {
       const clean = candidate.replace(/\s+/g, ' ').trim();
       if (!clean) return;
       if (strictListeningRef.current) return;
+      if (remoteTalkingRef.current) return;
       if (cardShownForTurnRef.current) return;
       const key = normalizePrimary(clean);
       if (!key) return;
@@ -447,6 +461,10 @@ export default function LiveCallPage() {
       unlockTimerRef.current = null;
       if (prospectSpeakingRef.current) return;
       if (partialProspectRef.current.trim().length > 0) return;
+      if (remoteTalkingRef.current) {
+        scheduleStrictListeningRelease();
+        return;
+      }
       strictListeningRef.current = false;
       setStrictListening(false);
       flushPendingCoachUi();
@@ -473,6 +491,7 @@ export default function LiveCallPage() {
       pendingMomentRef.current = null;
       pendingNudgesRef.current = null;
       partialProspectRef.current = '';
+      remoteTalkingRef.current = false;
       if (typeof data.preparedOpenerText === 'string' && data.preparedOpenerText.trim().length > 0) {
         const opener = data.preparedOpenerText.trim();
         openerRef.current = opener;
@@ -587,7 +606,12 @@ export default function LiveCallPage() {
       if (nextPrimary === suggestionRef.current) return;
       const opener = openerRef.current;
       if (opener && repTurnCountRef.current > 0 && nextPrimary === opener) return;
-      if (strictListeningRef.current || prospectSpeakingRef.current || partialProspectRef.current.trim().length > 0) {
+      if (
+        strictListeningRef.current ||
+        prospectSpeakingRef.current ||
+        partialProspectRef.current.trim().length > 0 ||
+        remoteTalkingRef.current
+      ) {
         if (!pendingPrimaryRef.current) {
           pendingPrimaryRef.current = nextPrimary;
         }
@@ -598,7 +622,12 @@ export default function LiveCallPage() {
 
     socket.on('engine.nudges', (data: { nudges: string[] }) => {
       const nextNudges = parseNudges(data.nudges ?? []);
-      if (strictListeningRef.current || prospectSpeakingRef.current || partialProspectRef.current.trim().length > 0) {
+      if (
+        strictListeningRef.current ||
+        prospectSpeakingRef.current ||
+        partialProspectRef.current.trim().length > 0 ||
+        remoteTalkingRef.current
+      ) {
         pendingNudgesRef.current = nextNudges;
         return;
       }
@@ -607,7 +636,12 @@ export default function LiveCallPage() {
 
     socket.on('engine.moment', (data: { tag?: string }) => {
       if (!data?.tag) return;
-      if (strictListeningRef.current || prospectSpeakingRef.current || partialProspectRef.current.trim().length > 0) {
+      if (
+        strictListeningRef.current ||
+        prospectSpeakingRef.current ||
+        partialProspectRef.current.trim().length > 0 ||
+        remoteTalkingRef.current
+      ) {
         pendingMomentRef.current = data.tag;
         return;
       }
