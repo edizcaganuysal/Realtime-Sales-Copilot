@@ -125,6 +125,7 @@ export class MockCallService implements OnApplicationBootstrap {
     let responseActive = false;
     let assistantAudioActive = false;
     let assistantAudioTimer: ReturnType<typeof setTimeout> | null = null;
+    let responseDoneFallbackTimer: ReturnType<typeof setTimeout> | null = null;
     let lastProspectFinalAt = 0;
     let lastProspectFinalText = '';
     let lastFinalTsMs = 0;
@@ -146,6 +147,51 @@ export class MockCallService implements OnApplicationBootstrap {
       if (!assistantAudioTimer) return;
       clearTimeout(assistantAudioTimer);
       assistantAudioTimer = null;
+    };
+    const clearResponseDoneFallbackTimer = () => {
+      if (!responseDoneFallbackTimer) return;
+      clearTimeout(responseDoneFallbackTimer);
+      responseDoneFallbackTimer = null;
+    };
+    const normalizeFinalText = (value: string) => {
+      const cleaned = value.replace(/\s+/g, ' ').trim();
+      if (!cleaned) return '';
+      const lastPunctuation = Math.max(
+        cleaned.lastIndexOf('.'),
+        cleaned.lastIndexOf('!'),
+        cleaned.lastIndexOf('?'),
+      );
+      if (lastPunctuation >= 0) {
+        return cleaned.slice(0, lastPunctuation + 1).trim();
+      }
+      return '';
+    };
+    const emitProspectFinal = (rawText: string, tsCandidate: number) => {
+      const finalText = normalizeFinalText(rawText);
+      if (!finalText) return;
+      const tsMs = nextFinalTs(tsCandidate);
+      aiSpeechStartedAt = null;
+      responseActive = false;
+      assistantAudioActive = false;
+      clearAssistantAudioTimer();
+      lastProspectFinalAt = tsMs;
+      lastProspectFinalText = finalText;
+      this.gateway.emitToCall(callId, 'transcript.final', {
+        speaker: 'PROSPECT',
+        text: finalText,
+        tsMs,
+        isFinal: true,
+      });
+      this.engineService.pushTranscript(callId, 'PROSPECT', finalText);
+      this.db.insert(schema.callTranscript).values({
+        callId,
+        tsMs,
+        speaker: 'PROSPECT',
+        text: finalText,
+        isFinal: true,
+      }).catch((err: Error) =>
+        this.logger.error(`Failed to persist AI transcript: ${err.message}`),
+      );
     };
     const markAssistantAudioActive = () => {
       assistantAudioActive = true;
@@ -325,35 +371,13 @@ export class MockCallService implements OnApplicationBootstrap {
             aiSpeechStartedAt = null;
             break;
           }
-          // Final AI transcript
+          clearResponseDoneFallbackTimer();
           const text = event.transcript as string;
-          const finalText = (text?.trim() || partialAiText.trim());
+          const finalText = text?.trim() || partialAiText.trim();
           partialAiText = '';
           if (finalText) {
             clearResponseKickTimer();
-            const tsMs = nextFinalTs(aiSpeechStartedAt ?? Date.now());
-            aiSpeechStartedAt = null;
-            responseActive = false;
-            assistantAudioActive = false;
-            clearAssistantAudioTimer();
-            lastProspectFinalAt = tsMs;
-            lastProspectFinalText = finalText;
-            this.gateway.emitToCall(callId, 'transcript.final', {
-              speaker: 'PROSPECT',
-              text: finalText,
-              tsMs,
-              isFinal: true,
-            });
-            this.engineService.pushTranscript(callId, 'PROSPECT', finalText);
-            this.db.insert(schema.callTranscript).values({
-              callId,
-              tsMs,
-              speaker: 'PROSPECT',
-              text: finalText,
-              isFinal: true,
-            }).catch((err: Error) =>
-              this.logger.error(`Failed to persist AI transcript: ${err.message}`),
-            );
+            emitProspectFinal(finalText, aiSpeechStartedAt ?? Date.now());
           }
           break;
         }
@@ -394,29 +418,17 @@ export class MockCallService implements OnApplicationBootstrap {
           responseActive = false;
           assistantAudioActive = false;
           clearAssistantAudioTimer();
+          clearResponseDoneFallbackTimer();
           if (partialAiText.trim().length > 0) {
-            const finalText = partialAiText.trim();
-            partialAiText = '';
-            const tsMs = nextFinalTs(aiSpeechStartedAt ?? Date.now());
-            aiSpeechStartedAt = null;
-            lastProspectFinalAt = tsMs;
-            lastProspectFinalText = finalText;
-            this.gateway.emitToCall(callId, 'transcript.final', {
-              speaker: 'PROSPECT',
-              text: finalText,
-              tsMs,
-              isFinal: true,
-            });
-            this.engineService.pushTranscript(callId, 'PROSPECT', finalText);
-            this.db.insert(schema.callTranscript).values({
-              callId,
-              tsMs,
-              speaker: 'PROSPECT',
-              text: finalText,
-              isFinal: true,
-            }).catch((err: Error) =>
-              this.logger.error(`Failed to persist AI transcript: ${err.message}`),
-            );
+            const fallbackText = partialAiText.trim();
+            const fallbackTs = aiSpeechStartedAt ?? Date.now();
+            responseDoneFallbackTimer = setTimeout(() => {
+              responseDoneFallbackTimer = null;
+              if (!partialAiText.trim()) return;
+              const textToEmit = partialAiText.trim() || fallbackText;
+              partialAiText = '';
+              emitProspectFinal(textToEmit, fallbackTs);
+            }, 320);
           }
           break;
         }
@@ -425,6 +437,7 @@ export class MockCallService implements OnApplicationBootstrap {
           responseActive = false;
           assistantAudioActive = false;
           clearAssistantAudioTimer();
+          clearResponseDoneFallbackTimer();
           const errPayload =
             event.error && typeof event.error === 'object'
               ? (event.error as Record<string, unknown>)
@@ -452,6 +465,7 @@ export class MockCallService implements OnApplicationBootstrap {
       responseActive = false;
       assistantAudioActive = false;
       clearAssistantAudioTimer();
+      clearResponseDoneFallbackTimer();
       if (responseKickTimer) {
         clearTimeout(responseKickTimer);
         responseKickTimer = null;
@@ -463,6 +477,7 @@ export class MockCallService implements OnApplicationBootstrap {
       responseActive = false;
       assistantAudioActive = false;
       clearAssistantAudioTimer();
+      clearResponseDoneFallbackTimer();
       if (responseKickTimer) {
         clearTimeout(responseKickTimer);
         responseKickTimer = null;
@@ -489,6 +504,7 @@ export class MockCallService implements OnApplicationBootstrap {
       this.logger.log(`Mock stream browser WS closed — call ${callId}`);
       clearResponseKickTimer();
       clearAssistantAudioTimer();
+      clearResponseDoneFallbackTimer();
       openaiWs.close();
     });
 
@@ -496,6 +512,7 @@ export class MockCallService implements OnApplicationBootstrap {
       this.logger.error(`Mock stream browser WS error — call ${callId}: ${err.message}`);
       clearResponseKickTimer();
       clearAssistantAudioTimer();
+      clearResponseDoneFallbackTimer();
       openaiWs.close();
     });
   }

@@ -100,12 +100,27 @@ function useMockAudio(callId: string, isMock: boolean, isActive: boolean) {
   const audioQueueRef = useRef<Float32Array[]>([]);
   const isPlayingRef = useRef(false);
   const remoteAudioUntilRef = useRef(0);
+  const remoteTalkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearRemoteTalkingTimer = useCallback(() => {
+    if (!remoteTalkingTimerRef.current) return;
+    clearTimeout(remoteTalkingTimerRef.current);
+    remoteTalkingTimerRef.current = null;
+  }, []);
+
+  const bumpRemoteTalking = useCallback(() => {
+    setRemoteTalking(true);
+    clearRemoteTalkingTimer();
+    remoteTalkingTimerRef.current = setTimeout(() => {
+      remoteTalkingTimerRef.current = null;
+      setRemoteTalking(false);
+    }, 480);
+  }, [clearRemoteTalkingTimer]);
 
   const playNextChunk = useCallback(() => {
     const ctx = ctxRef.current;
     if (!ctx || audioQueueRef.current.length === 0) {
       isPlayingRef.current = false;
-      setRemoteTalking(false);
       return;
     }
 
@@ -114,10 +129,9 @@ function useMockAudio(callId: string, isMock: boolean, isActive: boolean) {
     if (!chunk) {
       isPlayingRef.current = false;
       remoteAudioUntilRef.current = Math.max(remoteAudioUntilRef.current, Date.now() + 120);
-      setRemoteTalking(false);
       return;
     }
-    setRemoteTalking(true);
+    bumpRemoteTalking();
     const chunkDurationMs = Math.ceil((chunk.length / 24000) * 1000);
     remoteAudioUntilRef.current = Math.max(
       remoteAudioUntilRef.current,
@@ -149,7 +163,7 @@ function useMockAudio(callId: string, isMock: boolean, isActive: boolean) {
         playNextChunk();
       }
     },
-    [playNextChunk],
+    [bumpRemoteTalking, playNextChunk],
   );
 
   useEffect(() => {
@@ -255,11 +269,12 @@ function useMockAudio(callId: string, isMock: boolean, isActive: boolean) {
       wsRef.current?.close();
       audioQueueRef.current = [];
       isPlayingRef.current = false;
+      clearRemoteTalkingTimer();
       setMicActive(false);
       setMockReady(false);
       setRemoteTalking(false);
     };
-  }, [callId, enqueueAudio, isActive, isMock]);
+  }, [callId, clearRemoteTalkingTimer, enqueueAudio, isActive, isMock]);
 
   return { micActive, mockReady, remoteTalking };
 }
