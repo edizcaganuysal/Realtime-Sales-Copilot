@@ -44,6 +44,7 @@
     "cookie-parser": "^1.4.7",
     "dotenv": "^16.4.5",
     "drizzle-orm": "^0.36.4",
+    "express": "^4.21.2",
     "openai": "^6.22.0",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
