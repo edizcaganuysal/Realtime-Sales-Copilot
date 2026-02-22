@@ -29,9 +29,23 @@ export async function POST(request: Request) {
       signal: AbortSignal.timeout(10_000),
     });
   } catch (error) {
-    console.error(`[auth.login:${traceId}] Failed to reach API at ${loginUrl}`, error);
+    const reason =
+      error instanceof DOMException && error.name === 'TimeoutError'
+        ? 'timeout'
+        : error instanceof Error
+          ? error.name
+          : 'unknown';
+    console.error(
+      `[auth.login:${traceId}] Failed to reach API at ${loginUrl} reason=${reason}`,
+      error,
+    );
     return NextResponse.json(
-      { message: getFriendlyApiUnavailableMessage(API), traceId },
+      {
+        message: getFriendlyApiUnavailableMessage(API),
+        traceId,
+        reason,
+        apiBaseUrl: API,
+      },
       { status: 503 },
     );
   }
@@ -58,6 +72,7 @@ export async function POST(request: Request) {
           message: 'Login service is temporarily unavailable. Please try again shortly.',
           traceId,
           upstreamStatus: res.status,
+          apiBaseUrl: API,
         },
         { status: 503 },
       );

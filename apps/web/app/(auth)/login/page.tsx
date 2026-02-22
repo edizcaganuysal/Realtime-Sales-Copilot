@@ -44,14 +44,49 @@ export default function LoginPage() {
           message?: string;
           traceId?: string;
           upstreamStatus?: number;
+          reason?: string;
+          apiBaseUrl?: string;
         };
         const message = data.message ?? 'Invalid credentials';
         const upstream =
           typeof data.upstreamStatus === 'number'
             ? ` (upstream ${data.upstreamStatus})`
             : '';
+        const reason = typeof data.reason === 'string' ? ` [reason ${data.reason}]` : '';
+        const apiBase =
+          typeof data.apiBaseUrl === 'string' ? ` [api ${data.apiBaseUrl}]` : '';
         const trace = typeof data.traceId === 'string' ? ` [trace ${data.traceId}]` : '';
-        setError(`${message}${upstream}${trace}`);
+        let debugSuffix = `${upstream}${reason}${apiBase}${trace}`;
+        if (res.status >= 500) {
+          try {
+            const probe = await fetch('/api/debug/upstream', { cache: 'no-store' });
+            const probeData = (await probe.json().catch(() => null)) as
+              | {
+                  ok?: boolean;
+                  status?: number;
+                  latencyMs?: number;
+                  apiBaseUrl?: string;
+                }
+              | null;
+            if (probeData) {
+              const probeStatus =
+                typeof probeData.status === 'number' ? probeData.status : probe.status;
+              const probeLatency =
+                typeof probeData.latencyMs === 'number' ? `${probeData.latencyMs}ms` : 'n/a';
+              const probeApi =
+                typeof probeData.apiBaseUrl === 'string' ? probeData.apiBaseUrl : 'n/a';
+              debugSuffix +=
+                ` [probe status ${probeStatus}] [probe latency ${probeLatency}]` +
+                ` [probe api ${probeApi}]`;
+            }
+          } catch (probeError) {
+            console.error('Debug upstream probe failed', probeError);
+            debugSuffix += ' [probe failed]';
+          }
+        }
+        const full = `${message}${debugSuffix}`;
+        console.error('Login failed', { status: res.status, body: data, full });
+        setError(full);
         setLoading(false);
         return;
       }
