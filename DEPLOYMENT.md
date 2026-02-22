@@ -5,16 +5,36 @@
 Create two Railway services from this repository:
 
 1. `api` service
-- Root Directory: `apps/api`
-- Build Command: `pnpm build`
-- Start Command: `pnpm start`
+- Root Directory: `/` (repository root)
+- Install Command: `pnpm install --frozen-lockfile`
+- Build Command: `pnpm --filter @live-sales-coach/api build`
+- Start Command: `pnpm --filter @live-sales-coach/api start`
 
 2. `web` service
-- Root Directory: `apps/web`
-- Build Command: `pnpm build`
-- Start Command: `pnpm start`
+- Root Directory: `/` (repository root)
+- Install Command: `pnpm install --frozen-lockfile`
+- Build Command: `pnpm --filter @live-sales-coach/web build`
+- Start Command: `pnpm --filter @live-sales-coach/web start`
 
 Deploy API first, then deploy web.
+
+Recommended shared Railway variable (both services):
+
+- `NIXPACKS_NODE_VERSION=22`
+
+## Database Migrations
+
+Run once after the API service has `DATABASE_URL` configured:
+
+```bash
+pnpm --filter @live-sales-coach/api db:migrate
+```
+
+Optional first-time seed:
+
+```bash
+pnpm --filter @live-sales-coach/api db:seed
+```
 
 ## Environment Variables
 
@@ -33,10 +53,14 @@ Required:
 Optional:
 
 - `JWT_EXPIRES_IN=7d`
+- `DATABASE_SSL=true` (recommended for external managed Postgres)
+- `PG_POOL_MAX=10`
+- `PG_IDLE_TIMEOUT_MS=30000`
+- `PG_CONNECT_TIMEOUT_MS=10000`
 - `OPENAI_API_KEY=<optional>`
 - `LLM_API_KEY=<optional>`
 - `LLM_PROVIDER=openai`
-- `LLM_MODEL=gpt-4o`
+- `LLM_MODEL=gpt-5-mini`
 - `DEEPGRAM_API_KEY=<optional>`
 - `STT_API_KEY=<optional>`
 - `STT_PROVIDER=deepgram`
@@ -66,6 +90,9 @@ Optional:
 
 - `NEXT_PUBLIC_WS_URL=wss://<your-api-domain>`
 - `NEXT_PUBLIC_APP_NAME=Sales AI`
+- `GOOGLE_CLIENT_ID=<optional>`
+- `GOOGLE_CLIENT_SECRET=<optional>`
+- `GOOGLE_OAUTH_REDIRECT_URI=<optional>`
 
 Notes:
 
