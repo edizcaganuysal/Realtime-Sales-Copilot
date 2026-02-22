@@ -84,7 +84,38 @@ export async function POST(request: Request) {
     );
   }
 
+  const okContentType = res.headers.get('content-type') ?? '';
+  if (!okContentType.includes('application/json')) {
+    const bodyPreview = (await res.text().catch(() => '')).slice(0, 220);
+    console.error(
+      `[auth.login:${traceId}] Upstream success with non-JSON response from ${loginUrl}` +
+        ` contentType=${okContentType} bodyPreview=${JSON.stringify(bodyPreview)}`,
+    );
+    return NextResponse.json(
+      {
+        message: 'Upstream login endpoint returned an unexpected response format.',
+        traceId,
+        apiBaseUrl: API,
+      },
+      { status: 503 },
+    );
+  }
+
   const data = await res.json();
+  if (!data || typeof data !== 'object' || typeof (data as { token?: unknown }).token !== 'string') {
+    console.error(
+      `[auth.login:${traceId}] Upstream success missing token from ${loginUrl}` +
+        ` bodyPreview=${JSON.stringify(String(JSON.stringify(data)).slice(0, 220))}`,
+    );
+    return NextResponse.json(
+      {
+        message: 'Upstream login endpoint returned an invalid payload.',
+        traceId,
+        apiBaseUrl: API,
+      },
+      { status: 503 },
+    );
+  }
   const response = NextResponse.json(data);
   response.cookies.set('access_token', data.token, {
     httpOnly: true,
