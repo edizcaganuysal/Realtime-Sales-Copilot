@@ -1,7 +1,12 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
+import {
+  getApiBaseUrl,
+  getFriendlyApiUnavailableMessage,
+  getFriendlyConfigMessage,
+} from '@/lib/server-env';
 
-const API = process.env['API_BASE_URL'] ?? process.env['NEXT_PUBLIC_API_URL'];
+const API = getApiBaseUrl();
 
 async function token() {
   const store = await cookies();
@@ -9,24 +14,52 @@ async function token() {
 }
 
 export async function GET() {
-  const res = await fetch(`${API}/calls`, {
-    headers: { Authorization: `Bearer ${await token()}` },
-    cache: 'no-store',
-  });
-  const data = await res.json();
+  if (!API) {
+    return NextResponse.json({ message: getFriendlyConfigMessage() }, { status: 500 });
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(`${API}/calls`, {
+      headers: { Authorization: `Bearer ${await token()}` },
+      cache: 'no-store',
+    });
+  } catch (error) {
+    console.error('Failed to reach API for calls list', error);
+    return NextResponse.json(
+      { message: getFriendlyApiUnavailableMessage(API) },
+      { status: 503 },
+    );
+  }
+
+  const data = await res.json().catch(() => ({ message: 'Unexpected response from API' }));
   return NextResponse.json(data, { status: res.status });
 }
 
 export async function POST(request: Request) {
+  if (!API) {
+    return NextResponse.json({ message: getFriendlyConfigMessage() }, { status: 500 });
+  }
+
   const body = await request.json();
-  const res = await fetch(`${API}/calls`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${await token()}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
-  const data = await res.json();
+  let res: Response;
+  try {
+    res = await fetch(`${API}/calls`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${await token()}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+  } catch (error) {
+    console.error('Failed to reach API for call creation', error);
+    return NextResponse.json(
+      { message: getFriendlyApiUnavailableMessage(API) },
+      { status: 503 },
+    );
+  }
+
+  const data = await res.json().catch(() => ({ message: 'Unexpected response from API' }));
   return NextResponse.json(data, { status: res.status });
 }

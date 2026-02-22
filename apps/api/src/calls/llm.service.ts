@@ -1,8 +1,18 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { FAST_CALL_MODELS, type FastCallModel } from '@live-sales-coach/shared';
+
+type ChatOptions = {
+  model?: string;
+  jsonMode?: boolean;
+  temperature?: number;
+  maxTokens?: number;
+};
 
 @Injectable()
 export class LlmService implements OnModuleInit {
   private readonly logger = new Logger(LlmService.name);
+  private readonly fastModelSet = new Set<string>(FAST_CALL_MODELS);
+  private readonly unavailableFastModels = new Set<FastCallModel>();
 
   private readonly provider = (
     process.env['LLM_PROVIDER'] ??
@@ -10,6 +20,11 @@ export class LlmService implements OnModuleInit {
   ).toLowerCase();
   private readonly apiKey = process.env['LLM_API_KEY'] ?? process.env['OPENAI_API_KEY'] ?? '';
   readonly model = process.env['LLM_MODEL'] ?? 'gpt-4o';
+  readonly defaultFastModel: FastCallModel = this.fastModelSet.has(
+    process.env['LLM_MODEL'] ?? '',
+  )
+    ? (process.env['LLM_MODEL'] as FastCallModel)
+    : 'gpt-5-mini';
   private readonly baseUrl = process.env['LLM_BASE_URL'] || undefined;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -51,34 +66,104 @@ export class LlmService implements OnModuleInit {
     return this.client;
   }
 
-  /**
-   * Fast chat completion using gpt-4o-mini for real-time coaching.
-   * Uses low max_tokens and high temperature for snappy responses.
-   */
-  async chatFast(systemPrompt: string, userPrompt: string): Promise<string> {
+  private resolveFastModel(candidate?: string): FastCallModel {
+    const ordered: FastCallModel[] = [];
+    if (candidate && this.fastModelSet.has(candidate)) {
+      ordered.push(candidate as FastCallModel);
+    }
+    if (!ordered.includes(this.defaultFastModel)) {
+      ordered.push(this.defaultFastModel);
+    }
+    for (const model of FAST_CALL_MODELS) {
+      if (!ordered.includes(model)) {
+        ordered.push(model);
+      }
+    }
+    const available = ordered.find((model) => !this.unavailableFastModels.has(model));
+    if (available) {
+      return available;
+    }
+    return this.defaultFastModel;
+  }
+
+  private isModelSelectionError(err: unknown): boolean {
+    if (!err || typeof err !== 'object') return false;
+    const error = err as {
+      code?: string;
+      message?: string;
+      error?: { code?: string; message?: string };
+    };
+    const code = `${error.code ?? error.error?.code ?? ''}`.toLowerCase();
+    const message = `${error.message ?? error.error?.message ?? ''}`.toLowerCase();
+    if (code === 'model_not_found') return true;
+    if (message.includes('model') && (message.includes('not found') || message.includes('not available'))) {
+      return true;
+    }
+    if (message.includes('access') && message.includes('model')) {
+      return true;
+    }
+    return false;
+  }
+
+  private async runFastCompletion(
+    model: FastCallModel,
+    systemPrompt: string,
+    userPrompt: string,
+    options: ChatOptions,
+  ): Promise<string> {
     const client = this.getClient();
     const resp = await client.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
       ],
-      temperature: 0.35,
-      max_tokens: 512,
+      temperature: options.temperature ?? 0.35,
+      max_tokens: options.maxTokens ?? 512,
+      ...(options.jsonMode ? { response_format: { type: 'json_object' } } : {}),
     });
     return ((resp.choices[0]?.message?.content as string | null | undefined) ?? '').trim();
   }
 
-  async chat(systemPrompt: string, userPrompt: string): Promise<string> {
+  /**
+   * Fast chat completion using mini-class GPT models for real-time coaching.
+   * Uses low max_tokens and high temperature for snappy responses.
+   */
+  async chatFast(
+    systemPrompt: string,
+    userPrompt: string,
+    options: ChatOptions = {},
+  ): Promise<string> {
+    const selected = this.resolveFastModel(options.model);
+    try {
+      return await this.runFastCompletion(selected, systemPrompt, userPrompt, options);
+    } catch (err) {
+      if (!this.isModelSelectionError(err)) throw err;
+      this.unavailableFastModels.add(selected);
+      const fallback = this.resolveFastModel(undefined);
+      if (fallback === selected) throw err;
+      this.logger.warn(
+        `Fast model "${selected}" unavailable. Retrying with "${fallback}".`,
+      );
+      return this.runFastCompletion(fallback, systemPrompt, userPrompt, options);
+    }
+  }
+
+  async chat(
+    systemPrompt: string,
+    userPrompt: string,
+    options: ChatOptions = {},
+  ): Promise<string> {
     const client = this.getClient();
     const resp = await client.chat.completions.create({
-      model: this.model,
+      model: options.model ?? this.model,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
       ],
-      temperature: 0.4,
-      max_tokens: 512,
+      temperature: options.temperature ?? 0.4,
+      max_tokens: options.maxTokens ?? 512,
+      ...(options.jsonMode ? { response_format: { type: 'json_object' } } : {}),
     });
     return ((resp.choices[0]?.message?.content as string | null | undefined) ?? '').trim();
   }

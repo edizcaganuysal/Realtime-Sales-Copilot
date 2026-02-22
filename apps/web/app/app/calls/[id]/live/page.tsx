@@ -96,6 +96,8 @@ function useMockAudio(callId: string, isMock: boolean, isActive: boolean) {
   const [micActive, setMicActive] = useState(false);
   const [mockReady, setMockReady] = useState(false);
   const [remoteTalking, setRemoteTalking] = useState(false);
+  const [assistantSpeaking, setAssistantSpeaking] = useState(false);
+  const assistantSpeakingRef = useRef(false);
 
   const audioQueueRef = useRef<Float32Array[]>([]);
   const isPlayingRef = useRef(false);
@@ -114,8 +116,13 @@ function useMockAudio(callId: string, isMock: boolean, isActive: boolean) {
     remoteTalkingTimerRef.current = setTimeout(() => {
       remoteTalkingTimerRef.current = null;
       setRemoteTalking(false);
-    }, 480);
+    }, 1600);
   }, [clearRemoteTalkingTimer]);
+
+  const setAssistantSpeakingState = useCallback((speaking: boolean) => {
+    assistantSpeakingRef.current = speaking;
+    setAssistantSpeaking(speaking);
+  }, []);
 
   const playNextChunk = useCallback(() => {
     const ctx = ctxRef.current;
@@ -128,14 +135,14 @@ function useMockAudio(callId: string, isMock: boolean, isActive: boolean) {
     const chunk = audioQueueRef.current.shift();
     if (!chunk) {
       isPlayingRef.current = false;
-      remoteAudioUntilRef.current = Math.max(remoteAudioUntilRef.current, Date.now() + 120);
+      remoteAudioUntilRef.current = Math.max(remoteAudioUntilRef.current, Date.now() + 800);
       return;
     }
     bumpRemoteTalking();
     const chunkDurationMs = Math.ceil((chunk.length / 24000) * 1000);
     remoteAudioUntilRef.current = Math.max(
       remoteAudioUntilRef.current,
-      Date.now() + chunkDurationMs + 120,
+      Date.now() + chunkDurationMs + 1200,
     );
 
     const buffer = ctx.createBuffer(1, chunk.length, 24000);
@@ -209,12 +216,21 @@ function useMockAudio(callId: string, isMock: boolean, isActive: boolean) {
         ws.onmessage = (event) => {
           try {
             const msg = JSON.parse(event.data as string) as {
-              type: 'ready' | 'audio' | 'error';
+              type: 'ready' | 'audio' | 'assistant_speaking' | 'error';
               data?: string;
+              speaking?: boolean;
               message?: string;
             };
             if (msg.type === 'ready') {
               setMockReady(true);
+              return;
+            }
+            if (msg.type === 'assistant_speaking') {
+              const speaking = Boolean(msg.speaking);
+              setAssistantSpeakingState(speaking);
+              if (speaking) {
+                setRemoteTalking(true);
+              }
               return;
             }
             if (msg.type === 'audio' && msg.data) {
@@ -235,10 +251,14 @@ function useMockAudio(callId: string, isMock: boolean, isActive: boolean) {
 
         ws.onclose = () => {
           setMockReady(false);
+          setAssistantSpeakingState(false);
+          setRemoteTalking(false);
         };
 
         processor.onaudioprocess = (event) => {
           if (ws.readyState !== WebSocket.OPEN) return;
+          if (assistantSpeakingRef.current) return;
+          if (isPlayingRef.current || audioQueueRef.current.length > 0) return;
           if (Date.now() < remoteAudioUntilRef.current) return;
           const input = event.inputBuffer.getChannelData(0);
           const pcm16 = new Int16Array(input.length);
@@ -272,11 +292,12 @@ function useMockAudio(callId: string, isMock: boolean, isActive: boolean) {
       clearRemoteTalkingTimer();
       setMicActive(false);
       setMockReady(false);
+      setAssistantSpeakingState(false);
       setRemoteTalking(false);
     };
-  }, [callId, clearRemoteTalkingTimer, enqueueAudio, isActive, isMock]);
+  }, [callId, clearRemoteTalkingTimer, enqueueAudio, isActive, isMock, setAssistantSpeakingState]);
 
-  return { micActive, mockReady, remoteTalking };
+  return { micActive, mockReady, remoteTalking, assistantSpeaking };
 }
 
 const NUDGE_LABELS: Record<string, string> = {
@@ -326,11 +347,13 @@ export default function LiveCallPage() {
   const [nudges, setNudges] = useState<string[]>([]);
   const [momentTag, setMomentTag] = useState('Opening');
   const [prospectSpeaking, setProspectSpeaking] = useState(false);
+  const [mockAssistantSpeaking, setMockAssistantSpeaking] = useState(false);
   const [ending, setEnding] = useState(false);
   const [transcriptOpen, setTranscriptOpen] = useState(false);
   const [moreOptionsOpen, setMoreOptionsOpen] = useState(false);
   const [moreOptionsLoading, setMoreOptionsLoading] = useState(false);
   const [moreOptions, setMoreOptions] = useState<string[]>([]);
+  const [cachedMoreOptions, setCachedMoreOptions] = useState<string[]>([]);
   const [contextToast, setContextToast] = useState<ContextToast | null>(null);
   const [contextPanelData, setContextPanelData] = useState<ContextToast | null>(null);
   const [contextPanelOpen, setContextPanelOpen] = useState(false);
@@ -352,16 +375,19 @@ export default function LiveCallPage() {
   const [productsSaving, setProductsSaving] = useState(false);
   const [productsError, setProductsError] = useState('');
   const [debugPayload, setDebugPayload] = useState<DebugPayload | null>(null);
-  const [awaitingTurnPrimary, setAwaitingTurnPrimary] = useState(false);
+  const [, setAwaitingTurnPrimary] = useState(false);
 
   const socketRef = useRef<Socket | null>(null);
   const seqRef = useRef(0);
   const pendingPrimaryRef = useRef<string | null>(null);
   const pendingMomentRef = useRef<string | null>(null);
   const pendingNudgesRef = useRef<string[] | null>(null);
+  const pendingContextRef = useRef<ContextToast | null>(null);
   const prospectSpeakingRef = useRef(false);
+  const mockAssistantSpeakingRef = useRef(false);
   const partialProspectRef = useRef('');
   const suggestionRef = useRef<string | null>(null);
+  const moreOptionsOpenRef = useRef(false);
   const repTurnCountRef = useRef(0);
   const openerRef = useRef<string | null>(null);
   const shownPrimaryKeysRef = useRef<Set<string>>(new Set());
@@ -375,7 +401,11 @@ export default function LiveCallPage() {
   const isMock = call?.mode === 'MOCK';
   const isActive = callStatus !== 'INITIATED';
   const debugEnabled = searchParams.get('debug') === '1';
-  const { micActive, mockReady, remoteTalking } = useMockAudio(id, isMock, isActive);
+  const { micActive, mockReady, remoteTalking, assistantSpeaking } = useMockAudio(
+    id,
+    isMock,
+    isActive,
+  );
 
   const availableProducts = call?.availableProducts ?? [];
   const filteredProducts = useMemo(() => {
@@ -399,6 +429,8 @@ export default function LiveCallPage() {
   const isProspectTalking =
     strictListening ||
     prospectSpeaking ||
+    mockAssistantSpeaking ||
+    assistantSpeaking ||
     partialProspectText.trim().length > 0 ||
     remoteTalking;
   const isListening = isProspectTalking || listeningMode;
@@ -408,8 +440,16 @@ export default function LiveCallPage() {
   }, [suggestion]);
 
   useEffect(() => {
+    moreOptionsOpenRef.current = moreOptionsOpen;
+  }, [moreOptionsOpen]);
+
+  useEffect(() => {
     remoteTalkingRef.current = remoteTalking;
   }, [remoteTalking]);
+
+  useEffect(() => {
+    mockAssistantSpeakingRef.current = mockAssistantSpeaking || assistantSpeaking;
+  }, [assistantSpeaking, mockAssistantSpeaking]);
 
   const normalizePrimary = useCallback((text: string) => {
     return text.replace(/\s+/g, ' ').trim().toLowerCase();
@@ -426,6 +466,7 @@ export default function LiveCallPage() {
       const clean = candidate.replace(/\s+/g, ' ').trim();
       if (!clean) return;
       if (strictListeningRef.current) return;
+      if (mockAssistantSpeakingRef.current) return;
       if (remoteTalkingRef.current) return;
       if (cardShownForTurnRef.current) return;
       const key = normalizePrimary(clean);
@@ -454,6 +495,11 @@ export default function LiveCallPage() {
       setNudges(pendingNudgesRef.current);
       pendingNudgesRef.current = null;
     }
+    if (pendingContextRef.current) {
+      setContextToast(pendingContextRef.current);
+      setContextPanelData(pendingContextRef.current);
+      pendingContextRef.current = null;
+    }
     if (pendingPrimaryRef.current) {
       const queued = pendingPrimaryRef.current;
       pendingPrimaryRef.current = null;
@@ -471,13 +517,19 @@ export default function LiveCallPage() {
     pendingPrimaryRef.current = null;
     pendingMomentRef.current = null;
     pendingNudgesRef.current = null;
+    pendingContextRef.current = null;
   }, [clearUnlockTimer]);
 
   const scheduleStrictListeningRelease = useCallback(() => {
     clearUnlockTimer();
+    const releaseDelayMs = isMock ? 1200 : 160;
     unlockTimerRef.current = setTimeout(() => {
       unlockTimerRef.current = null;
       if (prospectSpeakingRef.current) return;
+      if (mockAssistantSpeakingRef.current) {
+        scheduleStrictListeningRelease();
+        return;
+      }
       if (partialProspectRef.current.trim().length > 0) return;
       if (remoteTalkingRef.current) {
         scheduleStrictListeningRelease();
@@ -485,9 +537,19 @@ export default function LiveCallPage() {
       }
       strictListeningRef.current = false;
       setStrictListening(false);
+      setAwaitingTurnPrimary(false);
       flushPendingCoachUi();
-    }, 160);
-  }, [clearUnlockTimer, flushPendingCoachUi]);
+    }, releaseDelayMs);
+  }, [clearUnlockTimer, flushPendingCoachUi, isMock]);
+
+  useEffect(() => {
+    if (!isMock) return;
+    if (assistantSpeaking) {
+      enterStrictListening();
+      return;
+    }
+    scheduleStrictListeningRelease();
+  }, [assistantSpeaking, enterStrictListening, isMock, scheduleStrictListeningRelease]);
 
   useEffect(() => {
     let active = true;
@@ -509,8 +571,13 @@ export default function LiveCallPage() {
       pendingPrimaryRef.current = null;
       pendingMomentRef.current = null;
       pendingNudgesRef.current = null;
+      pendingContextRef.current = null;
       partialProspectRef.current = '';
       remoteTalkingRef.current = false;
+      mockAssistantSpeakingRef.current = false;
+      setMockAssistantSpeaking(false);
+      setCachedMoreOptions([]);
+      setMoreOptions([]);
       if (typeof data.preparedOpenerText === 'string' && data.preparedOpenerText.trim().length > 0) {
         const opener = data.preparedOpenerText.trim();
         openerRef.current = opener;
@@ -588,6 +655,19 @@ export default function LiveCallPage() {
 
     socket.on('disconnect', () => {
       setConnected(false);
+      mockAssistantSpeakingRef.current = false;
+      setMockAssistantSpeaking(false);
+    });
+
+    socket.on('mock.assistant_speaking', (data: { speaking?: boolean }) => {
+      const speaking = Boolean(data?.speaking);
+      setMockAssistantSpeaking(speaking);
+      mockAssistantSpeakingRef.current = speaking;
+      if (speaking) {
+        enterStrictListening();
+      } else {
+        scheduleStrictListeningRelease();
+      }
     });
 
     socket.on('transcript.partial', (data: TranscriptLine) => {
@@ -616,7 +696,6 @@ export default function LiveCallPage() {
         repTurnCountRef.current += 1;
         pendingPrimaryRef.current = null;
         setListeningMode(true);
-        setSuggestion(null);
       }
     });
 
@@ -628,22 +707,35 @@ export default function LiveCallPage() {
       if (opener && repTurnCountRef.current > 0 && nextPrimary === opener) return;
       if (
         strictListeningRef.current ||
+        mockAssistantSpeakingRef.current ||
         prospectSpeakingRef.current ||
         partialProspectRef.current.trim().length > 0 ||
         remoteTalkingRef.current
       ) {
-        if (!pendingPrimaryRef.current) {
-          pendingPrimaryRef.current = nextPrimary;
-        }
+        pendingPrimaryRef.current = nextPrimary;
         return;
       }
       commitPrimary(nextPrimary);
+    });
+
+    socket.on('engine.suggestions', (data: { suggestions?: string[] }) => {
+      const incoming = (data?.suggestions ?? [])
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0)
+        .slice(0, 3);
+      if (incoming.length === 0) return;
+      const alternatives = incoming.slice(1, 3);
+      setCachedMoreOptions(alternatives);
+      if (moreOptionsOpenRef.current && alternatives.length > 0) {
+        setMoreOptions(alternatives);
+      }
     });
 
     socket.on('engine.nudges', (data: { nudges: string[] }) => {
       const nextNudges = parseNudges(data.nudges ?? []);
       if (
         strictListeningRef.current ||
+        mockAssistantSpeakingRef.current ||
         prospectSpeakingRef.current ||
         partialProspectRef.current.trim().length > 0 ||
         remoteTalkingRef.current
@@ -658,6 +750,7 @@ export default function LiveCallPage() {
       if (!data?.tag) return;
       if (
         strictListeningRef.current ||
+        mockAssistantSpeakingRef.current ||
         prospectSpeakingRef.current ||
         partialProspectRef.current.trim().length > 0 ||
         remoteTalkingRef.current
@@ -678,6 +771,16 @@ export default function LiveCallPage() {
           objection: data.objection ?? null,
           tsMs: Date.now(),
         };
+        if (
+          strictListeningRef.current ||
+          mockAssistantSpeakingRef.current ||
+          prospectSpeakingRef.current ||
+          partialProspectRef.current.trim().length > 0 ||
+          remoteTalkingRef.current
+        ) {
+          pendingContextRef.current = next;
+          return;
+        }
         setContextToast(next);
         setContextPanelData(next);
       },
@@ -699,7 +802,6 @@ export default function LiveCallPage() {
 
     socket.on('engine.primary_consumed', () => {
       setListeningMode(true);
-      setSuggestion(null);
     });
 
     socket.on('engine.debug', (data: DebugPayload) => {
@@ -727,8 +829,9 @@ export default function LiveCallPage() {
 
   const handleMoreOptions = useCallback(async () => {
     setMoreOptionsOpen(true);
-    setMoreOptionsLoading(true);
-    setMoreOptions([]);
+    const seeded = cachedMoreOptions.slice(0, 2);
+    setMoreOptions(seeded);
+    setMoreOptionsLoading(seeded.length === 0);
     const res = await fetch(`/api/calls/${id}/suggestions/more`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -738,9 +841,10 @@ export default function LiveCallPage() {
       const data = (await res.json().catch(() => null)) as { texts?: string[] } | null;
       const next = (data?.texts ?? []).filter((item) => item.trim().length > 0).slice(0, 2);
       setMoreOptions(next);
+      setCachedMoreOptions(next);
     }
     setMoreOptionsLoading(false);
-  }, [id]);
+  }, [cachedMoreOptions, id]);
 
   const openProductsDrawer = useCallback(() => {
     const mode = call?.productsMode === 'SELECTED' ? 'SELECTED' : 'ALL';
@@ -941,9 +1045,7 @@ export default function LiveCallPage() {
               </div>
             </div>
             <p className="min-h-[66px] text-lg font-medium leading-relaxed text-white">
-              {isProspectTalking || awaitingTurnPrimary
-                ? 'Listening...'
-                : suggestion ?? 'Preparing your opening line...'}
+              {isProspectTalking ? 'Listening...' : suggestion ?? 'Preparing your opening line...'}
             </p>
           </div>
 

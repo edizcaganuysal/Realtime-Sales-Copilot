@@ -1,0 +1,1 @@
+2026-02-20 23:36:50 -0500 | branch=main | commit=7c3c419 | note=checkpoint before listening-delay/specificity tuning

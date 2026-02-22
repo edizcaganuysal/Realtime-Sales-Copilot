@@ -125,6 +125,7 @@ export class MockCallService implements OnApplicationBootstrap {
     let responseActive = false;
     let assistantAudioActive = false;
     let assistantAudioTimer: ReturnType<typeof setTimeout> | null = null;
+    let assistantSpeakingBroadcast = false;
     let responseDoneFallbackTimer: ReturnType<typeof setTimeout> | null = null;
     let lastProspectFinalAt = 0;
     let lastProspectFinalText = '';
@@ -153,27 +154,27 @@ export class MockCallService implements OnApplicationBootstrap {
       clearTimeout(responseDoneFallbackTimer);
       responseDoneFallbackTimer = null;
     };
+    const emitAssistantSpeaking = (speaking: boolean) => {
+      if (assistantSpeakingBroadcast === speaking) return;
+      assistantSpeakingBroadcast = speaking;
+      if (browserWs.readyState === WebSocket.OPEN) {
+        browserWs.send(JSON.stringify({ type: 'assistant_speaking', speaking }));
+      }
+      this.gateway.emitToCall(callId, 'mock.assistant_speaking', {
+        speaking,
+        tsMs: Date.now(),
+      });
+    };
     const normalizeFinalText = (value: string) => {
       const cleaned = value.replace(/\s+/g, ' ').trim();
       if (!cleaned) return '';
-      const lastPunctuation = Math.max(
-        cleaned.lastIndexOf('.'),
-        cleaned.lastIndexOf('!'),
-        cleaned.lastIndexOf('?'),
-      );
-      if (lastPunctuation >= 0) {
-        return cleaned.slice(0, lastPunctuation + 1).trim();
-      }
-      return '';
+      return /[.!?]$/.test(cleaned) ? cleaned : `${cleaned}.`;
     };
     const emitProspectFinal = (rawText: string, tsCandidate: number) => {
       const finalText = normalizeFinalText(rawText);
+      aiSpeechStartedAt = null;
       if (!finalText) return;
       const tsMs = nextFinalTs(tsCandidate);
-      aiSpeechStartedAt = null;
-      responseActive = false;
-      assistantAudioActive = false;
-      clearAssistantAudioTimer();
       lastProspectFinalAt = tsMs;
       lastProspectFinalText = finalText;
       this.gateway.emitToCall(callId, 'transcript.final', {
@@ -195,11 +196,13 @@ export class MockCallService implements OnApplicationBootstrap {
     };
     const markAssistantAudioActive = () => {
       assistantAudioActive = true;
+      emitAssistantSpeaking(true);
       clearAssistantAudioTimer();
       assistantAudioTimer = setTimeout(() => {
         assistantAudioActive = false;
         assistantAudioTimer = null;
-      }, 480);
+        emitAssistantSpeaking(false);
+      }, 2800);
     };
     const normalize = (value: string) =>
       value
@@ -236,7 +239,6 @@ export class MockCallService implements OnApplicationBootstrap {
             response: {
               modalities: ['audio', 'text'],
               temperature: 1.05,
-              max_output_tokens: 150,
             },
           }),
         );
@@ -253,13 +255,10 @@ export class MockCallService implements OnApplicationBootstrap {
           instructions:
             `${prospectPersona}\n` +
             `TURN STYLE:\n` +
-            `- Keep each reply concise and relevant to the rep's last line.\n` +
-            `- Default to one sentence; use two short sentences only if needed.\n` +
-            `- Maximum 26 words total per reply.\n` +
-            `- Ask at most one question in a reply.\n` +
-            `- Do not monologue or list multiple ideas in one turn.\n`,
+            `- Respond naturally as the persona to the rep's latest message.\n` +
+            `- Always finish complete sentences before ending your turn.\n` +
+            `- Do not cut yourself off mid-thought.\n`,
           temperature: 1.05,
-          max_response_output_tokens: 150,
           voice: 'shimmer',
           input_audio_format: 'pcm16',
           output_audio_format: 'pcm16',
@@ -295,7 +294,7 @@ export class MockCallService implements OnApplicationBootstrap {
         }
 
         case 'input_audio_buffer.speech_started': {
-          if (assistantAudioActive) {
+          if (assistantAudioActive || responseActive) {
             userSpeechStartedAt = null;
             break;
           }
@@ -305,7 +304,7 @@ export class MockCallService implements OnApplicationBootstrap {
         }
 
         case 'input_audio_buffer.speech_stopped': {
-          if (assistantAudioActive) {
+          if (assistantAudioActive || responseActive) {
             userSpeechStartedAt = null;
             break;
           }
@@ -332,6 +331,7 @@ export class MockCallService implements OnApplicationBootstrap {
             break;
           }
           markAssistantAudioActive();
+          this.engineService.signalSpeaking(callId, 'PROSPECT');
           // Stream AI audio back to browser
           const delta = event.delta as string;
           if (delta && browserWs.readyState === WebSocket.OPEN) {
@@ -416,8 +416,6 @@ export class MockCallService implements OnApplicationBootstrap {
 
         case 'response.done': {
           responseActive = false;
-          assistantAudioActive = false;
-          clearAssistantAudioTimer();
           clearResponseDoneFallbackTimer();
           if (partialAiText.trim().length > 0) {
             const fallbackText = partialAiText.trim();
@@ -429,6 +427,8 @@ export class MockCallService implements OnApplicationBootstrap {
               partialAiText = '';
               emitProspectFinal(textToEmit, fallbackTs);
             }, 320);
+          } else if (!assistantAudioActive) {
+            emitAssistantSpeaking(false);
           }
           break;
         }
@@ -437,6 +437,7 @@ export class MockCallService implements OnApplicationBootstrap {
           responseActive = false;
           assistantAudioActive = false;
           clearAssistantAudioTimer();
+          emitAssistantSpeaking(false);
           clearResponseDoneFallbackTimer();
           const errPayload =
             event.error && typeof event.error === 'object'
@@ -465,6 +466,7 @@ export class MockCallService implements OnApplicationBootstrap {
       responseActive = false;
       assistantAudioActive = false;
       clearAssistantAudioTimer();
+      emitAssistantSpeaking(false);
       clearResponseDoneFallbackTimer();
       if (responseKickTimer) {
         clearTimeout(responseKickTimer);
@@ -477,6 +479,7 @@ export class MockCallService implements OnApplicationBootstrap {
       responseActive = false;
       assistantAudioActive = false;
       clearAssistantAudioTimer();
+      emitAssistantSpeaking(false);
       clearResponseDoneFallbackTimer();
       if (responseKickTimer) {
         clearTimeout(responseKickTimer);
@@ -493,6 +496,14 @@ export class MockCallService implements OnApplicationBootstrap {
       }
 
       if (msg.type === 'audio' && msg.data && openaiReady) {
+        if (
+          assistantAudioActive ||
+          responseActive ||
+          aiSpeechStartedAt !== null ||
+          partialAiText.trim().length > 0
+        ) {
+          return;
+        }
         openaiWs.send(JSON.stringify({
           type: 'input_audio_buffer.append',
           audio: msg.data,
@@ -504,6 +515,7 @@ export class MockCallService implements OnApplicationBootstrap {
       this.logger.log(`Mock stream browser WS closed — call ${callId}`);
       clearResponseKickTimer();
       clearAssistantAudioTimer();
+      emitAssistantSpeaking(false);
       clearResponseDoneFallbackTimer();
       openaiWs.close();
     });
@@ -512,6 +524,7 @@ export class MockCallService implements OnApplicationBootstrap {
       this.logger.error(`Mock stream browser WS error — call ${callId}: ${err.message}`);
       clearResponseKickTimer();
       clearAssistantAudioTimer();
+      emitAssistantSpeaking(false);
       clearResponseDoneFallbackTimer();
       openaiWs.close();
     });

@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { CallMode } from '@live-sales-coach/shared';
+import { CallMode, FAST_CALL_MODELS, type FastCallModel } from '@live-sales-coach/shared';
 import { Phone, Bot, Plus, ChevronRight, Shield, Zap, Users, Crown, Smile, X, Pencil, Trash2 } from 'lucide-react';
 import { OutOfCreditsModal } from '@/components/out-of-credits-modal';
 
@@ -62,6 +62,13 @@ const PERSONA_SELECTED: Record<string, string> = {
   slate: 'border-slate-400 bg-slate-500/15 ring-1 ring-slate-500/30',
 };
 
+const MODEL_LABELS: Record<FastCallModel, string> = {
+  'gpt-5-mini': 'GPT-5 mini (Fast + highest quality)',
+  'gpt-4.1-mini': 'GPT-4.1 mini (Fast)',
+  'gpt-4o-mini': 'GPT-4o mini (Fastest)',
+  'gpt-4o': 'GPT-4o (Fast + higher quality)',
+};
+
 export default function DialerPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -79,6 +86,7 @@ export default function DialerPage() {
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ phoneTo: '', agentId: '', notes: '' });
   const [selectedOpenerIdx, setSelectedOpenerIdx] = useState(0);
+  const [llmModel, setLlmModel] = useState<FastCallModel>('gpt-5-mini');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [showOutOfCreditsModal, setShowOutOfCreditsModal] = useState(false);
@@ -237,6 +245,7 @@ export default function DialerPage() {
     if (mode === CallMode.MOCK && selectedPersonaId) {
       body.practicePersonaId = selectedPersonaId;
     }
+    body.llm_model = llmModel;
     body.products_mode = allProducts ? 'ALL' : 'SELECTED';
     if (!allProducts) {
       body.selected_product_ids = selectedProductIds;
@@ -309,6 +318,24 @@ export default function DialerPage() {
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label className="block text-xs text-slate-400 mb-1.5">Coach model</label>
+          <select
+            className={INPUT}
+            value={llmModel}
+            onChange={(e) => setLlmModel(e.target.value as FastCallModel)}
+          >
+            {FAST_CALL_MODELS.map((model) => (
+              <option key={model} value={model}>
+                {MODEL_LABELS[model]}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-[11px] text-slate-500">
+            Fast models only. No long-thinking model is used in live coaching.
+          </p>
+        </div>
+
         {/* Practice persona selection */}
         {isMock && (
           <div>

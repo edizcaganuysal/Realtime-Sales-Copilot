@@ -1,5 +1,9 @@
 import { NextResponse } from 'next/server';
-import { getApiBaseUrl, getFriendlyConfigMessage } from '@/lib/server-env';
+import {
+  getApiBaseUrl,
+  getFriendlyApiUnavailableMessage,
+  getFriendlyConfigMessage,
+} from '@/lib/server-env';
 
 const API = getApiBaseUrl();
 
@@ -9,12 +13,20 @@ export async function POST(request: Request) {
   }
 
   const body = await request.json();
-
-  const res = await fetch(`${API}/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch (error) {
+    console.error('Failed to reach API for login', error);
+    return NextResponse.json(
+      { message: getFriendlyApiUnavailableMessage(API) },
+      { status: 503 },
+    );
+  }
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));

@@ -1,5 +1,11 @@
 import { IsArray, IsEnum, IsIn, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
-import { CallMode, GuidanceLevel, LiveLayout, ProductsMode } from '@live-sales-coach/shared';
+import {
+  CallMode,
+  FAST_CALL_MODELS,
+  GuidanceLevel,
+  LiveLayout,
+  ProductsMode,
+} from '@live-sales-coach/shared';
 
 export class CreateCallDto {
   @IsOptional()
@@ -55,4 +61,8 @@ export class CreateCallDto {
   @IsString()
   @MaxLength(200)
   customOpener?: string;
+
+  @IsOptional()
+  @IsIn(FAST_CALL_MODELS)
+  llm_model?: string;
 }

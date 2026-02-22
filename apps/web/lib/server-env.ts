@@ -1,5 +1,6 @@
 const FRIENDLY_CONFIG_MESSAGE =
   'Service configuration is incomplete. Please contact support and try again.';
+const FRIENDLY_UNAVAILABLE_MESSAGE = 'Service is temporarily unavailable. Please try again.';
 
 let loggedApiBaseUrlError = false;
 
@@ -20,3 +21,9 @@ export function getFriendlyConfigMessage(): string {
   return FRIENDLY_CONFIG_MESSAGE;
 }
 
+export function getFriendlyApiUnavailableMessage(apiBaseUrl: string): string {
+  if (process.env['NODE_ENV'] === 'development') {
+    return `Cannot reach API service at ${apiBaseUrl}. Start apps/api and retry.`;
+  }
+  return FRIENDLY_UNAVAILABLE_MESSAGE;
+}

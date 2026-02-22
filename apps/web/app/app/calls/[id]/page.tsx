@@ -116,16 +116,33 @@ export default function CallReviewPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let active = true;
+    const fetchJsonSafe = async <T,>(url: string, fallback: T): Promise<T> => {
+      try {
+        const res = await fetch(url, { cache: 'no-store' });
+        const text = await res.text();
+        if (!text.trim()) return fallback;
+        return JSON.parse(text) as T;
+      } catch {
+        return fallback;
+      }
+    };
+
     Promise.all([
-      fetch(`/api/calls/${id}`).then((r) => r.json()),
-      fetch(`/api/calls/${id}/transcript`).then((r) => r.json()),
-      fetch(`/api/calls/${id}/summary`).then((r) => r.json()),
+      fetchJsonSafe<CallData | null>(`/api/calls/${id}`, null),
+      fetchJsonSafe<TranscriptLine[]>(`/api/calls/${id}/transcript`, []),
+      fetchJsonSafe<SummaryData>(`/api/calls/${id}/summary`, null),
     ]).then(([callData, txData, sumData]) => {
+      if (!active) return;
       setCall(callData);
       setTranscript(Array.isArray(txData) ? txData : []);
       setSummary(sumData ?? null);
       setLoading(false);
     });
+
+    return () => {
+      active = false;
+    };
   }, [id]);
 
   if (loading) {

@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { and, asc, eq } from 'drizzle-orm';
-import { ProductsMode } from '@live-sales-coach/shared';
+import { FAST_CALL_MODELS, ProductsMode, type FastCallModel } from '@live-sales-coach/shared';
 import { DRIZZLE, DrizzleDb } from '../db/db.module';
 import * as schema from '../db/schema';
 import { CallsGateway } from './calls.gateway';
@@ -19,6 +19,7 @@ type StageInfo = {
 type CallContext = {
   callId: string;
   callMode: string;
+  llmModel: FastCallModel;
   callType: string;
   guidanceLevel: string;
   agentPrompt: string;
@@ -124,6 +125,8 @@ type EngineState = {
   stubTick: number;
   stubInterval: ReturnType<typeof setInterval> | null;
   llmInterval: ReturnType<typeof setInterval> | null;
+  cachedAlternatives: string[];
+  cachedAlternativesUtteranceSeq: number;
 };
 
 type RagSnippet = {
@@ -365,6 +368,8 @@ export class EngineService implements OnModuleDestroy {
       stubTick: 0,
       stubInterval: null,
       llmInterval: null,
+      cachedAlternatives: [],
+      cachedAlternativesUtteranceSeq: -1,
     };
 
     this.engines.set(callId, state);
@@ -381,7 +386,13 @@ export class EngineService implements OnModuleDestroy {
 
     // Fallback interval — only fires if no transcript-triggered ticks happen
     state.llmInterval = setInterval(() => {
-      if (!state.llmInFlight && Date.now() - state.lastLlmCallAt > 15_000) {
+      const hasNewProspectSignal = state.prospectUtteranceSeq > state.lastUpdatedUtteranceSeq;
+      const hasPendingWork = state.pendingTickRequest !== null || state.pendingTickPayload !== null;
+      if (
+        !state.llmInFlight &&
+        (hasNewProspectSignal || hasPendingWork) &&
+        Date.now() - state.lastLlmCallAt > 15_000
+      ) {
         this.runEngineTick(callId, state, { reason: 'fallback', requireTranscript: true }).catch((err: Error) =>
           this.logger.error(`Engine tick error (${callId}): ${err.message}`),
         );
@@ -465,6 +476,11 @@ export class EngineService implements OnModuleDestroy {
 
     // Deterministic checklist completion from turn content.
     this.maybeMarkChecklistFromTurn(callId, state, speaker, text);
+    const recentTurnsForStage = state.transcriptBuffer
+      .slice(-10)
+      .map((turn) => `${turn.speaker}: ${turn.text}`)
+      .join('\n');
+    this.maybeAdvanceStageFromHeuristics(callId, state, recentTurnsForStage);
 
     if (speaker === 'PROSPECT') {
       state.lastProspectUtteranceText = text;
@@ -496,7 +512,7 @@ export class EngineService implements OnModuleDestroy {
     }
 
     this.clearSilenceTimer(state);
-    const silenceMs = state.context?.callMode === 'MOCK' ? 1700 : 1000;
+    const silenceMs = state.context?.callMode === 'MOCK' ? 2600 : 1000;
     state.prospectSilenceTimer = setTimeout(() => {
       this.finalizeProspectUtterance(callId, state, 'prospect_silence');
     }, silenceMs);
@@ -779,6 +795,22 @@ export class EngineService implements OnModuleDestroy {
       ? Math.max(1, Math.min(2, Number(options?.count)))
       : 2;
     const desiredCount = mode === 'MORE_OPTIONS' ? requestedCount : 1;
+    const cacheIsFresh = state
+      ? state.cachedAlternativesUtteranceSeq >= state.lastUpdatedUtteranceSeq
+      : false;
+    const cachedSource = cacheIsFresh && state ? state.cachedAlternatives : [];
+    const cachedTexts = cachedSource
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0)
+      .slice(0, desiredCount);
+    if (mode === 'MORE_OPTIONS' && cachedTexts.length >= desiredCount) {
+      return { texts: cachedTexts };
+    }
+    if (mode === 'SWAP' && cachedTexts[0]) {
+      this.publishManualPrimary(callId, state ?? null, cachedTexts[0]);
+      return { texts: [cachedTexts[0]] };
+    }
+
     const fallbackFromState =
       state?.context
         ? this.buildStageFallbackSuggestions(
@@ -797,7 +829,14 @@ export class EngineService implements OnModuleDestroy {
       if (mode === 'SWAP' && stubAlts[0]) {
         this.publishManualPrimary(callId, state ?? null, stubAlts[0]);
       }
-      return { texts: stubAlts };
+      const fromCacheOrStub =
+        mode === 'MORE_OPTIONS'
+          ? this.pickDistinctSuggestions([...cachedTexts, ...stubAlts], desiredCount).slice(
+              0,
+              desiredCount,
+            )
+          : stubAlts;
+      return { texts: fromCacheOrStub };
     }
 
     const { context } = state;
@@ -835,7 +874,10 @@ export class EngineService implements OnModuleDestroy {
       `Respond with JSON only: {"suggestions": [${desiredCount === 1 ? '"option 1"' : '"option 1", "option 2"'}]}`;
 
     try {
-      const raw = await this.llm.chatFast(systemPrompt, userPrompt);
+      const raw = await this.llm.chatFast(systemPrompt, userPrompt, {
+        model: context.llmModel,
+        jsonMode: true,
+      });
       const parsed = this.llm.parseJson<{ suggestions?: string[] }>(raw, {});
       let texts = this.normalizeSuggestions(
         parsed.suggestions ?? [],
@@ -848,6 +890,11 @@ export class EngineService implements OnModuleDestroy {
       );
       if (mode === 'MORE_OPTIONS') {
         const currentPrimary = state.recentPrimarySuggestions[0] ?? '';
+        const warmCache = cachedTexts.filter(
+          (candidate) =>
+            currentPrimary.length === 0 ||
+            !this.areSuggestionsSimilar(candidate, currentPrimary),
+        );
         const nonRedundant = texts.filter(
           (candidate) =>
             currentPrimary.length === 0 ||
@@ -865,9 +912,11 @@ export class EngineService implements OnModuleDestroy {
             !this.areSuggestionsSimilar(candidate, currentPrimary),
         );
         texts = this.pickDistinctSuggestions(
-          [...nonRedundant, ...fallbackPool, ...texts],
+          [...warmCache, ...nonRedundant, ...fallbackPool, ...texts],
           desiredCount,
         );
+        state.cachedAlternatives = texts.slice(0, 2);
+        state.cachedAlternativesUtteranceSeq = state.lastUpdatedUtteranceSeq;
         return { texts: texts.slice(0, desiredCount) };
       }
       texts = texts.slice(0, 1);
@@ -935,6 +984,7 @@ export class EngineService implements OnModuleDestroy {
     const context: CallContext = {
       callId: 'prompt-debug',
       callMode: 'OUTBOUND',
+      llmModel: this.llm.defaultFastModel,
       callType: 'cold_outbound',
       guidanceLevel: input.guidance_level ?? 'STANDARD',
       agentPrompt: agentConfig.agentPrompt,
@@ -1000,7 +1050,10 @@ export class EngineService implements OnModuleDestroy {
     }
 
     try {
-      const raw = await this.llm.chatFast(systemPrompt, userPrompt);
+      const raw = await this.llm.chatFast(systemPrompt, userPrompt, {
+        model: context.llmModel,
+        jsonMode: true,
+      });
       const parsed = this.llm.parseJson<{
         primary?: string;
         moment?: string;
@@ -1203,6 +1256,7 @@ export class EngineService implements OnModuleDestroy {
     state.context = {
       callId,
       callMode: call.mode,
+      llmModel: this.resolveCallLlmModel(call.contactJson),
       callType: call.callType ?? 'cold_outbound',
       guidanceLevel: call.guidanceLevel,
       agentPrompt,
@@ -1225,6 +1279,19 @@ export class EngineService implements OnModuleDestroy {
     }
 
     return call;
+  }
+
+  private resolveCallLlmModel(contactJson: unknown): FastCallModel {
+    const record =
+      contactJson && typeof contactJson === 'object'
+        ? (contactJson as Record<string, unknown>)
+        : {};
+    const candidate =
+      typeof record['llmModel'] === 'string' ? record['llmModel'].trim() : '';
+    if (FAST_CALL_MODELS.includes(candidate as FastCallModel)) {
+      return candidate as FastCallModel;
+    }
+    return this.llm.defaultFastModel;
   }
 
   private parseStringArray(value: unknown): string[] {
@@ -1755,9 +1822,13 @@ export class EngineService implements OnModuleDestroy {
     try {
       const llmStartedAt = Date.now();
       const shouldUseFastInterim =
-        opts.reason === 'prospect_final' || opts.reason === 'prospect_silence';
+        (opts.reason === 'prospect_final' || opts.reason === 'prospect_silence') &&
+        state.context?.callMode !== 'MOCK';
       const FAST_INTERIM_MS = 900;
-      const llmPromise = this.llm.chatFast(systemPrompt, userPrompt);
+      const llmPromise = this.llm.chatFast(systemPrompt, userPrompt, {
+        model: context.llmModel,
+        jsonMode: true,
+      });
       const timeoutPromise: Promise<null | '__skip__'> = shouldUseFastInterim
         ? new Promise<null>((resolve) => setTimeout(() => resolve(null), FAST_INTERIM_MS))
         : Promise.resolve('__skip__' as const);
@@ -1813,6 +1884,7 @@ export class EngineService implements OnModuleDestroy {
         const retryRaw = await this.llm.chatFast(
           systemPrompt,
           `${userPrompt}\nReturn strictly valid JSON with keys: moment, primary, move_type, nudges, context_toast, ask, used_updates.`,
+          { model: context.llmModel, jsonMode: true },
         );
         parsed = this.llm.parseJson(retryRaw, parsed);
       }
@@ -1820,7 +1892,10 @@ export class EngineService implements OnModuleDestroy {
       if (parsed.primary && !this.isOutputComplete(parsed.primary)) {
         const completionRetryPrompt =
           `${userPrompt}\nIMPORTANT: Your last primary was cut off mid-sentence. Finish the sentence. End with . or ? or !. Do not trail off. Return JSON only.`;
-        const completionRaw = await this.llm.chatFast(systemPrompt, completionRetryPrompt);
+        const completionRaw = await this.llm.chatFast(systemPrompt, completionRetryPrompt, {
+          model: context.llmModel,
+          jsonMode: true,
+        });
         const completionParsed = this.llm.parseJson<typeof parsed>(completionRaw, {});
         if (completionParsed.primary && this.isOutputComplete(completionParsed.primary)) {
           parsed = completionParsed;
@@ -1838,7 +1913,10 @@ export class EngineService implements OnModuleDestroy {
           `The prospect said: "${lastProspectLine}". ` +
           `Your new primary MUST reference something specific from that utterance or ask a pointed question using their exact words. ` +
           `Return JSON only.`;
-        const retryRaw = await this.llm.chatFast(systemPrompt, specificityRetryPrompt);
+        const retryRaw = await this.llm.chatFast(systemPrompt, specificityRetryPrompt, {
+          model: context.llmModel,
+          jsonMode: true,
+        });
         const retryParsed = this.llm.parseJson<typeof parsed>(retryRaw, {});
         if (retryParsed.primary && !this.isGenericPrimary(retryParsed.primary)) {
           parsed = retryParsed;
@@ -1853,7 +1931,7 @@ export class EngineService implements OnModuleDestroy {
         state.coachMemory.last_move_type = this.classifyMoveType(parsed.primary);
       }
 
-      const normalizedSuggestions = this.normalizeSuggestions(
+      const primarySuggestions = this.normalizeSuggestions(
         parsed.primary ? [parsed.primary] : [],
         context.companyProfile,
         context.productContext,
@@ -1861,6 +1939,17 @@ export class EngineService implements OnModuleDestroy {
         state.stats.objectionDetected,
         desiredCount,
         lastProspectLine,
+      );
+      const stageFallbackSuggestions = this.buildStageFallbackSuggestions(
+        context.companyProfile,
+        context.productContext,
+        stageForPrompt.name,
+        state.stats.objectionDetected,
+        lastProspectLine,
+      );
+      const normalizedSuggestions = this.pickDistinctSuggestions(
+        [...primarySuggestions, ...stageFallbackSuggestions],
+        3,
       );
       const nudges = this.pickNonEmpty(parsed.nudges, 3).map((item) => item.trim()).filter(Boolean);
       const toastBullets = this.pickNonEmpty(parsed.context_toast?.bullets, 4);
@@ -2012,6 +2101,8 @@ export class EngineService implements OnModuleDestroy {
     state.lastMomentTag = payload.momentTag;
     state.lastUpdateReason = reason;
     state.lastUpdatedUtteranceSeq = utteranceSeq;
+    state.cachedAlternatives = suggestionsForEmit.slice(1, 3);
+    state.cachedAlternativesUtteranceSeq = utteranceSeq;
     if (suggestionsForEmit[0]) {
       state.recentPrimarySuggestions = [
         suggestionsForEmit[0],
@@ -2023,6 +2114,7 @@ export class EngineService implements OnModuleDestroy {
       .update(schema.calls)
       .set({ coachMemory: state.coachMemory })
       .where(eq(schema.calls.id, callId));
+    void this.persistSuggestions(callId, suggestionsForEmit, reason, payload, utteranceSeq);
 
     this.gateway.emitToCall(callId, 'engine.debug', {
       reason,
@@ -2034,6 +2126,48 @@ export class EngineService implements OnModuleDestroy {
 
     this.applyChecklistUpdates(callId, state, payload.checklistUpdates);
     this.gateway.emitToCall(callId, 'engine.prospect_speaking', { speaking: false });
+  }
+
+  private async persistSuggestions(
+    callId: string,
+    suggestions: string[],
+    reason: TickReason,
+    payload: EngineTickPayload,
+    utteranceSeq: number,
+  ) {
+    const rows = suggestions
+      .map((text, index) => {
+        const clean = text.trim();
+        if (!clean) return null;
+        return {
+          callId,
+          tsMs: Date.now(),
+          kind: (index === 0 ? 'PRIMARY' : 'ALTERNATIVE') as 'PRIMARY' | 'ALTERNATIVE',
+          rank: index,
+          text: clean,
+          intent: reason,
+          metaJson: {
+            reason,
+            momentTag: payload.momentTag,
+            objection: payload.objection,
+            sentiment: payload.sentiment,
+            utteranceSeq,
+          },
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => row !== null);
+
+    if (rows.length === 0) return;
+
+    try {
+      await this.db.insert(schema.callSuggestions).values(rows);
+    } catch (error) {
+      this.logger.warn(
+        `Suggestion persistence failed (${callId}): ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+    }
   }
 
   private applyChecklistUpdates(
@@ -2451,7 +2585,7 @@ export class EngineService implements OnModuleDestroy {
     const userPrompt = `Transcript:\n${transcriptText}`;
 
     try {
-      const raw = await this.llm.chat(systemPrompt, userPrompt);
+      const raw = await this.llm.chat(systemPrompt, userPrompt, { jsonMode: true });
       const parsed = this.llm.parseJson<{
         summary?: string;
         keyMoments?: string[];
@@ -2772,6 +2906,7 @@ export class EngineService implements OnModuleDestroy {
       `Condensed offerings summary:\n${condensedOfferings || 'None'}\n\n` +
       `Live call metadata:\n` +
       `Current stage: ${currentStage.name}\n` +
+      `Realtime model: ${context.llmModel}\n` +
       `Call type: ${context.callType}\n` +
       `Call mode: ${context.callMode}\n` +
       `Call notes: ${context.notes || 'None'}\n\n` +
@@ -2782,6 +2917,7 @@ export class EngineService implements OnModuleDestroy {
       `- Never invent company/product claims.\n` +
       `- Never invent numeric metrics unless explicitly present in proof points.\n` +
       `- If uncertain, ask a clarifying question.\n` +
+      `- If the prospect asks a direct question, answer it directly first with one concrete point, then ask at most one clarifier.\n` +
       `- Do not repeat recent arguments unless prospect asks again.\n` +
       `- Primary must be 1-2 sentences and speakable.\n` +
       `- Nudges must be 2-3 items, <=6 words each.\n` +
@@ -2849,11 +2985,25 @@ export class EngineService implements OnModuleDestroy {
       objection,
       lastProspectLine,
     );
+    const slots = this.extractProspectSlots(lastProspectLine);
+    const strictQuestionTurn =
+      /\?/.test(lastProspectLine) ||
+      slots.intent === 'asking_info' ||
+      slots.objection_type === 'info_request';
     const unique = new Set<string>();
     const out: string[] = [];
 
     for (const raw of rawSuggestions) {
-      const next = this.makeSuggestionSpecific(raw, company, stageFallbacks[out.length] ?? stageFallbacks[0]);
+      const fallbackForIdx = stageFallbacks[out.length] ?? stageFallbacks[0] ?? '';
+      let next = this.makeSuggestionSpecific(raw, company, fallbackForIdx);
+      next = this.enforceQuestionSpecificity(
+        next,
+        strictQuestionTurn,
+        lastProspectLine,
+        slots,
+        company,
+        fallbackForIdx,
+      );
       if (!next || unique.has(next)) continue;
       unique.add(next);
       out.push(next);
@@ -2861,7 +3011,15 @@ export class EngineService implements OnModuleDestroy {
     }
 
     for (const fallback of stageFallbacks) {
-      const next = this.makeSuggestionSpecific(fallback, company, fallback);
+      let next = this.makeSuggestionSpecific(fallback, company, fallback);
+      next = this.enforceQuestionSpecificity(
+        next,
+        strictQuestionTurn,
+        lastProspectLine,
+        slots,
+        company,
+        fallback,
+      );
       if (!next || unique.has(next)) continue;
       unique.add(next);
       out.push(next);
@@ -2915,7 +3073,7 @@ export class EngineService implements OnModuleDestroy {
     }
     if (/what kind|which service|services|media|what do you provide/.test(last)) {
       return [
-        `For ${primaryProduct}, we can map the right package for your workflow. Which outcomes matter most to you first?`,
+        `Short answer: teams pick ${primaryProduct} when they need predictable speed and consistent quality. Which result matters most to you first?`,
       ];
     }
     if (/quality|consistent|how do you ensure/.test(last)) {
@@ -3024,6 +3182,35 @@ export class EngineService implements OnModuleDestroy {
       out = out.charAt(0).toUpperCase() + out.slice(1);
     }
     return out;
+  }
+
+  private enforceQuestionSpecificity(
+    primary: string,
+    strictQuestionTurn: boolean,
+    lastProspectLine: string,
+    slots: { objection_type: string; entities: string[]; intent: string },
+    company: CompanyProfile,
+    fallback: string,
+  ): string {
+    const trimmed = primary.trim();
+    if (!trimmed) return '';
+    if (!strictQuestionTurn) return trimmed;
+
+    const lower = trimmed.toLowerCase();
+    const servicePitchPattern =
+      /\b(we\s+(can|offer|provide|do|handle|have)|our\s+(service|services|team|platform)|the right package)\b/i;
+    const hasDirectAnswerFrame =
+      /\?|short answer|depends on|specifically|based on|first/i.test(lower);
+
+    if (servicePitchPattern.test(trimmed) && !hasDirectAnswerFrame) {
+      const fallbackSpecific =
+        lastProspectLine.trim().length > 0
+          ? this.buildDeterministicFallback(lastProspectLine, slots)
+          : fallback;
+      return this.makeSuggestionSpecific(fallbackSpecific, company, fallback);
+    }
+
+    return trimmed;
   }
 
   private retrieveCompanySnippets(
@@ -3218,12 +3405,20 @@ export class EngineService implements OnModuleDestroy {
 
   private isGenericPrimary(primary: string): boolean {
     const trimmed = primary.trim();
+    if (/clear yes or clear no/i.test(trimmed)) return true;
+    if (/when you say\s+["']?.+["']?,\s*can you help me understand/i.test(trimmed)) return true;
     for (const pattern of this.BANNED_GENERIC_PATTERNS) {
       if (!pattern.test(trimmed)) continue;
       const remainder = trimmed.replace(pattern, '').replace(/^[,.\s]+/, '');
       if (remainder.length < 25) return true;
     }
     return false;
+  }
+
+  private pickDeterministicLine(seed: string, options: string[]): string {
+    if (options.length === 0) return '';
+    const hash = Array.from(seed).reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
+    return options[Math.abs(hash) % options.length] ?? options[0] ?? '';
   }
 
   private buildDeterministicFallback(
@@ -3236,7 +3431,11 @@ export class EngineService implements OnModuleDestroy {
         ? ` — specifically around ${slots.entities.slice(0, 2).join(' and ')}`
         : '';
     if (slots.objection_type === 'pricing')
-      return `When you say "${shortUtterance}${entityHint}", is your concern the upfront cost, the ongoing fee, or whether the return justifies it?`;
+      return this.pickDeterministicLine(`${utterance}|pricing|${slots.entities.join(',')}`, [
+        'On pricing, is the blocker budget limits, uncertainty about ROI, or timing of spend?',
+        'For budget, is the issue total cost, cash-flow timing, or confidence in payback?',
+        'Should we break pricing into scope, timeline, and ROI so we can pinpoint what feels off?',
+      ]);
     if (slots.objection_type === 'timing') {
       return `You mentioned ${slots.entities[0] ?? 'timing as a factor'} — what would need to change for this to become a priority before then?`;
     }
@@ -3247,10 +3446,21 @@ export class EngineService implements OnModuleDestroy {
     if (slots.objection_type === 'authority')
       return `Understood — what information would be most useful for your decision-maker, and would it help to loop them in on a short call?`;
     if (slots.objection_type === 'need')
-      return `Given that you said "${shortUtterance}", what would a measurably better outcome look like in the next 90 days?`;
+      return this.pickDeterministicLine(`${utterance}|need|${slots.intent}`, [
+        'If this feels unnecessary today, what measurable change would make it worth revisiting in the next 90 days?',
+        'What outcome would need to improve for this to move from optional to important?',
+        'What pain would need to get worse before solving this becomes a priority?',
+      ]);
     if (slots.objection_type === 'info_request')
-      return `Great question on how this works — which part matters most to you: the workflow, the results, or the timeline to see impact?`;
-    return `When you say "${shortUtterance}", can you help me understand what would make this a clear yes or clear no for you?`;
+      return `Short answer: it depends on your workflow and target outcome. Which matters most right now: speed, consistency, or conversion?`;
+    const clean = shortUtterance.replace(/^["'\s]+|["'\s]+$/g, '');
+    const mention =
+      clean.length > 0 ? `Based on what you just said${entityHint}` : `Given your context${entityHint}`;
+    return this.pickDeterministicLine(`${utterance}|${slots.intent}|${slots.entities.join(',')}`, [
+      `${mention}, what would need to be true for this to be worth a second conversation?`,
+      `${mention}, what decision criteria would you use to say this is worth evaluating?`,
+      `${mention}, which outcome matters most for deciding whether to continue?`,
+    ]);
   }
 
   private classifyMoveType(primary: string): string {

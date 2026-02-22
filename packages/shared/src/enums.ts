@@ -43,6 +43,9 @@ export enum ProductsMode {
   SELECTED = 'SELECTED',
 }
 
+export const FAST_CALL_MODELS = ['gpt-5-mini', 'gpt-4.1-mini', 'gpt-4o-mini', 'gpt-4o'] as const;
+export type FastCallModel = (typeof FAST_CALL_MODELS)[number];
+
 export enum CallStatus {
   INITIATED = 'INITIATED',
   IN_PROGRESS = 'IN_PROGRESS',

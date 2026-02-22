@@ -14,8 +14,16 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     headers: { Authorization: `Bearer ${await token()}` },
     cache: 'no-store',
   });
-  const data = await res.json();
-  return NextResponse.json(data, { status: res.status });
+  const text = await res.text();
+  if (!text.trim()) {
+    return new NextResponse(null, { status: res.status });
+  }
+  try {
+    const data = JSON.parse(text);
+    return NextResponse.json(data, { status: res.status });
+  } catch {
+    return NextResponse.json({ message: 'Invalid upstream response' }, { status: res.status });
+  }
 }
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -29,6 +37,14 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     },
     body: JSON.stringify(body),
   });
-  const data = await res.json();
-  return NextResponse.json(data, { status: res.status });
+  const text = await res.text();
+  if (!text.trim()) {
+    return new NextResponse(null, { status: res.status });
+  }
+  try {
+    const data = JSON.parse(text);
+    return NextResponse.json(data, { status: res.status });
+  } catch {
+    return NextResponse.json({ message: 'Invalid upstream response' }, { status: res.status });
+  }
 }

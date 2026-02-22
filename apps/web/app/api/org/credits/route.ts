@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { getApiBaseUrl, getFriendlyConfigMessage } from '@/lib/server-env';
+import {
+  getApiBaseUrl,
+  getFriendlyApiUnavailableMessage,
+  getFriendlyConfigMessage,
+} from '@/lib/server-env';
 
 const API = getApiBaseUrl();
 
@@ -14,10 +18,20 @@ export async function GET() {
     return NextResponse.json({ message: getFriendlyConfigMessage() }, { status: 500 });
   }
 
-  const res = await fetch(`${API}/org/credits`, {
-    headers: { Authorization: `Bearer ${await token()}` },
-    cache: 'no-store',
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API}/org/credits`, {
+      headers: { Authorization: `Bearer ${await token()}` },
+      cache: 'no-store',
+    });
+  } catch (error) {
+    console.error('Failed to reach API for org credits', error);
+    return NextResponse.json(
+      { message: getFriendlyApiUnavailableMessage(API) },
+      { status: 503 },
+    );
+  }
+
   const data = await res.json().catch(() => ({ message: 'Unexpected response from API' }));
   return NextResponse.json(data, { status: res.status });
 }

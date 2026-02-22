@@ -7,7 +7,13 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { and, asc, desc, eq, inArray } from 'drizzle-orm';
-import { GuidanceLevel, LiveLayout, ProductsMode } from '@live-sales-coach/shared';
+import {
+  FAST_CALL_MODELS,
+  GuidanceLevel,
+  LiveLayout,
+  ProductsMode,
+  type FastCallModel,
+} from '@live-sales-coach/shared';
 import type { JwtPayload } from '@live-sales-coach/shared';
 import { DRIZZLE, DrizzleDb } from '../db/db.module';
 import * as schema from '../db/schema';
@@ -44,6 +50,13 @@ export class CallsService {
     if (!cleaned) return 'your current priorities';
     const words = cleaned.split(/\s+/).filter(Boolean);
     return words.slice(0, 6).join(' ');
+  }
+
+  private resolveCallModel(value?: string): FastCallModel {
+    if (value && FAST_CALL_MODELS.includes(value as FastCallModel)) {
+      return value as FastCallModel;
+    }
+    return 'gpt-5-mini';
   }
 
   private extractProspectIdentity(
@@ -133,6 +146,7 @@ export class CallsService {
     callType: string,
     notes: string | null,
     productsMode: ProductsMode,
+    llmModel: FastCallModel,
   ) {
     const [contextRow, callRow, selectedProducts, allProducts] = await Promise.all([
       this.db
@@ -210,12 +224,13 @@ export class CallsService {
         `Offering summary: ${summary || 'None'}\n` +
         `Notes: ${notes ?? 'None'}\n` +
         'Generate exactly ONE sentence opener for the rep, max 18 words. Prefer: "Hi [Name]—quick question: are you the right person for [topic]?" Do not mention the seller company name. Mention a company name only if prospect company is known and different from seller company. If prospect company is unknown, use "your team" or "your org". Output plain text only, no markdown, no labels.';
-      const raw = await this.llm.chatFast(system, user);
+      const raw = await this.llm.chatFast(system, user, { model: llmModel });
       const opener = raw.replace(/\s+/g, ' ').trim();
       if (this.isOpenerValid(opener, context)) return opener;
       const retryRaw = await this.llm.chatFast(
         system,
         `${user}\nHard rule: never include the seller company name. Keep one complete sentence only.`,
+        { model: llmModel },
       );
       const retry = retryRaw.replace(/\s+/g, ' ').trim();
       if (this.isOpenerValid(retry, context)) return retry;
@@ -229,6 +244,7 @@ export class CallsService {
     orgId: string,
     callId: string,
     productsMode: ProductsMode,
+    llmModel: FastCallModel,
   ): Promise<string> {
     const FALLBACK = JSON.stringify([
       'What outcome matters most to you right now?',
@@ -274,7 +290,7 @@ export class CallsService {
         `Offerings: ${names.length > 0 ? names.join(', ') : 'None'}\n` +
         'Generate 3 short discovery questions (max 12 words each) a rep can ask after the prospect responds to the opener. Return a JSON array of 3 strings.';
 
-      const raw = await this.llm.chatFast(system, user);
+      const raw = await this.llm.chatFast(system, user, { model: llmModel });
       const parsed = this.llm.parseJson<string[]>(raw, []);
       const questions = Array.isArray(parsed)
         ? parsed.map((q) => (typeof q === 'string' ? q.trim() : '')).filter((q) => q.length > 0).slice(0, 3)
@@ -455,6 +471,7 @@ export class CallsService {
     const layoutPreset = dto.layoutPreset ?? (orgSettings.liveLayoutDefault as LiveLayout);
     const guidanceLevel = dto.guidanceLevel ?? GuidanceLevel.STANDARD;
     const productsMode = dto.products_mode ?? ProductsMode.ALL;
+    const llmModel = this.resolveCallModel(dto.llm_model);
     const selectedProductIds = this.normalizeSelectedProductIds(dto.selected_product_ids);
     const callMode = dto.mode ?? 'OUTBOUND';
     const callType = dto.call_type ?? 'cold_outbound';
@@ -463,6 +480,7 @@ export class CallsService {
     const contactJson: Record<string, unknown> = {};
     if (dto.practicePersonaId) contactJson.practicePersonaId = dto.practicePersonaId;
     if (dto.customPersonaPrompt) contactJson.customPersonaPrompt = dto.customPersonaPrompt;
+    contactJson.llmModel = llmModel;
 
     const call = await this.db.transaction(async (tx) => {
       const [created] = await tx
@@ -512,11 +530,12 @@ export class CallsService {
         callType,
         dto.notes ?? null,
         productsMode,
+        llmModel,
       );
     }
 
     const [followupSeed, withOpener] = await Promise.all([
-      this.generateFollowupSeed(user.orgId, call.id, productsMode),
+      this.generateFollowupSeed(user.orgId, call.id, productsMode, llmModel),
       this.db
         .update(schema.calls)
         .set({ preparedOpenerText: opener, preparedOpenerGeneratedAt: new Date() })
