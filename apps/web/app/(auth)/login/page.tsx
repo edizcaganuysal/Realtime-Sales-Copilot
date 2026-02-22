@@ -40,8 +40,18 @@ export default function LoginPage() {
       });
 
       if (!res.ok) {
-        const data = await res.json();
-        setError(data.message ?? 'Invalid credentials');
+        const data = (await res.json().catch(() => ({}))) as {
+          message?: string;
+          traceId?: string;
+          upstreamStatus?: number;
+        };
+        const message = data.message ?? 'Invalid credentials';
+        const upstream =
+          typeof data.upstreamStatus === 'number'
+            ? ` (upstream ${data.upstreamStatus})`
+            : '';
+        const trace = typeof data.traceId === 'string' ? ` [trace ${data.traceId}]` : '';
+        setError(`${message}${upstream}${trace}`);
         setLoading(false);
         return;
       }
