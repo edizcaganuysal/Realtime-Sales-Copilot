@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { WebSocketServer as WsServer } from 'ws';
 import WebSocket from 'ws';
-import { eq } from 'drizzle-orm';
+import { eq, asc } from 'drizzle-orm';
 import { DRIZZLE, DrizzleDb } from '../db/db.module';
 import * as schema from '../db/schema';
 import { CallsGateway } from './calls.gateway';
@@ -51,6 +51,187 @@ export class AiCallService implements OnApplicationBootstrap {
     });
 
     this.logger.log('AI Call WS attached at /ai-call-stream');
+  }
+
+  /**
+   * HTTP-based AI call turn handler — used with Twilio <Gather> TwiML.
+   * Persists prospect speech, calls OpenAI Chat Completions, returns AI response text.
+   * Prefix [HANGUP] in the AI response signals that the call should end.
+   */
+  async handleGatherWebhook(
+    callId: string,
+    speechResult: string | null,
+  ): Promise<{ aiText: string; shouldHangup: boolean }> {
+    const fallback = { aiText: 'Thank you for your time. Have a great day!', shouldHangup: true };
+    if (!this.apiKey) return fallback;
+
+    try {
+      // 1. Persist prospect speech if any
+      if (speechResult?.trim()) {
+        const tsMs = Date.now();
+        await this.db.insert(schema.callTranscript).values({
+          callId,
+          tsMs,
+          speaker: 'PROSPECT',
+          text: speechResult.trim(),
+          isFinal: true,
+        });
+        this.gateway.emitToCall(callId, 'transcript.final', {
+          speaker: 'PROSPECT',
+          text: speechResult.trim(),
+          tsMs,
+          isFinal: true,
+        });
+      }
+
+      // 2. Load call row
+      const [callRow] = await this.db
+        .select({
+          orgId: schema.calls.orgId,
+          agentId: schema.calls.agentId,
+          preparedOpenerText: schema.calls.preparedOpenerText,
+        })
+        .from(schema.calls)
+        .where(eq(schema.calls.id, callId))
+        .limit(1);
+
+      if (!callRow) return fallback;
+
+      // 3. Load context in parallel with transcript history
+      const [ctxRow, productRows, agentRow, transcriptRows] = await Promise.all([
+        this.db
+          .select({
+            companyName: schema.salesContext.companyName,
+            whatWeSell: schema.salesContext.whatWeSell,
+            targetCustomer: schema.salesContext.targetCustomer,
+            globalValueProps: schema.salesContext.globalValueProps,
+            proofPoints: schema.salesContext.proofPoints,
+          })
+          .from(schema.salesContext)
+          .where(eq(schema.salesContext.orgId, callRow.orgId))
+          .limit(1)
+          .then((rows) => rows[0] ?? null),
+        this.db
+          .select({ name: schema.products.name, elevatorPitch: schema.products.elevatorPitch })
+          .from(schema.products)
+          .where(eq(schema.products.orgId, callRow.orgId)),
+        callRow.agentId
+          ? this.db
+              .select({
+                prompt: schema.agents.prompt,
+                promptDelta: schema.agents.promptDelta,
+                openers: schema.agents.openers,
+              })
+              .from(schema.agents)
+              .where(eq(schema.agents.id, callRow.agentId))
+              .limit(1)
+              .then((rows) => rows[0] ?? null)
+          : Promise.resolve(null),
+        this.db
+          .select({ speaker: schema.callTranscript.speaker, text: schema.callTranscript.text })
+          .from(schema.callTranscript)
+          .where(eq(schema.callTranscript.callId, callId))
+          .orderBy(asc(schema.callTranscript.tsMs)),
+      ]);
+
+      const toList = (val: unknown): string[] =>
+        Array.isArray(val) ? val.filter((v): v is string => typeof v === 'string') : [];
+
+      const openers = toList(agentRow?.openers);
+      const opener =
+        callRow.preparedOpenerText?.trim() ||
+        (openers.length > 0 ? openers[0] : null) ||
+        `Hi, this is Alex from ${ctxRow?.companyName || 'our company'}. Quick question — do you have 30 seconds?`;
+
+      const strategy = agentRow?.promptDelta?.trim() || agentRow?.prompt?.trim() || '';
+
+      const systemPrompt = buildAiCallerPrompt({
+        companyName: ctxRow?.companyName ?? '',
+        whatWeSell: ctxRow?.whatWeSell ?? '',
+        targetCustomer: ctxRow?.targetCustomer ?? '',
+        globalValueProps: toList(ctxRow?.globalValueProps),
+        proofPoints: toList(ctxRow?.proofPoints),
+        products: productRows,
+        strategy,
+        opener,
+      });
+
+      // 4. Build Chat Completions message history
+      // REP utterances → assistant turns; PROSPECT utterances → user turns
+      const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
+        {
+          role: 'system',
+          content:
+            systemPrompt +
+            '\n\nIMPORTANT: When you want to end the call, start your response with [HANGUP] followed by your closing statement.',
+        },
+      ];
+
+      for (const row of transcriptRows) {
+        if (row.speaker === 'REP') {
+          messages.push({ role: 'assistant', content: row.text });
+        } else {
+          messages.push({ role: 'user', content: row.text });
+        }
+      }
+
+      // First turn — no transcript yet
+      if (transcriptRows.length === 0) {
+        messages.push({ role: 'user', content: '[Call connected — begin with your opener now]' });
+      }
+
+      // 5. Call OpenAI Chat Completions
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          messages,
+          max_tokens: 80,
+          temperature: 0.7,
+        }),
+      });
+
+      if (!response.ok) {
+        this.logger.error(`OpenAI Chat error ${response.status}: ${await response.text()}`);
+        return fallback;
+      }
+
+      const json = (await response.json()) as {
+        choices: Array<{ message: { content: string } }>;
+      };
+      let aiText = json.choices[0]?.message?.content?.trim() ?? '';
+      const shouldHangup = aiText.startsWith('[HANGUP]');
+      if (shouldHangup) aiText = aiText.replace(/^\[HANGUP\]\s*/, '').trim();
+
+      if (!aiText) {
+        return { aiText: 'Thank you, I appreciate your time.', shouldHangup: true };
+      }
+
+      // 6. Persist AI response and emit transcript event
+      const tsMs = Date.now();
+      await this.db.insert(schema.callTranscript).values({
+        callId,
+        tsMs,
+        speaker: 'REP',
+        text: aiText,
+        isFinal: true,
+      });
+      this.gateway.emitToCall(callId, 'transcript.final', {
+        speaker: 'REP',
+        text: aiText,
+        tsMs,
+        isFinal: true,
+      });
+
+      return { aiText, shouldHangup };
+    } catch (err) {
+      this.logger.error(`handleGatherWebhook error: ${(err as Error).message}`);
+      return fallback;
+    }
   }
 
   /**

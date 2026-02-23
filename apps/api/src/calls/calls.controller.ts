@@ -29,6 +29,7 @@ import { TwilioService } from './twilio.service';
 import { SttService } from './stt.service';
 import { CallsGateway } from './calls.gateway';
 import { MockCallService } from './mock-call.service';
+import { AiCallService } from './ai-call.service';
 import { CreateCallDto } from './dto/create-call.dto';
 import { UpdateCallDto } from './dto/update-call.dto';
 import { PromptDebugDto } from './dto/prompt-debug.dto';
@@ -342,6 +343,15 @@ export class CallsController {
 
 // ── Public Twilio webhook controller (no auth — Twilio calls these directly) ──
 
+function escapeXml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
 @Controller('calls')
 export class TwilioWebhookController {
   private readonly logger = new Logger(TwilioWebhookController.name);
@@ -351,24 +361,68 @@ export class TwilioWebhookController {
     private readonly engineService: EngineService,
     private readonly sttService: SttService,
     private readonly gateway: CallsGateway,
+    private readonly aiCallService: AiCallService,
     @Inject(DRIZZLE) private readonly db: DrizzleDb,
   ) {}
 
   /**
    * Twilio fetches this TwiML when the outbound call is answered.
-   * Returns a <Stream> verb pointing to our /media-stream WebSocket.
+   * AI_CALLER → HTTP-based <Gather> loop (no WebSocket needed).
+   * OUTBOUND   → <Stream> WebSocket to /media-stream.
    */
   @Get('twiml')
   @Header('Content-Type', 'text/xml')
-  twiml(@Query('callId') callId: string) {
+  async twiml(@Query('callId') callId: string) {
     const base = (process.env['TWILIO_WEBHOOK_BASE_URL'] ?? '').replace(/\/$/, '');
-    // Convert http(s):// → ws(s)://
-    const wsBase = base.replace(/^https/, 'wss').replace(/^http(?!s)/, 'ws');
 
-    // All Twilio streams go through /media-stream; MediaStreamService routes to
-    // AiCallService internally when it detects AI_CALLER mode from the DB.
+    // Check if this is an AI_CALLER call
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      callId ?? '',
+    );
+    if (callId && isUuid) {
+      try {
+        const [callRow] = await this.db
+          .select({ mode: schema.calls.mode, preparedOpenerText: schema.calls.preparedOpenerText })
+          .from(schema.calls)
+          .where(eq(schema.calls.id, callId))
+          .limit(1);
+
+        if (callRow?.mode === 'AI_CALLER') {
+          const opener =
+            callRow.preparedOpenerText?.trim() ||
+            'Hi, this is Alex. Quick question — do you have 30 seconds?';
+
+          // Persist opener as first REP transcript line
+          const tsMs = Date.now();
+          void this.db
+            .insert(schema.callTranscript)
+            .values({ callId, tsMs, speaker: 'REP', text: opener, isFinal: true })
+            .catch(() => {});
+          this.gateway.emitToCall(callId, 'transcript.final', {
+            speaker: 'REP',
+            text: opener,
+            tsMs,
+            isFinal: true,
+          });
+
+          const gatherAction = `${base}/calls/ai-gather?callId=${callId}`;
+          this.logger.log(`TwiML AI_CALLER Gather — callId: ${callId}`);
+          return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Joanna-Neural">${escapeXml(opener)}</Say>
+  <Gather input="speech" action="${gatherAction}" speechTimeout="auto" timeout="5" />
+  <Redirect>${gatherAction}</Redirect>
+</Response>`;
+        }
+      } catch (err) {
+        this.logger.error(`TwiML DB lookup error: ${(err as Error).message}`);
+      }
+    }
+
+    // Regular outbound call — WebSocket stream
+    const wsBase = base.replace(/^https/, 'wss').replace(/^http(?!s)/, 'ws');
     const streamUrl = `${wsBase}/media-stream`;
-    this.logger.log(`TwiML requested — callId: ${callId}, streamUrl: ${streamUrl}`);
+    this.logger.log(`TwiML OUTBOUND stream — callId: ${callId}, streamUrl: ${streamUrl}`);
 
     return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -377,6 +431,64 @@ export class TwilioWebhookController {
       <Parameter name="callId" value="${callId}" />
     </Stream>
   </Connect>
+</Response>`;
+  }
+
+  /**
+   * Twilio posts gathered speech here for AI_CALLER calls.
+   * Processes the turn via OpenAI Chat Completions and returns the next TwiML.
+   */
+  @Post('ai-gather')
+  @Header('Content-Type', 'text/xml')
+  @HttpCode(200)
+  async aiGather(
+    @Query('callId') callId: string,
+    @Body() body: Record<string, string>,
+  ) {
+    const base = (process.env['TWILIO_WEBHOOK_BASE_URL'] ?? '').replace(/\/$/, '');
+    const speechResult = body['SpeechResult'] ?? null;
+
+    this.logger.log(
+      `AI Gather — callId: ${callId}, SpeechResult: ${
+        speechResult ? `"${speechResult.slice(0, 60)}"` : 'NONE'
+      }`,
+    );
+
+    if (!callId) {
+      return `<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`;
+    }
+
+    const { aiText, shouldHangup } = await this.aiCallService.handleGatherWebhook(
+      callId,
+      speechResult,
+    );
+
+    this.logger.log(
+      `AI Gather response — shouldHangup: ${shouldHangup}, text: "${aiText.slice(0, 60)}"`,
+    );
+
+    const gatherAction = `${base}/calls/ai-gather?callId=${callId}`;
+
+    if (shouldHangup) {
+      // Mark call as completed in DB
+      void this.db
+        .update(schema.calls)
+        .set({ status: 'COMPLETED', endedAt: new Date() })
+        .where(eq(schema.calls.id, callId))
+        .catch(() => {});
+      this.gateway.emitToCall(callId, 'call.status', { status: 'COMPLETED' });
+      return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Joanna-Neural">${escapeXml(aiText)}</Say>
+  <Hangup/>
+</Response>`;
+    }
+
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Joanna-Neural">${escapeXml(aiText)}</Say>
+  <Gather input="speech" action="${gatherAction}" speechTimeout="auto" timeout="5" />
+  <Redirect>${gatherAction}</Redirect>
 </Response>`;
   }
 
