@@ -154,7 +154,7 @@ function parseExtractedField(raw: unknown): ExtractedField {
     value: normalized,
     confidence,
     citations,
-    accepted: normalized.length > 0 && !suggested,
+    accepted: normalized.length > 0 && confidence >= 0.5,
     suggested,
   };
 }

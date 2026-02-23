@@ -1662,27 +1662,33 @@ export class IngestService {
   ): Promise<CompanyExtractionResult> {
     const raw = await this.runJsonCompletion({
       system:
-        'You are a sales enablement analyst. Extract concise company messaging with confidence and citations from sources. Do not fabricate claims.',
+        'You are a sales enablement analyst. Your job is to produce a COMPLETE company profile — leave NO field empty. ' +
+        'EXTRACTION: For fields with direct source evidence, extract faithfully and cite source IDs. ' +
+        'INFERENCE: For fields with no direct evidence, make intelligent, well-reasoned inferences from the overall context — set confidence to 0.45-0.60 and suggested=true and citations=[]. ' +
+        'NEVER fabricate: specific numbers, percentages, named client companies, or concrete measurable outcomes unless directly stated. ' +
+        'You MUST infer (do not leave empty): tone_style, sales_strategy, target_customers, target_roles, industries, buying_triggers, discovery_questions, escalation_rules, forbidden_claims, next_steps — use company type, offering, and language cues to make specific, useful inferences.',
       user:
         'Given these sources, produce JSON with key fields. Schema:\n' +
         '{ \"fields\": { \"company_name\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"what_we_sell\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"how_it_works\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"offer_category\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"target_customer\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"target_roles\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"industries\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"buying_triggers\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"disqualifiers\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"global_value_props\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"proof_points\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"case_studies\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"allowed_claims\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"sales_policies\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"forbidden_claims\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"competitors\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"positioning_rules\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"escalation_rules\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"discovery_questions\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"qualification_rubric\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"next_steps\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"knowledge_appendix\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"company_overview\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"target_customers\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"value_props\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"tone_style\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"sales_strategy\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"compliance_and_policies\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"competitor_positioning\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"knowledge_base_appendix\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean} } }\n' +
         'Rules:\n' +
-        '- LANGUAGE: Write ALL field values in the exact same language as the source content — do NOT translate. If the sources are primarily in Turkish, write in Turkish. If primarily in English, write in English. Determine the dominant language from the product/service names and main body text of the sources.\n' +
-        '- Extract as much relevant detail as possible from all sources. Avoid under-filling fields.\n' +
-        '- Prefer concrete wording copied or closely paraphrased from source language.\n' +
-        '- For array fields, include up to 18 concise items when evidence exists.\n' +
-        '- company_overview should be 3-5 informative sentences describing what makes this company unique, who they serve, what outcomes they deliver, and how they work — not a generic fragment.\n' +
-        '- target_customers must describe the ideal buyer in detail: company size, role/title, industry focus, and what situation or pain makes them a good fit — 2-4 sentences.\n' +
-        '- Pull delivery workflow details, operating model, implementation steps, credibility proof, industry focus, and objection-relevant context whenever present.\n' +
-        '- proof_points MUST be specific and quotable: include numbers, percentages, timeframes, or named outcomes when available. Prefer "Reduced turnaround from 48h to 6h" over "faster delivery". Prefer "4.9/5 average rating across 3,000+ projects" over "high customer satisfaction". If no specific metric exists, use a factual operational claim (e.g., "Serving 500+ clients in 12 countries"). Never use vague generalities.\n' +
-        '- case_studies MUST describe a specific outcome: who (role/company type), what changed, and ideally a result. Example: "E-commerce brand reduced onboarding time by 40% after switching." If only general testimonials exist, extract the most specific quote available.\n' +
-        '- tone_style must be 2-4 sentences describing the recommended call tone (e.g. consultative, challenger), the communication style (formal/casual, technical/plain), the emotional register the rep should project, and any brand voice cues evident from how the company describes itself — not just a list of adjectives.\n' +
-        '- sales_strategy must be TACTICAL: describe the recommended call structure (discovery-first or pitch-first), the top 2-3 discovery questions to ask this specific prospect type, how to handle the most likely objection for this company, and which value prop to lead with — 3-6 sentences.\n' +
-        '- compliance_and_policies means SALES & SERVICE POLICIES only: booking process, turnaround time, reschedule/cancellation, deposits/payment expectations, licensing/usage rights, service area/travel fees, on-site privacy expectations.\n' +
-        '- Do not use privacy policy, WCAG, cookie, or generic legal site content as compliance_and_policies unless it directly impacts sales/service delivery.\n' +
-        '- If no reliable evidence exists for competitor_positioning or escalation_rules, provide practical suggested defaults with low confidence, suggested=true, and citations=[].\n' +
-        '- Prefer extracting concrete service packages and delivery process details when present.\n' +
-        '- Keep text concise and citations must be source IDs like S1.\n' +
+        '- LANGUAGE: Write ALL field values in the exact same language as the source content — do NOT translate. If sources are primarily Turkish, write in Turkish. If primarily English, write in English.\n' +
+        '- COMPLETENESS: Every field must have a non-empty value. If a field has no direct evidence, INFER it from context (set confidence 0.45-0.60, suggested=true, citations=[]).\n' +
+        '- Prefer concrete wording copied or closely paraphrased from source language when extracting.\n' +
+        '- For array fields, include up to 18 concise items. Infer reasonable items when sources are thin.\n' +
+        '- company_overview: 3-5 sentences covering uniqueness, who they serve, outcomes they deliver, and how they work.\n' +
+        '- target_customers: describe ideal buyer in detail — company size, role/title, industry, and pain that makes them a fit — 2-4 sentences. Infer from offering type if not stated.\n' +
+        '- tone_style: 2-4 sentences on call tone (consultative/challenger/direct), formal/casual register, and emotional style — infer from how the company writes about itself if not explicit.\n' +
+        '- sales_strategy: TACTICAL — call structure (discovery-first or pitch-first), top 2-3 discovery questions for this prospect type, how to handle the most likely objection, and which value prop to lead with — 3-6 sentences. ALWAYS infer this based on company type and offering.\n' +
+        '- buying_triggers: 5-10 specific situations that would make a prospect call — infer from offering type if not stated.\n' +
+        '- discovery_questions: 6-10 specific questions a rep should ask this company\'s prospects — ALWAYS infer if not in sources.\n' +
+        '- escalation_rules: 3-5 practical rules for when to escalate — infer sensible defaults for this business type.\n' +
+        '- forbidden_claims: 3-6 specific claims reps must never make — infer from industry norms and offering type.\n' +
+        '- next_steps: 3-5 specific follow-up actions a rep should offer — infer standard options for this business type.\n' +
+        '- proof_points: ONLY include specific, quotable claims. Numbers, percentages, timeframes, or named outcomes if available. If no metrics exist, use factual operational claims.\n' +
+        '- case_studies: describe specific outcomes with context. If no evidence, leave empty rather than infer.\n' +
+        '- compliance_and_policies: SALES POLICIES only (booking, payment, cancellation, turnaround). Do NOT use generic legal/privacy content.\n' +
+        '- competitor_positioning: infer a sensible approach for this industry/offering type if not stated.\n' +
+        '- Keep citations as source IDs like S1. Fields filled by inference have citations=[].\n' +
         this.renderSources(sources),
     }, {
       orgId,
@@ -1765,20 +1771,28 @@ export class IngestService {
   ): Promise<ProductExtractionResult> {
     const raw = await this.runJsonCompletion({
       system:
-        'You are a sales offering extraction analyst. Extract offerings/packages/services with citations and avoid hallucinations.',
+        'You are a sales offering extraction analyst. Produce COMPLETE offering profiles — leave no field empty. ' +
+        'EXTRACTION: For fields with direct source evidence, extract faithfully and cite source IDs. ' +
+        'INFERENCE: For fields with no direct evidence, make intelligent inferences from the offering name, company context, and industry — set confidence 0.45-0.60, suggested=true, citations=[]. ' +
+        'NEVER fabricate: specific pricing numbers, named client references, or concrete performance metrics. ' +
+        'You MUST infer (never leave empty): value_props, differentiators, dont_say, faqs, objections — using the offering type and target market as context.',
       user:
         'Given these sources, return JSON with key "products" as an array. Each product item must contain:\n' +
         '{ "name": {"value": string, "confidence": number, "citations": string[], "suggested": boolean}, "elevator_pitch": {"value": string, "confidence": number, "citations": string[], "suggested": boolean}, "value_props": {"value": string[], "confidence": number, "citations": string[], "suggested": boolean}, "differentiators": {"value": string[], "confidence": number, "citations": string[], "suggested": boolean}, "pricing_rules": {"value": object, "confidence": number, "citations": string[], "suggested": boolean}, "dont_say": {"value": string[], "confidence": number, "citations": string[], "suggested": boolean}, "faqs": {"value": array, "confidence": number, "citations": string[], "suggested": boolean}, "objections": {"value": array, "confidence": number, "citations": string[], "suggested": boolean} }\n' +
         'Rules:\n' +
-        '- LANGUAGE: Write ALL field values in the exact same language as the source content — do NOT translate. If the sources are primarily in Turkish, write in Turkish. If primarily in English, write in English. Determine the dominant language from the product/service names and main body text.\n' +
+        '- LANGUAGE: Write ALL field values in the exact same language as the source content — do NOT translate. If sources are primarily Turkish, write in Turkish. If primarily English, write in English.\n' +
         '- Extract as much offering detail as possible from all sources, including package names, service variants, deliverables, and workflow promises.\n' +
         '- For service businesses, detect multiple offerings/packages/services, not the company name as a product.\n' +
         '- Product names must be offering names such as package/service names found in sources.\n' +
-        '- elevator_pitch must be 1-3 punchy sentences a rep could say on a call: what the offering does, who it is for, and what outcome it delivers — no filler phrases.\n' +
+        '- elevator_pitch: 1-3 punchy sentences a rep could say on a call — what it does, who it is for, and what outcome it delivers. Infer if needed.\n' +
+        '- value_props: 4-8 specific benefits this offering delivers. Infer from offering name and industry if not stated.\n' +
+        '- differentiators: 3-6 reasons a prospect would choose this over alternatives. Infer from company positioning if not stated.\n' +
+        '- dont_say: 3-5 specific phrases or claims reps must avoid for this offering. Infer from offering type and industry norms.\n' +
+        '- faqs: 3-6 common questions prospects ask about this offering. Infer likely questions from offering type.\n' +
+        '- objections: 3-5 common objections and brief how-to-handle notes. Infer typical objections for this offering category.\n' +
         '- Include up to 10 offerings when evidence exists.\n' +
-        '- If a claim lacks evidence, keep it in value with suggested=true and citations=[].\n' +
-        '- Never fabricate AI capabilities, pricing numbers, or unverified differentiators.\n' +
-        '- Return up to 10 distinct offerings and citations must be IDs like S1.\n' +
+        '- Never fabricate specific pricing numbers or unverified performance metrics.\n' +
+        '- Citations must be IDs like S1. Inferred fields have citations=[].\n' +
         this.renderSources(sources),
     }, {
       orgId,
@@ -2268,7 +2282,7 @@ export class IngestService {
 
     const response = await client.chat.completions.create({
       model,
-      max_completion_tokens: 5200,
+      max_completion_tokens: 8192,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: input.system },

@@ -126,7 +126,7 @@ function parseExtractedField(raw: unknown): ExtractedField {
 
   const suggested = data.suggested === true || (citations.length === 0 && confidence < 0.7);
 
-  return { value: normalized, confidence, citations, accepted: normalized.length > 0 && !suggested, suggested };
+  return { value: normalized, confidence, citations, accepted: normalized.length > 0 && confidence >= 0.5, suggested };
 }
 
 function toConfidence(value: unknown) {
