@@ -39,6 +39,11 @@ export class AgentsController {
     return this.agentsService.remove(user, id);
   }
 
+  @Post('generate-strategy')
+  generateStrategyForOrg(@CurrentUser() user: JwtPayload) {
+    return this.agentsService.generateStrategyForOrg(user);
+  }
+
   @Post(':id/draft-openers')
   draftOpeners(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.agentsService.draftOpeners(user, id);

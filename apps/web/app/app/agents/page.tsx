@@ -212,41 +212,13 @@ export default function AgentsPage() {
 
   async function handleGenerateStrategy() {
     setGeneratingStrategy(true);
-    let agentId = editAgent?.id;
-
-    if (!agentId) {
-      // Auto-save the agent first to get an ID, then generate
-      const trimmedName = form.name.trim();
-      if (!trimmedName) {
-        setError('Enter a strategy name first, then generate.');
-        setGeneratingStrategy(false);
-        return;
-      }
-      const saveRes = await fetch('/api/agents', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...toPayload(form),
-          promptDelta: form.promptDelta.trim() || 'Generating from context…',
-          prompt: form.promptDelta.trim() || 'Generating from context…',
-        }),
-      });
-      const savedData = await saveRes.json().catch(() => ({}));
-      if (!saveRes.ok) {
-        setError(Array.isArray(savedData?.message) ? savedData.message[0] : (savedData?.message ?? 'Failed to create agent'));
-        setGeneratingStrategy(false);
-        return;
-      }
-      agentId = (savedData as { id: string }).id;
-      setEditAgent(savedData as Agent);
-      void loadAgents();
-    }
-
-    const res = await fetch(`/api/agents/${agentId}/generate-strategy`, { method: 'POST' });
+    const res = await fetch('/api/agents/generate-strategy', { method: 'POST' });
     const data = await res.json().catch(() => ({}));
     setGeneratingStrategy(false);
     if (res.ok && typeof data?.strategy === 'string') {
       setForm((prev) => ({ ...prev, promptDelta: data.strategy }));
+    } else {
+      setError(Array.isArray(data?.message) ? data.message[0] : (data?.message ?? 'Failed to generate strategy.'));
     }
   }
 

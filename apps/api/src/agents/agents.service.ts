@@ -166,6 +166,10 @@ export class AgentsService {
     }
   }
 
+  async generateStrategyForOrg(user: JwtPayload) {
+    return this.buildStrategy(user.orgId);
+  }
+
   async generateStrategy(user: JwtPayload, agentId: string) {
     const [agent] = await this.db
       .select()
@@ -175,6 +179,10 @@ export class AgentsService {
 
     if (!agent) throw new NotFoundException('Agent not found');
 
+    return this.buildStrategy(user.orgId);
+  }
+
+  private async buildStrategy(orgId: string) {
     const [contextRow, productRows] = await Promise.all([
       this.db
         .select({
@@ -189,13 +197,13 @@ export class AgentsService {
           buyingTriggers: schema.salesContext.buyingTriggers,
         })
         .from(schema.salesContext)
-        .where(eq(schema.salesContext.orgId, user.orgId))
+        .where(eq(schema.salesContext.orgId, orgId))
         .limit(1)
         .then((rows) => rows[0] ?? null),
       this.db
         .select({ name: schema.products.name, elevatorPitch: schema.products.elevatorPitch })
         .from(schema.products)
-        .where(eq(schema.products.orgId, user.orgId)),
+        .where(eq(schema.products.orgId, orgId)),
     ]);
 
     const toList = (val: unknown): string[] =>
