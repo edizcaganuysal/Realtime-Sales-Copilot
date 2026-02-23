@@ -1662,33 +1662,38 @@ export class IngestService {
   ): Promise<CompanyExtractionResult> {
     const raw = await this.runJsonCompletion({
       system:
-        'You are a sales enablement analyst. Your job is to produce a COMPLETE company profile — leave NO field empty. ' +
-        'EXTRACTION: For fields with direct source evidence, extract faithfully and cite source IDs. ' +
-        'INFERENCE: For fields with no direct evidence, make intelligent, well-reasoned inferences from the overall context — set confidence to 0.45-0.60 and suggested=true and citations=[]. ' +
-        'NEVER fabricate: specific numbers, percentages, named client companies, or concrete measurable outcomes unless directly stated. ' +
-        'You MUST infer (do not leave empty): tone_style, sales_strategy, target_customers, target_roles, industries, buying_triggers, discovery_questions, escalation_rules, forbidden_claims, next_steps — use company type, offering, and language cues to make specific, useful inferences.',
+        'You are a sales enablement analyst. Produce a COMPLETE company profile — every field must have a non-empty value.\n\n' +
+        'CONFIDENCE TIERS — assign scores precisely based on evidence quality:\n' +
+        '  TIER 1 (0.80–0.95): Directly stated in sources. Quote or closely paraphrase. Include real source citations.\n' +
+        '  TIER 2 (0.65–0.79): Clearly implied by source content, minor interpretation needed. Include citations.\n' +
+        '  TIER 3 (0.50–0.64): Contextual inference — derived from company type, offering mix, or writing style. Set suggested=true, citations=[].\n' +
+        '  TIER 4 (0.35–0.49): Reasonable industry default for this business category — no company-specific evidence. Set suggested=true, citations=[].\n\n' +
+        'IMPORTANT: Use TIER 1/2 whenever you can cite a source. Do NOT downgrade confidence just because a field requires synthesis. ' +
+        'If the company name, services, or target market appear in the sources, those fields are TIER 1.\n\n' +
+        'NEVER FABRICATE: specific numbers, percentages, named client companies, or concrete metrics unless they appear verbatim in sources.\n' +
+        'ALWAYS FILL (use TIER 3/4 if needed): tone_style, sales_strategy, target_customers, target_roles, industries, buying_triggers, discovery_questions, escalation_rules, forbidden_claims, next_steps.',
       user:
         'Given these sources, produce JSON with key fields. Schema:\n' +
         '{ \"fields\": { \"company_name\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"what_we_sell\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"how_it_works\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"offer_category\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"target_customer\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"target_roles\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"industries\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"buying_triggers\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"disqualifiers\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"global_value_props\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"proof_points\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"case_studies\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"allowed_claims\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"sales_policies\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"forbidden_claims\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"competitors\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"positioning_rules\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"escalation_rules\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"discovery_questions\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"qualification_rubric\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"next_steps\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"knowledge_appendix\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"company_overview\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"target_customers\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"value_props\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"tone_style\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"sales_strategy\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"compliance_and_policies\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"competitor_positioning\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"knowledge_base_appendix\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean} } }\n' +
         'Rules:\n' +
-        '- LANGUAGE: Write ALL field values in the exact same language as the source content — do NOT translate. If sources are primarily Turkish, write in Turkish. If primarily English, write in English.\n' +
-        '- COMPLETENESS: Every field must have a non-empty value. If a field has no direct evidence, INFER it from context (set confidence 0.45-0.60, suggested=true, citations=[]).\n' +
-        '- Prefer concrete wording copied or closely paraphrased from source language when extracting.\n' +
-        '- For array fields, include up to 18 concise items. Infer reasonable items when sources are thin.\n' +
-        '- company_overview: 3-5 sentences covering uniqueness, who they serve, outcomes they deliver, and how they work.\n' +
-        '- target_customers: describe ideal buyer in detail — company size, role/title, industry, and pain that makes them a fit — 2-4 sentences. Infer from offering type if not stated.\n' +
-        '- tone_style: 2-4 sentences on call tone (consultative/challenger/direct), formal/casual register, and emotional style — infer from how the company writes about itself if not explicit.\n' +
-        '- sales_strategy: TACTICAL — call structure (discovery-first or pitch-first), top 2-3 discovery questions for this prospect type, how to handle the most likely objection, and which value prop to lead with — 3-6 sentences. ALWAYS infer this based on company type and offering.\n' +
-        '- buying_triggers: 5-10 specific situations that would make a prospect call — infer from offering type if not stated.\n' +
-        '- discovery_questions: 6-10 specific questions a rep should ask this company\'s prospects — ALWAYS infer if not in sources.\n' +
-        '- escalation_rules: 3-5 practical rules for when to escalate — infer sensible defaults for this business type.\n' +
-        '- forbidden_claims: 3-6 specific claims reps must never make — infer from industry norms and offering type.\n' +
-        '- next_steps: 3-5 specific follow-up actions a rep should offer — infer standard options for this business type.\n' +
-        '- proof_points: ONLY include specific, quotable claims. Numbers, percentages, timeframes, or named outcomes if available. If no metrics exist, use factual operational claims.\n' +
-        '- case_studies: describe specific outcomes with context. If no evidence, leave empty rather than infer.\n' +
-        '- compliance_and_policies: SALES POLICIES only (booking, payment, cancellation, turnaround). Do NOT use generic legal/privacy content.\n' +
-        '- competitor_positioning: infer a sensible approach for this industry/offering type if not stated.\n' +
-        '- Keep citations as source IDs like S1. Fields filled by inference have citations=[].\n' +
+        '- LANGUAGE: ALL values must be in the dominant language of the source content (Turkish if Turkish sources, English if English). Do NOT translate.\n' +
+        '- For array fields, include up to 18 items. Use TIER 3/4 inference to fill arrays when sources are thin.\n' +
+        '- company_overview (TIER 1 or 2): 3-5 sentences — what makes this company unique, who they serve, what outcomes they deliver, and how they work.\n' +
+        '- target_customers (TIER 1/2 or TIER 3): company size, role/title, industry focus, and pain that triggers purchase — 2-4 sentences.\n' +
+        '- value_props (TIER 1/2 or TIER 3): 6-12 specific benefits. Include both extracted and inferred items — inferred items have their own sub-confidence.\n' +
+        '- tone_style (TIER 3 acceptable): 2-4 sentences on call tone (consultative/challenger/direct), formal/casual register — infer from how the company writes.\n' +
+        '- sales_strategy (TIER 3 acceptable): TACTICAL — call structure, top 2-3 specific discovery questions for THIS prospect type, how to handle the #1 likely objection, which value prop to lead with — 3-6 sentences.\n' +
+        '- buying_triggers (TIER 3 acceptable): 5-10 situations that drive purchase. Infer from offering type.\n' +
+        '- discovery_questions (TIER 3 acceptable): 6-10 specific questions a rep should ask. Always infer if not in sources.\n' +
+        '- escalation_rules (TIER 3 or 4): 3-5 practical escalation rules for this business type.\n' +
+        '- forbidden_claims (TIER 3 or 4): 3-6 specific claims reps must never make.\n' +
+        '- next_steps (TIER 3 or 4): 3-5 specific follow-up actions a rep can offer.\n' +
+        '- proof_points: ONLY specific, quotable claims with numbers/timeframes when available. If no metrics exist, use factual operational claims.\n' +
+        '- case_studies: only include if there is actual evidence. Do NOT infer case studies.\n' +
+        '- compliance_and_policies: SALES POLICIES only — booking, payment, cancellation, turnaround. Do NOT include privacy policy or legal boilerplate.\n' +
+        '- competitor_positioning: infer a sensible positioning approach for this industry if not stated.\n' +
+        '- knowledge_base_appendix: compile all extracted facts not covered by other fields into a useful reference block.\n' +
+        '- Citations must be source IDs like S1. TIER 3/4 inferred fields have citations=[].\n' +
         this.renderSources(sources),
     }, {
       orgId,
@@ -1771,11 +1776,15 @@ export class IngestService {
   ): Promise<ProductExtractionResult> {
     const raw = await this.runJsonCompletion({
       system:
-        'You are a sales offering extraction analyst. Produce COMPLETE offering profiles — leave no field empty. ' +
-        'EXTRACTION: For fields with direct source evidence, extract faithfully and cite source IDs. ' +
-        'INFERENCE: For fields with no direct evidence, make intelligent inferences from the offering name, company context, and industry — set confidence 0.45-0.60, suggested=true, citations=[]. ' +
-        'NEVER fabricate: specific pricing numbers, named client references, or concrete performance metrics. ' +
-        'You MUST infer (never leave empty): value_props, differentiators, dont_say, faqs, objections — using the offering type and target market as context.',
+        'You are a sales offering extraction analyst. Produce COMPLETE offering profiles — every field must have a non-empty value.\n\n' +
+        'CONFIDENCE TIERS — assign scores precisely:\n' +
+        '  TIER 1 (0.80–0.95): Directly stated in sources. Quote or closely paraphrase. Include real citations.\n' +
+        '  TIER 2 (0.65–0.79): Clearly implied by source content, minor interpretation. Include citations.\n' +
+        '  TIER 3 (0.50–0.64): Inferred from offering name, company context, or industry norms. Set suggested=true, citations=[].\n' +
+        '  TIER 4 (0.35–0.49): Reasonable industry default — no offering-specific evidence. Set suggested=true, citations=[].\n\n' +
+        'IMPORTANT: If the offering name and description appear in sources, that is TIER 1. Do NOT apply inference-level confidence to extracted content.\n\n' +
+        'NEVER FABRICATE: specific pricing, named clients, or concrete performance metrics.\n' +
+        'ALWAYS FILL (use TIER 3/4 if needed): value_props, differentiators, dont_say, faqs, objections.',
       user:
         'Given these sources, return JSON with key "products" as an array. Each product item must contain:\n' +
         '{ "name": {"value": string, "confidence": number, "citations": string[], "suggested": boolean}, "elevator_pitch": {"value": string, "confidence": number, "citations": string[], "suggested": boolean}, "value_props": {"value": string[], "confidence": number, "citations": string[], "suggested": boolean}, "differentiators": {"value": string[], "confidence": number, "citations": string[], "suggested": boolean}, "pricing_rules": {"value": object, "confidence": number, "citations": string[], "suggested": boolean}, "dont_say": {"value": string[], "confidence": number, "citations": string[], "suggested": boolean}, "faqs": {"value": array, "confidence": number, "citations": string[], "suggested": boolean}, "objections": {"value": array, "confidence": number, "citations": string[], "suggested": boolean} }\n' +
@@ -2282,7 +2291,6 @@ export class IngestService {
 
     const response = await client.chat.completions.create({
       model,
-      max_completion_tokens: 8192,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: input.system },
