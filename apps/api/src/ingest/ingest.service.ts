@@ -2663,6 +2663,9 @@ export class IngestService {
     const resultProducts = Array.isArray(result.products) ? result.products : [];
     const reviewProducts = Array.isArray(payload.products) ? payload.products : resultProducts;
 
+    // Delete all existing offerings before inserting the new set — prevents duplicates on re-import
+    await this.db.delete(schema.products).where(eq(schema.products.orgId, orgId));
+
     const created: Array<{ id: string; name: string }> = [];
     for (const entry of reviewProducts.slice(0, 10)) {
       const product = this.asRecord(entry);

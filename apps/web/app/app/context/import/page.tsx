@@ -274,7 +274,7 @@ export default function CombinedImportPage() {
 
             const confidence = (name.confidence + elevator.confidence + valueProps.confidence + differentiators.confidence) / 4;
             const suggested = name.suggested || elevator.suggested || valueProps.suggested || differentiators.suggested || citationSet.size === 0;
-            const defaultAccepted = confidence >= 0.85 && citationSet.size > 0 && !suggested;
+            const defaultAccepted = confidence >= 0.5;
 
             return {
               id: typeof raw.id === 'string' ? raw.id : `product-${index + 1}`,
