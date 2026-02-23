@@ -410,7 +410,7 @@ export class TwilioWebhookController {
           return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="Polly.Joanna-Neural">${escapeXml(opener)}</Say>
-  <Gather input="speech" action="${gatherAction}" speechTimeout="auto" timeout="5" />
+  <Gather input="speech" action="${gatherAction}" speechTimeout="3" speechModel="phone_call" timeout="5" />
   <Redirect>${gatherAction}</Redirect>
 </Response>`;
         }
@@ -487,7 +487,7 @@ export class TwilioWebhookController {
     return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="Polly.Joanna-Neural">${escapeXml(aiText)}</Say>
-  <Gather input="speech" action="${gatherAction}" speechTimeout="auto" timeout="5" />
+  <Gather input="speech" action="${gatherAction}" speechTimeout="3" speechModel="phone_call" timeout="5" />
   <Redirect>${gatherAction}</Redirect>
 </Response>`;
   }

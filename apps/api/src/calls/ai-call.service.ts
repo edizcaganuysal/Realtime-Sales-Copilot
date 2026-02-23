@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { WebSocketServer as WsServer } from 'ws';
 import WebSocket from 'ws';
-import { eq, asc } from 'drizzle-orm';
+import { eq, asc, desc } from 'drizzle-orm';
 import { DRIZZLE, DrizzleDb } from '../db/db.module';
 import * as schema from '../db/schema';
 import { CallsGateway } from './calls.gateway';
@@ -66,38 +66,41 @@ export class AiCallService implements OnApplicationBootstrap {
     if (!this.apiKey) return fallback;
 
     try {
-      // 1. Persist prospect speech if any
-      if (speechResult?.trim()) {
-        const tsMs = Date.now();
-        await this.db.insert(schema.callTranscript).values({
-          callId,
-          tsMs,
-          speaker: 'PROSPECT',
-          text: speechResult.trim(),
-          isFinal: true,
-        });
-        this.gateway.emitToCall(callId, 'transcript.final', {
-          speaker: 'PROSPECT',
-          text: speechResult.trim(),
-          tsMs,
-          isFinal: true,
-        });
-      }
+      // 1. Persist prospect speech and load call row in parallel (saves ~80ms vs sequential)
+      const prospectText = speechResult?.trim() ?? null;
+      const prospectTsMs = prospectText ? Date.now() : 0;
 
-      // 2. Load call row
-      const [callRow] = await this.db
-        .select({
-          orgId: schema.calls.orgId,
-          agentId: schema.calls.agentId,
-          preparedOpenerText: schema.calls.preparedOpenerText,
-        })
-        .from(schema.calls)
-        .where(eq(schema.calls.id, callId))
-        .limit(1);
+      const persistSpeech = prospectText
+        ? this.db
+            .insert(schema.callTranscript)
+            .values({ callId, tsMs: prospectTsMs, speaker: 'PROSPECT', text: prospectText, isFinal: true })
+            .then(() => {
+              this.gateway.emitToCall(callId, 'transcript.final', {
+                speaker: 'PROSPECT',
+                text: prospectText,
+                tsMs: prospectTsMs,
+                isFinal: true,
+              });
+            })
+            .catch((err: Error) => this.logger.warn(`Speech persist error: ${err.message}`))
+        : Promise.resolve();
+
+      const [[callRow]] = await Promise.all([
+        this.db
+          .select({
+            orgId: schema.calls.orgId,
+            agentId: schema.calls.agentId,
+            preparedOpenerText: schema.calls.preparedOpenerText,
+          })
+          .from(schema.calls)
+          .where(eq(schema.calls.id, callId))
+          .limit(1),
+        persistSpeech,
+      ]);
 
       if (!callRow) return fallback;
 
-      // 3. Load context in parallel with transcript history
+      // 2. Load context + last 16 transcript rows in parallel
       const [ctxRow, productRows, agentRow, transcriptRows] = await Promise.all([
         this.db
           .select({
@@ -127,11 +130,14 @@ export class AiCallService implements OnApplicationBootstrap {
               .limit(1)
               .then((rows) => rows[0] ?? null)
           : Promise.resolve(null),
+        // Fetch last 16 rows (8 turns) newest-first, then reverse for chronological order
         this.db
           .select({ speaker: schema.callTranscript.speaker, text: schema.callTranscript.text })
           .from(schema.callTranscript)
           .where(eq(schema.callTranscript.callId, callId))
-          .orderBy(asc(schema.callTranscript.tsMs)),
+          .orderBy(desc(schema.callTranscript.tsMs))
+          .limit(16)
+          .then((rows) => rows.reverse()),
       ]);
 
       const toList = (val: unknown): string[] =>
@@ -156,14 +162,14 @@ export class AiCallService implements OnApplicationBootstrap {
         opener,
       });
 
-      // 4. Build Chat Completions message history
+      // 3. Build Chat Completions message history
       // REP utterances → assistant turns; PROSPECT utterances → user turns
       const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
         {
           role: 'system',
           content:
             systemPrompt +
-            '\n\nIMPORTANT: When you want to end the call, start your response with [HANGUP] followed by your closing statement.',
+            '\n\nIMPORTANT: When you want to end the call, place [HANGUP] anywhere in your response. It will be removed before the prospect hears it.',
         },
       ];
 
@@ -180,7 +186,7 @@ export class AiCallService implements OnApplicationBootstrap {
         messages.push({ role: 'user', content: '[Call connected — begin with your opener now]' });
       }
 
-      // 5. Call OpenAI Chat Completions
+      // 4. Call OpenAI Chat Completions
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -204,28 +210,27 @@ export class AiCallService implements OnApplicationBootstrap {
         choices: Array<{ message: { content: string } }>;
       };
       let aiText = json.choices[0]?.message?.content?.trim() ?? '';
-      const shouldHangup = aiText.startsWith('[HANGUP]');
-      if (shouldHangup) aiText = aiText.replace(/^\[HANGUP\]\s*/, '').trim();
+
+      // Detect [HANGUP] anywhere in the response, then strip it
+      const shouldHangup = /\[HANGUP\]/i.test(aiText);
+      if (shouldHangup) aiText = aiText.replace(/\[HANGUP\]\s*/gi, '').trim();
 
       if (!aiText) {
         return { aiText: 'Thank you, I appreciate your time.', shouldHangup: true };
       }
 
-      // 6. Persist AI response and emit transcript event
-      const tsMs = Date.now();
-      await this.db.insert(schema.callTranscript).values({
-        callId,
-        tsMs,
-        speaker: 'REP',
-        text: aiText,
-        isFinal: true,
-      });
+      // 5. Emit transcript immediately; persist in background (saves ~80ms)
+      const aiTsMs = Date.now();
       this.gateway.emitToCall(callId, 'transcript.final', {
         speaker: 'REP',
         text: aiText,
-        tsMs,
+        tsMs: aiTsMs,
         isFinal: true,
       });
+      void this.db
+        .insert(schema.callTranscript)
+        .values({ callId, tsMs: aiTsMs, speaker: 'REP', text: aiText, isFinal: true })
+        .catch((err: Error) => this.logger.warn(`AI persist error: ${err.message}`));
 
       return { aiText, shouldHangup };
     } catch (err) {
