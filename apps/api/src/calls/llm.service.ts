@@ -119,7 +119,7 @@ export class LlmService implements OnModuleInit {
         { role: 'user', content: userPrompt },
       ],
       temperature: options.temperature ?? 0.35,
-      max_tokens: options.maxTokens ?? 512,
+      max_completion_tokens: options.maxTokens ?? 512,
       ...(options.jsonMode ? { response_format: { type: 'json_object' } } : {}),
     });
     return ((resp.choices[0]?.message?.content as string | null | undefined) ?? '').trim();
@@ -162,7 +162,7 @@ export class LlmService implements OnModuleInit {
         { role: 'user', content: userPrompt },
       ],
       temperature: options.temperature ?? 0.4,
-      max_tokens: options.maxTokens ?? 512,
+      max_completion_tokens: options.maxTokens ?? 512,
       ...(options.jsonMode ? { response_format: { type: 'json_object' } } : {}),
     });
     return ((resp.choices[0]?.message?.content as string | null | undefined) ?? '').trim();
