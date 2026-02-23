@@ -360,30 +360,14 @@ export class TwilioWebhookController {
    */
   @Get('twiml')
   @Header('Content-Type', 'text/xml')
-  async twiml(@Query('callId') callId: string) {
+  twiml(@Query('callId') callId: string) {
     const base = (process.env['TWILIO_WEBHOOK_BASE_URL'] ?? '').replace(/\/$/, '');
     // Convert http(s):// → ws(s)://
     const wsBase = base.replace(/^https/, 'wss').replace(/^http(?!s)/, 'ws');
 
-    // Determine stream path based on call mode
-    let streamPath = '/media-stream';
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(callId ?? '');
-    if (callId && isUuid) {
-      try {
-        const [callRow] = await this.db
-          .select({ mode: schema.calls.mode })
-          .from(schema.calls)
-          .where(eq(schema.calls.id, callId))
-          .limit(1);
-        if (callRow?.mode === CallMode.AI_CALLER) {
-          streamPath = '/ai-call-stream';
-        }
-      } catch {
-        // Fall back to /media-stream on any DB error
-      }
-    }
-
-    const streamUrl = `${wsBase}${streamPath}`;
+    // All Twilio streams go through /media-stream; MediaStreamService routes to
+    // AiCallService internally when it detects AI_CALLER mode from the DB.
+    const streamUrl = `${wsBase}/media-stream`;
     this.logger.log(`TwiML requested — callId: ${callId}, streamUrl: ${streamUrl}`);
 
     return `<?xml version="1.0" encoding="UTF-8"?>

@@ -7,11 +7,13 @@ import {
 } from '@nestjs/common';
 import { WebSocketServer as WsServer } from 'ws';
 import type WebSocket from 'ws';
+import { eq } from 'drizzle-orm';
 import { DRIZZLE, DrizzleDb } from '../db/db.module';
 import * as schema from '../db/schema';
 import { CallsGateway } from './calls.gateway';
 import { SttService } from './stt.service';
 import { EngineService } from './engine.service';
+import { AiCallService } from './ai-call.service';
 
 type TwilioMsg =
   | { event: 'connected' }
@@ -46,6 +48,7 @@ export class MediaStreamService implements OnApplicationBootstrap {
     private readonly gateway: CallsGateway,
     private readonly sttService: SttService,
     private readonly engineService: EngineService,
+    private readonly aiCallService: AiCallService,
     @Inject(DRIZZLE) private readonly db: DrizzleDb,
   ) {}
 
@@ -72,6 +75,8 @@ export class MediaStreamService implements OnApplicationBootstrap {
       this.logger.log('Media stream WS connected — waiting for start event to get callId');
 
       let callId: string | null = null;
+      // 'pending' = mode check in-flight; 'ai' = handed to AiCallService; 'outbound' = regular
+      let callMode: 'pending' | 'ai' | 'outbound' = 'outbound';
       const deepgramByTrack = new Map<string, WebSocket>();
       const earlyMediaBuffer: Array<{ track: string; audio: Buffer }> = [];
 
@@ -166,31 +171,64 @@ export class MediaStreamService implements OnApplicationBootstrap {
               return;
             }
 
-            this.logger.log(
-              `Media stream identified — call ${callId}, tracks=${tracks.join(',')}, STT: ${this.sttService.available}`,
-            );
+            // Check call mode — AI_CALLER streams are handed off to AiCallService
+            callMode = 'pending';
+            const resolvedCallId = callId;
+            const resolvedStreamSid = msg.start.streamSid;
 
-            if (this.sttService.available) {
-              for (const track of tracks) {
-                ensureDeepgramSession(track);
-              }
-              if (deepgramByTrack.size === 0) {
-                ensureDeepgramSession('inbound');
+            void (async () => {
+              try {
+                const [callRow] = await this.db
+                  .select({ mode: schema.calls.mode })
+                  .from(schema.calls)
+                  .where(eq(schema.calls.id, resolvedCallId))
+                  .limit(1);
+
+                if (callRow?.mode === 'AI_CALLER') {
+                  this.logger.log(`AI_CALLER detected on /media-stream — handing off to AiCallService (callId=${resolvedCallId})`);
+                  callMode = 'ai';
+                  closeSessions(); // clean up any Deepgram sessions created so far
+                  ws.removeAllListeners('message');
+                  ws.removeAllListeners('error');
+                  ws.removeAllListeners('close');
+                  this.aiCallService.startFromHandover(ws, resolvedCallId, resolvedStreamSid ?? null);
+                  return;
+                }
+              } catch (err) {
+                this.logger.warn(`Call mode check error: ${(err as Error).message} — treating as OUTBOUND`);
               }
 
-              for (const buffered of earlyMediaBuffer) {
-                const session = ensureDeepgramSession(buffered.track);
-                if (session?.readyState === 1) session.send(buffered.audio);
+              // Regular outbound call: set up Deepgram
+              callMode = 'outbound';
+              this.logger.log(
+                `Media stream identified — call ${resolvedCallId}, tracks=${tracks.join(',')}, STT: ${this.sttService.available}`,
+              );
+
+              if (this.sttService.available) {
+                for (const track of tracks) {
+                  ensureDeepgramSession(track);
+                }
+                if (deepgramByTrack.size === 0) {
+                  ensureDeepgramSession('inbound');
+                }
+
+                for (const buffered of earlyMediaBuffer) {
+                  const session = ensureDeepgramSession(buffered.track);
+                  if (session?.readyState === 1) session.send(buffered.audio);
+                }
+                earlyMediaBuffer.length = 0;
               }
-              earlyMediaBuffer.length = 0;
-            }
+            })();
+
             break;
           }
 
           case 'media': {
+            // While mode check is pending or once handed to AiCallService, buffer/ignore
+            if (callMode === 'ai') break;
             const track = normalizeTrack(msg.media.track || '');
             const audio = Buffer.from(msg.media.payload, 'base64');
-            if (!callId) {
+            if (!callId || callMode === 'pending') {
               earlyMediaBuffer.push({ track, audio });
               break;
             }

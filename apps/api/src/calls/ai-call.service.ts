@@ -53,9 +53,18 @@ export class AiCallService implements OnApplicationBootstrap {
     this.logger.log('AI Call WS attached at /ai-call-stream');
   }
 
-  private handleAiCallSession(twilioWs: WebSocket) {
-    let callId: string | null = null;
-    let streamSid: string | null = null;
+  /**
+   * Called by MediaStreamService when it detects an AI_CALLER call on /media-stream.
+   * Picks up the already-established Twilio WebSocket and starts the AI session.
+   */
+  startFromHandover(ws: WebSocket, callId: string, streamSid: string | null): void {
+    this.logger.log(`AI call handover received — callId=${callId} streamSid=${streamSid}`);
+    this.handleAiCallSession(ws, callId, streamSid);
+  }
+
+  private handleAiCallSession(twilioWs: WebSocket, initialCallId: string | null = null, initialStreamSid: string | null = null) {
+    let callId: string | null = initialCallId;
+    let streamSid: string | null = initialStreamSid;
     let openaiWs: WebSocket | null = null;
     let sessionReady = false;
     let partialAiText = '';
@@ -284,6 +293,11 @@ export class AiCallService implements OnApplicationBootstrap {
       });
     };
 
+    // If callId was pre-set via handover from MediaStreamService, start OpenAI immediately
+    if (callId) {
+      void startOpenAI(callId);
+    }
+
     // Handle Twilio Media Stream messages
     twilioWs.on('message', (rawData) => {
       let msg: { event: string; [key: string]: unknown };
@@ -299,6 +313,9 @@ export class AiCallService implements OnApplicationBootstrap {
           break;
 
         case 'start': {
+          // Skip if already initialized via handover from MediaStreamService
+          if (callId) break;
+
           const startData = msg.start as Record<string, unknown> | undefined;
           streamSid = (msg.streamSid ?? startData?.streamSid) as string | null;
           const customParams = (startData?.customParameters ?? {}) as Record<string, unknown>;
