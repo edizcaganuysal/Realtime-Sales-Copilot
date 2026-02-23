@@ -186,6 +186,10 @@ export default function CombinedImportPage() {
   const [products, setProducts] = useState<ProductReview[]>([]);
   const [productAiSuggestions, setProductAiSuggestions] = useState<Record<string, Partial<Record<string, AiSuggestion>>>>({});
 
+  // Progress animation
+  const [extractionStartedAt, setExtractionStartedAt] = useState<number | null>(null);
+  const [, setAnimTick] = useState(0);
+
   // Apply state
   const [applying, setApplying] = useState(false);
   const [appliedCompany, setAppliedCompany] = useState(false);
@@ -307,6 +311,14 @@ export default function CombinedImportPage() {
     const id = setInterval(() => { void poll(); }, 2000);
     return () => { active = false; clearInterval(id); };
   }, [companyJobId, productJobId, step]);
+
+  // ── Animate progress bar while step 3 is active ────────────────────────────
+  useEffect(() => {
+    if (step !== 3) return;
+    setExtractionStartedAt(Date.now());
+    const timer = setInterval(() => setAnimTick((t) => t + 1), 300);
+    return () => clearInterval(timer);
+  }, [step]);
 
   // ── Sources map (from whichever job has sources) ───────────────────────────
   const sourcesById = useMemo(() => {
@@ -568,6 +580,17 @@ export default function CombinedImportPage() {
   const productFailed = productJob?.status === 'failed';
   const bothApplied = (appliedCompany || !companySucceeded) && (appliedProducts || !productSucceeded);
 
+  // Time-based animated progress (95% asymptote over ~70s, snaps to 100% on success)
+  function getDisplayPct(succeeded: boolean, failed: boolean): number {
+    if (succeeded) return 100;
+    if (failed) return 0;
+    if (!extractionStartedAt) return 0;
+    const elapsed = Date.now() - extractionStartedAt;
+    return Math.round(95 * (1 - Math.exp(-elapsed / 70000)));
+  }
+  const cDisplayPct = getDisplayPct(companySucceeded, companyFailed);
+  const pDisplayPct = getDisplayPct(productSucceeded, productFailed);
+
   // ─── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="p-8 max-w-6xl space-y-6">
@@ -712,7 +735,7 @@ export default function CombinedImportPage() {
               </span>
             </div>
             <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
-              <div className="bg-sky-500 h-1.5 transition-all" style={{ width: companySucceeded ? '100%' : cProgress.total > 0 ? `${Math.min(100, Math.round((cProgress.completed / cProgress.total) * 100))}%` : '8%' }} />
+              <div className="bg-sky-500 h-1.5 transition-[width] duration-300" style={{ width: `${cDisplayPct}%` }} />
             </div>
             <p className="text-xs text-slate-500">{cProgress.message}</p>
           </div>
@@ -726,7 +749,7 @@ export default function CombinedImportPage() {
               </span>
             </div>
             <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
-              <div className="bg-sky-500 h-1.5 transition-all" style={{ width: productSucceeded ? '100%' : pProgress.total > 0 ? `${Math.min(100, Math.round((pProgress.completed / pProgress.total) * 100))}%` : '8%' }} />
+              <div className="bg-sky-500 h-1.5 transition-[width] duration-300" style={{ width: `${pDisplayPct}%` }} />
             </div>
             <p className="text-xs text-slate-500">{pProgress.message}</p>
           </div>

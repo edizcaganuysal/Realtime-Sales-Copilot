@@ -182,6 +182,8 @@ export default function CompanyImportPage() {
   const [aiBusyKey, setAiBusyKey] = useState('');
   const [aiError, setAiError] = useState('');
   const [aiSuggestions, setAiSuggestions] = useState<Partial<Record<CompanyFieldKey, AiSuggestion>>>({});
+  const [extractionStartedAt, setExtractionStartedAt] = useState<number | null>(null);
+  const [, setAnimTick] = useState(0);
   const [review, setReview] = useState<Record<CompanyFieldKey, ExtractedField>>({
     company_overview: { value: '', confidence: 0, citations: [], accepted: false, suggested: false },
     target_customers: { value: '', confidence: 0, citations: [], accepted: false, suggested: false },
@@ -263,6 +265,13 @@ export default function CompanyImportPage() {
       clearInterval(intervalId);
     };
   }, [jobId, step]);
+
+  useEffect(() => {
+    if (step !== 3) return;
+    setExtractionStartedAt(Date.now());
+    const timer = setInterval(() => setAnimTick((t) => t + 1), 300);
+    return () => clearInterval(timer);
+  }, [step]);
 
   async function runExtraction() {
     setError('');
@@ -474,6 +483,15 @@ export default function CompanyImportPage() {
   const progressMessage = typeof progress.message === 'string' ? progress.message : 'Processing';
   const progressCompleted = typeof progress.completed === 'number' ? progress.completed : 0;
   const progressTotal = typeof progress.total === 'number' ? progress.total : 0;
+  const jobSucceeded = job?.status === 'succeeded';
+  const jobFailed = job?.status === 'failed';
+  const displayPct = jobSucceeded
+    ? 100
+    : jobFailed
+      ? 0
+      : extractionStartedAt
+        ? Math.round(95 * (1 - Math.exp(-(Date.now() - extractionStartedAt) / 70000)))
+        : 0;
   const runNote =
     typeof job?.result?.note === 'string'
       ? job.result.note
@@ -683,13 +701,8 @@ export default function CompanyImportPage() {
           </p>
           <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
             <div
-              className="bg-sky-500 h-2 transition-all"
-              style={{
-                width:
-                  progressTotal > 0
-                    ? `${Math.min(100, Math.round((progressCompleted / progressTotal) * 100))}%`
-                    : '10%',
-              }}
+              className="bg-sky-500 h-2 transition-[width] duration-300"
+              style={{ width: `${displayPct}%` }}
             />
           </div>
           <p className="text-xs text-slate-500">

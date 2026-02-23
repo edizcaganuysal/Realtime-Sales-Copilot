@@ -2257,11 +2257,7 @@ export class IngestService {
     },
   ) {
     const client = this.getOpenAiClient();
-    const model =
-      process.env['INGEST_LLM_MODEL'] ||
-      process.env['LLM_MODEL'] ||
-      process.env['OPENAI_MODEL'] ||
-      'gpt-4o-mini';
+    const model = process.env['INGEST_LLM_MODEL'] || 'gpt-4o-mini';
 
     if (debit) {
       await this.creditsService.requireAvailable(debit.orgId, 1);
