@@ -367,14 +367,19 @@ export class TwilioWebhookController {
 
     // Determine stream path based on call mode
     let streamPath = '/media-stream';
-    if (callId) {
-      const [callRow] = await this.db
-        .select({ mode: schema.calls.mode })
-        .from(schema.calls)
-        .where(eq(schema.calls.id, callId))
-        .limit(1);
-      if (callRow?.mode === CallMode.AI_CALLER) {
-        streamPath = '/ai-call-stream';
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(callId ?? '');
+    if (callId && isUuid) {
+      try {
+        const [callRow] = await this.db
+          .select({ mode: schema.calls.mode })
+          .from(schema.calls)
+          .where(eq(schema.calls.id, callId))
+          .limit(1);
+        if (callRow?.mode === CallMode.AI_CALLER) {
+          streamPath = '/ai-call-stream';
+        }
+      } catch {
+        // Fall back to /media-stream on any DB error
       }
     }
 
