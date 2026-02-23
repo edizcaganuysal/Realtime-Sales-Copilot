@@ -6,11 +6,12 @@ import { useEffect, useState } from 'react';
 import {
   Home,
   PhoneCall,
-  Bot,
+  Target,
   Building2,
   CreditCard,
   Settings,
   LogOut,
+  Bot,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { MeResponse } from '@live-sales-coach/shared';
@@ -18,7 +19,8 @@ import type { MeResponse } from '@live-sales-coach/shared';
 const TOP_NAV = [
   { href: '/app/home', label: 'Home', icon: Home },
   { href: '/app/calls', label: 'Calls', icon: PhoneCall },
-  { href: '/app/agents', label: 'Agents', icon: Bot },
+  { href: '/app/ai-calls', label: 'AI Calls', icon: Bot },
+  { href: '/app/agents', label: 'Strategy', icon: Target },
   { href: '/app/context', label: 'Context', icon: Building2 },
   { href: '/app/billing', label: 'Billing', icon: CreditCard },
 ];

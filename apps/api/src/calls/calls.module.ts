@@ -8,6 +8,7 @@ import { SttService } from './stt.service';
 import { LlmService } from './llm.service';
 import { MediaStreamService } from './media-stream.service';
 import { MockCallService } from './mock-call.service';
+import { AiCallService } from './ai-call.service';
 import { CreditsModule } from '../credits/credits.module';
 
 @Module({
@@ -22,6 +23,7 @@ import { CreditsModule } from '../credits/credits.module';
     LlmService,
     MediaStreamService,
     MockCallService,
+    AiCallService,
   ],
 })
 export class CallsModule {}

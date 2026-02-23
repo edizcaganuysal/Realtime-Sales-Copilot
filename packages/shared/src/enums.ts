@@ -36,6 +36,7 @@ export enum GuidanceLevel {
 export enum CallMode {
   OUTBOUND = 'OUTBOUND',
   MOCK = 'MOCK',
+  AI_CALLER = 'AI_CALLER',
 }
 
 export enum ProductsMode {

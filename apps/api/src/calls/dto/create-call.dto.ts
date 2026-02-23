@@ -21,7 +21,7 @@ export class CreateCallDto {
   agentId?: string;
 
   @IsOptional()
-  @IsString()
+  @IsUUID('4')
   playbookId?: string;
 
   @IsOptional()

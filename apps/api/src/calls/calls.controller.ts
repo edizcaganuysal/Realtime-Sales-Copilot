@@ -202,6 +202,24 @@ export class CallsController {
       return call;
     }
 
+    if (dto.mode === CallMode.AI_CALLER) {
+      // AI Caller — Twilio places the call, AiCallService handles the conversation, no engine needed
+      if (this.twilioService.available) {
+        try {
+          const callSid = await this.twilioService.initiateCall(call.id, dto.phoneTo);
+          await this.callsService.setTwilioSid(call.id, callSid);
+          this.logger.log(`AI Call ${call.id} initiated with Twilio SID ${callSid}`);
+        } catch (err) {
+          this.logger.error(`AI Call Twilio initiation failed: ${(err as Error).message}`);
+          await this.callsService.setStatusImmediate(call.id, 'FAILED');
+        }
+      } else {
+        this.logger.warn(`AI Call ${call.id} — Twilio not available`);
+        await this.callsService.setStatusImmediate(call.id, 'FAILED');
+      }
+      return call;
+    }
+
     if (this.twilioService.available) {
       // Real call — engine starts only after Twilio confirms "answered" via webhook
       try {
@@ -333,6 +351,7 @@ export class TwilioWebhookController {
     private readonly engineService: EngineService,
     private readonly sttService: SttService,
     private readonly gateway: CallsGateway,
+    @Inject(DRIZZLE) private readonly db: DrizzleDb,
   ) {}
 
   /**
@@ -341,18 +360,31 @@ export class TwilioWebhookController {
    */
   @Get('twiml')
   @Header('Content-Type', 'text/xml')
-  twiml(@Query('callId') callId: string) {
+  async twiml(@Query('callId') callId: string) {
     const base = (process.env['TWILIO_WEBHOOK_BASE_URL'] ?? '').replace(/\/$/, '');
     // Convert http(s):// → ws(s)://
     const wsBase = base.replace(/^https/, 'wss').replace(/^http(?!s)/, 'ws');
-    const streamUrl = `${wsBase}/media-stream`;
 
+    // Determine stream path based on call mode
+    let streamPath = '/media-stream';
+    if (callId) {
+      const [callRow] = await this.db
+        .select({ mode: schema.calls.mode })
+        .from(schema.calls)
+        .where(eq(schema.calls.id, callId))
+        .limit(1);
+      if (callRow?.mode === CallMode.AI_CALLER) {
+        streamPath = '/ai-call-stream';
+      }
+    }
+
+    const streamUrl = `${wsBase}${streamPath}`;
     this.logger.log(`TwiML requested — callId: ${callId}, streamUrl: ${streamUrl}`);
 
     return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <Stream url="${streamUrl}" track="inbound_track">
+    <Stream url="${streamUrl}" track="both_tracks">
       <Parameter name="callId" value="${callId}" />
     </Stream>
   </Connect>
@@ -393,12 +425,17 @@ export class TwilioWebhookController {
       this.logger.log(`Emitted call.status=${newStatus} to room ${call.id}`);
 
       if (newStatus === 'IN_PROGRESS') {
-        // Call is now answered — start the engine (no stub transcript, Deepgram handles it)
-        const stubTranscript = !this.sttService.available;
-        this.logger.log(
-          `Call ${call.id} answered — starting engine (stubTranscript=${stubTranscript})`,
-        );
-        this.engineService.start(call.id, stubTranscript);
+        if (call.mode === CallMode.AI_CALLER) {
+          // AI Caller — AiCallService drives the conversation, no copilot engine needed
+          this.logger.log(`AI Call ${call.id} answered — AiCallService will handle conversation`);
+        } else {
+          // Regular outbound call — start the engine (no stub transcript, Deepgram handles it)
+          const stubTranscript = !this.sttService.available;
+          this.logger.log(
+            `Call ${call.id} answered — starting engine (stubTranscript=${stubTranscript})`,
+          );
+          this.engineService.start(call.id, stubTranscript);
+        }
       }
 
       if (newStatus === 'COMPLETED' || newStatus === 'FAILED') {
