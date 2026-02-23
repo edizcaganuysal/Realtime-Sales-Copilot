@@ -7,6 +7,7 @@ import { CallsGateway } from './calls.gateway';
 import { LlmService } from './llm.service';
 import { PROFESSIONAL_SALES_CALL_AGENT_PROMPT } from './professional-sales-agent.prompt';
 import { EMPTY_COMPANY_PROFILE_DEFAULTS } from '../org/company-profile.defaults';
+import { DEFAULT_SALES_STRATEGY } from '../org/sales-context.defaults';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -26,13 +27,31 @@ type CallContext = {
   agentUseDefaultTemplate: boolean;
   agentPromptDelta: string;
   agentFullPrompt: string | null;
+  agentConfigJson: Record<string, unknown>;
   notes: string | null;
   preparedOpenerText: string | null;
   preparedFollowupSeed: string | null;
   stages: StageInfo[];
+  strategy: string;
+  knowledgeAppendix: string;
   companyProfile: CompanyProfile;
   productContext: ProductContext;
+  ragDocuments: RagDocument[];
 };
+
+// ─── Fundamental sales rules injected into the system prompt when enabled ─────
+
+type FundamentalRule = { key: string; label: string; default: boolean; text: string };
+
+const FUNDAMENTAL_RULES: FundamentalRule[] = [
+  { key: 'spin', label: 'Use SPIN discovery', default: true, text: 'Ask situation/problem/implication/need questions before pitching.' },
+  { key: 'anti_repeat', label: 'Avoid repeating same points', default: true, text: 'Never repeat a value prop or differentiator you have already used in this call.' },
+  { key: 'concise', label: 'Keep suggestions short (1-2 sentences)', default: true, text: 'All suggestions must be 1-2 speakable sentences. No paragraphs.' },
+  { key: 'next_step', label: 'Always push for a concrete next step', default: true, text: 'Every 3rd suggestion, propose a concrete next step (calendar hold, pilot, short call).' },
+  { key: 'challenger', label: 'Use Challenger Sale insights', default: true, text: 'Share a concise reframing insight when the prospect seems stuck on status quo.' },
+  { key: 'feature_last', label: 'Discovery before features', default: false, text: 'Never lead with product features. Always start with the prospect\'s situation and problem.' },
+  { key: 'no_filler', label: 'No generic empathy openers', default: false, text: 'Never open a suggestion with "I understand", "That makes sense", "Great question", or similar filler.' },
+];
 
 type CompanyProfile = typeof EMPTY_COMPANY_PROFILE_DEFAULTS;
 
@@ -129,8 +148,15 @@ type EngineState = {
   cachedAlternativesUtteranceSeq: number;
 };
 
+type RagField = keyof CompanyProfile | 'knowledgeAppendix' | 'strategy' | 'caseStudies';
+
+type RagDocument = {
+  field: RagField;
+  text: string;
+};
+
 type RagSnippet = {
-  field: keyof CompanyProfile;
+  field: RagField;
   text: string;
   score: number;
 };
@@ -221,7 +247,7 @@ const STUB_TRANSCRIPT_PROSPECT = [
   'Let me check with my team.',
 ];
 
-const FIELD_LABELS: Record<keyof CompanyProfile, string> = {
+const FIELD_LABELS: Record<RagField, string> = {
   companyName: 'Company',
   productName: 'Product',
   productSummary: 'Product Summary',
@@ -238,9 +264,12 @@ const FIELD_LABELS: Record<keyof CompanyProfile, string> = {
   implementationGuidance: 'Implementation Guidance',
   faq: 'FAQ',
   doNotSay: 'Do Not Say',
+  knowledgeAppendix: 'Knowledge Appendix',
+  strategy: 'Sales Strategy',
+  caseStudies: 'Case Studies',
 };
 
-const FIELD_BOOSTS_BY_OBJECTION: Record<string, Array<keyof CompanyProfile>> = {
+const FIELD_BOOSTS_BY_OBJECTION: Record<string, Array<RagField>> = {
   BUDGET: ['pricingGuidance', 'proofPoints', 'valueProposition', 'objectionHandling'],
   COMPETITOR: ['competitorGuidance', 'differentiators', 'proofPoints', 'objectionHandling'],
   TIMING: ['implementationGuidance', 'valueProposition', 'qualificationGuidance', 'objectionHandling'],
@@ -767,8 +796,8 @@ export class EngineService implements OnModuleDestroy {
     if (!jittered) return '';
     const variation =
       utteranceSeq % 2 === 0
-        ? `${jittered} What would make that most useful for you?`
-        : `Would you be open to a quick example specific to your workflow? ${jittered}`;
+        ? `Quick practical answer: ${jittered}`
+        : `${jittered} In practice, we tailor this to your workflow and goals.`;
     return this.makeSuggestionSpecific(variation, EMPTY_COMPANY_PROFILE_DEFAULTS, jittered);
   }
 
@@ -844,6 +873,9 @@ export class EngineService implements OnModuleDestroy {
     const stageList = context.stages
       .map((s, i) => `${i + 1}. ${s.name}${s.goals ? ` — ${s.goals}` : ''}`)
       .join('\n');
+    const checklistItems = state.checklistState.map(
+      (item) => `${item.done ? '[x]' : '[ ]'} ${item.label}`,
+    );
     const recentTurns = state.transcriptBuffer
       .slice(-10)
       .map((t) => `${t.speaker}: ${t.text}`)
@@ -853,7 +885,7 @@ export class EngineService implements OnModuleDestroy {
         [...state.transcriptBuffer].reverse().find((t) => t.speaker === 'PROSPECT')?.text) ??
       '';
     const ragSnippets = this.retrieveCompanySnippets(
-      context.companyProfile,
+      context.ragDocuments,
       recentTurns,
       state.stats.objectionDetected,
     );
@@ -862,7 +894,7 @@ export class EngineService implements OnModuleDestroy {
       context,
       currentStage!,
       stageList,
-      [],
+      checklistItems,
       ragSnippets,
       desiredCount === 1 ? 1 : 3,
       state.recentPrimarySuggestions,
@@ -877,6 +909,7 @@ export class EngineService implements OnModuleDestroy {
       const raw = await this.llm.chatFast(systemPrompt, userPrompt, {
         model: context.llmModel,
         jsonMode: true,
+        temperature: 0.62,
       });
       const parsed = this.llm.parseJson<{ suggestions?: string[] }>(raw, {});
       let texts = this.normalizeSuggestions(
@@ -975,10 +1008,12 @@ export class EngineService implements OnModuleDestroy {
         )
       : [];
 
-    const [companyProfile, productContext, agentConfig] = await Promise.all([
+    const [companyProfile, productContext, agentConfig, salesMeta, stages] = await Promise.all([
       this.fetchCompanyProfile(orgId),
       this.fetchProductContextForDebug(orgId, mode, selectedIds),
       this.resolveDebugAgentPrompt(orgId, input.agentId),
+      this.fetchSalesContextMeta(orgId),
+      this.fetchStagesForCall(orgId, null),
     ]);
 
     const context: CallContext = {
@@ -991,18 +1026,26 @@ export class EngineService implements OnModuleDestroy {
       agentUseDefaultTemplate: agentConfig.agentUseDefaultTemplate,
       agentPromptDelta: agentConfig.agentPromptDelta,
       agentFullPrompt: agentConfig.agentFullPrompt,
+      agentConfigJson: agentConfig.agentConfigJson,
       notes: input.notes ?? null,
       preparedOpenerText: null,
       preparedFollowupSeed: null,
-      stages: FALLBACK_STAGES,
+      stages,
+      strategy: salesMeta.strategy,
+      knowledgeAppendix: salesMeta.knowledgeAppendix,
       companyProfile,
       productContext,
+      ragDocuments: this.buildRagDocuments(
+        companyProfile,
+        salesMeta.knowledgeAppendix,
+        salesMeta.strategy,
+      ),
     };
-    const currentStage = FALLBACK_STAGES[1] ?? FALLBACK_STAGES[0]!;
-    const stageList = FALLBACK_STAGES.map(
+    const currentStage = stages[1] ?? stages[0] ?? FALLBACK_STAGES[0]!;
+    const stageList = stages.map(
       (s, i) => `${i + 1}. ${s.name}${s.goals ? ` — ${s.goals}` : ''}`,
     ).join('\n');
-    const ragSnippets = this.retrieveCompanySnippets(companyProfile, transcript, null);
+    const ragSnippets = this.retrieveCompanySnippets(context.ragDocuments, transcript, null);
     const systemPrompt = this.buildSystemPrompt(
       context,
       currentStage,
@@ -1053,6 +1096,7 @@ export class EngineService implements OnModuleDestroy {
       const raw = await this.llm.chatFast(systemPrompt, userPrompt, {
         model: context.llmModel,
         jsonMode: true,
+        temperature: 0.48,
       });
       const parsed = this.llm.parseJson<{
         primary?: string;
@@ -1131,8 +1175,17 @@ export class EngineService implements OnModuleDestroy {
     }
   }
 
-  async runPostCall(callId: string, notes: string | null, _playbookId: string | null) {
+  async runPostCall(callId: string, notes: string | null, playbookId: string | null) {
     this.logger.log(`Post-call analysis starting for call ${callId}`);
+
+    const [callMeta] = await this.db
+      .select({
+        orgId: schema.calls.orgId,
+        playbookId: schema.calls.playbookId,
+      })
+      .from(schema.calls)
+      .where(eq(schema.calls.id, callId))
+      .limit(1);
 
     const rows = await this.db
       .select()
@@ -1144,7 +1197,11 @@ export class EngineService implements OnModuleDestroy {
 
     const transcript = rows.map((r) => ({ speaker: r.speaker, text: r.text, tsMs: r.tsMs }));
 
-    const checklistItems = FALLBACK_STAGES.flatMap((s) => s.checklist);
+    const resolvedStages =
+      callMeta?.orgId
+        ? await this.fetchStagesForCall(callMeta.orgId, playbookId ?? callMeta.playbookId ?? null)
+        : FALLBACK_STAGES;
+    const checklistItems = resolvedStages.flatMap((s) => s.checklist);
 
     const result = await this.buildPostCallResult(callId, transcript, checklistItems, notes);
 
@@ -1166,6 +1223,74 @@ export class EngineService implements OnModuleDestroy {
       });
 
     this.logger.log(`Post-call analysis stored for call ${callId}`);
+  }
+
+  private toStageInfo(rows: Array<{ name: string; goals: string | null; checklistJson: unknown }>) {
+    return rows.map((row) => ({
+      name: row.name,
+      goals: row.goals,
+      checklist: this.parseStringArray(row.checklistJson).slice(0, 24),
+    }));
+  }
+
+  private async fetchPlaybookStages(orgId: string, playbookId: string) {
+    const rows = await this.db
+      .select({
+        name: schema.playbookStages.name,
+        goals: schema.playbookStages.goals,
+        checklistJson: schema.playbookStages.checklistJson,
+      })
+      .from(schema.playbookStages)
+      .innerJoin(schema.playbooks, eq(schema.playbookStages.playbookId, schema.playbooks.id))
+      .where(and(eq(schema.playbooks.orgId, orgId), eq(schema.playbookStages.playbookId, playbookId)))
+      .orderBy(asc(schema.playbookStages.position));
+
+    return this.toStageInfo(rows);
+  }
+
+  private async fetchDefaultPlaybookId(orgId: string) {
+    const [defaultPlaybook] = await this.db
+      .select({ id: schema.playbooks.id })
+      .from(schema.playbooks)
+      .where(and(eq(schema.playbooks.orgId, orgId), eq(schema.playbooks.isDefault, true)))
+      .orderBy(asc(schema.playbooks.createdAt))
+      .limit(1);
+    return defaultPlaybook?.id ?? null;
+  }
+
+  private async fetchStagesForCall(orgId: string, playbookId: string | null) {
+    if (playbookId) {
+      const explicitStages = await this.fetchPlaybookStages(orgId, playbookId);
+      if (explicitStages.length > 0) {
+        return explicitStages;
+      }
+    }
+
+    const defaultPlaybookId = await this.fetchDefaultPlaybookId(orgId);
+    if (defaultPlaybookId) {
+      const defaultStages = await this.fetchPlaybookStages(orgId, defaultPlaybookId);
+      if (defaultStages.length > 0) {
+        return defaultStages;
+      }
+    }
+
+    return FALLBACK_STAGES;
+  }
+
+  private async fetchSalesContextMeta(orgId: string) {
+    const [salesContext] = await this.db
+      .select({
+        strategy: schema.salesContext.strategy,
+        knowledgeAppendix: schema.salesContext.knowledgeAppendix,
+      })
+      .from(schema.salesContext)
+      .where(eq(schema.salesContext.orgId, orgId))
+      .limit(1);
+
+    return {
+      strategy: salesContext?.strategy?.trim() || DEFAULT_SALES_STRATEGY,
+      knowledgeAppendix: salesContext?.knowledgeAppendix?.trim() || '',
+    };
   }
 
   // ── Private: context loading ────────────────────────────────────────────────
@@ -1216,6 +1341,7 @@ export class EngineService implements OnModuleDestroy {
     let agentUseDefaultTemplate = true;
     let agentPromptDelta = '';
     let agentFullPrompt: string | null = null;
+    let agentConfigJson: Record<string, unknown> = {};
     if (call.agentId) {
       const [agent] = await this.db
         .select({
@@ -1223,6 +1349,7 @@ export class EngineService implements OnModuleDestroy {
           useDefaultTemplate: schema.agents.useDefaultTemplate,
           promptDelta: schema.agents.promptDelta,
           fullPromptOverride: schema.agents.fullPromptOverride,
+          configJson: schema.agents.configJson,
         })
         .from(schema.agents)
         .where(eq(schema.agents.id, call.agentId))
@@ -1232,6 +1359,7 @@ export class EngineService implements OnModuleDestroy {
         agentUseDefaultTemplate = agent.useDefaultTemplate ?? true;
         agentPromptDelta = agent.promptDelta?.trim() || agent.prompt?.trim() || '';
         agentFullPrompt = agent.fullPromptOverride?.trim() || agent.prompt?.trim() || null;
+        agentConfigJson = (agent.configJson as Record<string, unknown>) ?? {};
       }
     }
     if (!call.agentId) {
@@ -1239,11 +1367,14 @@ export class EngineService implements OnModuleDestroy {
       agentFullPrompt = null;
       agentPrompt = '';
       agentUseDefaultTemplate = true;
+      agentConfigJson = {};
     }
 
-    const [companyProfile, productContext] = await Promise.all([
+    const [companyProfile, productContext, salesMeta, stages] = await Promise.all([
       this.fetchCompanyProfile(call.orgId),
       this.fetchProductContext(call.orgId, call.id, call.productsMode),
+      this.fetchSalesContextMeta(call.orgId),
+      this.fetchStagesForCall(call.orgId, call.playbookId ?? null),
     ]);
 
     if (state.cancelled) return null;
@@ -1263,13 +1394,25 @@ export class EngineService implements OnModuleDestroy {
       agentUseDefaultTemplate,
       agentPromptDelta,
       agentFullPrompt,
+      agentConfigJson,
       notes: call.notes ?? null,
       preparedOpenerText: call.preparedOpenerText ?? null,
       preparedFollowupSeed: call.preparedFollowupSeed ?? null,
-      stages: state.context?.stages ?? FALLBACK_STAGES,
+      stages,
+      strategy: salesMeta.strategy,
+      knowledgeAppendix: salesMeta.knowledgeAppendix,
       companyProfile,
       productContext,
+      ragDocuments: this.buildRagDocuments(
+        companyProfile,
+        salesMeta.knowledgeAppendix,
+        salesMeta.strategy,
+      ),
     };
+
+    if (state.currentStageIdx >= stages.length) {
+      state.currentStageIdx = Math.max(0, stages.length - 1);
+    }
 
     if (emitContextCards) {
       this.gateway.emitToCall(callId, 'engine.context_cards', {
@@ -1299,7 +1442,7 @@ export class EngineService implements OnModuleDestroy {
     return value
       .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
       .filter((entry) => entry.length > 0)
-      .slice(0, 40);
+      .slice(0, 120);
   }
 
   private normalizeCoachMemory(value: unknown): CoachMemory {
@@ -1554,6 +1697,7 @@ export class EngineService implements OnModuleDestroy {
         agentUseDefaultTemplate: true,
         agentPromptDelta: '',
         agentFullPrompt: null as string | null,
+        agentConfigJson: {} as Record<string, unknown>,
       };
     }
     const [agent] = await this.db
@@ -1562,6 +1706,7 @@ export class EngineService implements OnModuleDestroy {
         useDefaultTemplate: schema.agents.useDefaultTemplate,
         promptDelta: schema.agents.promptDelta,
         fullPromptOverride: schema.agents.fullPromptOverride,
+        configJson: schema.agents.configJson,
       })
       .from(schema.agents)
       .where(and(eq(schema.agents.id, agentId), eq(schema.agents.orgId, orgId)))
@@ -1572,6 +1717,7 @@ export class EngineService implements OnModuleDestroy {
         agentUseDefaultTemplate: true,
         agentPromptDelta: '',
         agentFullPrompt: null as string | null,
+        agentConfigJson: {} as Record<string, unknown>,
       };
     }
     return {
@@ -1579,6 +1725,7 @@ export class EngineService implements OnModuleDestroy {
       agentUseDefaultTemplate: agent.useDefaultTemplate ?? true,
       agentPromptDelta: agent.promptDelta?.trim() || agent.prompt?.trim() || '',
       agentFullPrompt: agent.fullPromptOverride?.trim() || agent.prompt?.trim() || null,
+      agentConfigJson: (agent.configJson as Record<string, unknown>) ?? {},
     };
   }
 
@@ -1620,15 +1767,15 @@ export class EngineService implements OnModuleDestroy {
       .join(', ');
     const valueProps = products
       .flatMap((item) => this.parseStringArray(item.valueProps).slice(0, 2))
-      .slice(0, 8)
+      .slice(0, 12)
       .join('\n');
     const diffs = products
       .flatMap((item) => this.parseStringArray(item.differentiators).slice(0, 2))
-      .slice(0, 8)
+      .slice(0, 12)
       .join('\n');
     const objections = products
       .flatMap((item) => this.toProductObjectionSnippets(item.objections, item.name))
-      .slice(0, 8)
+      .slice(0, 12)
       .join('\n');
     const pricingRules = this.compactText(
       products
@@ -1639,11 +1786,11 @@ export class EngineService implements OnModuleDestroy {
     );
     const faqLines = products
       .flatMap((item) => this.toProductFaqSnippets(item.faqs, item.name))
-      .slice(0, 10)
+      .slice(0, 16)
       .join('\n');
     const dontSay = products
       .flatMap((item) => this.parseStringArray(item.dontSay))
-      .slice(0, 10)
+      .slice(0, 20)
       .join('\n');
 
     const scProof = this.parseStringArray(salesContext?.proofPoints);
@@ -1687,21 +1834,37 @@ export class EngineService implements OnModuleDestroy {
       valueProposition:
         [...scGlobalValueProps, ...valueProps.split('\n').filter((line) => line.trim().length > 0)]
           .filter((line) => line.trim().length > 0)
-          .slice(0, 12)
+          .slice(0, 40)
           .join('\n') || legacyProfile?.valueProposition || '',
       differentiators: diffs || legacyProfile?.differentiators || '',
       proofPoints:
         [...scProof, ...scCaseStudies]
           .filter((line) => line.trim().length > 0)
-          .slice(0, 18)
+          .slice(0, 60)
           .join('\n') || legacyProfile?.proofPoints || '',
       repTalkingPoints:
-        scNextSteps.join('\n') || legacyProfile?.repTalkingPoints || '',
+        [
+          ...scNextSteps,
+          ...scGlobalValueProps.slice(0, 10),
+          ...scAllowedClaims.slice(0, 8).map((line) => `Use only if true: ${line}`),
+        ]
+          .filter((line) => line.trim().length > 0)
+          .join('\n') || legacyProfile?.repTalkingPoints || '',
       discoveryGuidance:
         scDisco.join('\n') || legacyProfile?.discoveryGuidance || '',
       qualificationGuidance:
         scQual.join('\n') || legacyProfile?.qualificationGuidance || '',
-      objectionHandling: objections || legacyProfile?.objectionHandling || '',
+      objectionHandling:
+        objections ||
+        [
+          ...scPositioning,
+          ...scEscalation.map((line) => `Escalate when needed: ${line}`),
+          ...scSalesPolicies.slice(0, 8).map((line) => `Policy anchor: ${line}`),
+        ]
+          .filter((line) => line.trim().length > 0)
+          .join('\n') ||
+        legacyProfile?.objectionHandling ||
+        '',
       competitorGuidance: [
         scCompetitors.length > 0 ? `Competitors: ${scCompetitors.join(', ')}` : '',
         ...scPositioning,
@@ -1724,7 +1887,7 @@ export class EngineService implements OnModuleDestroy {
       doNotSay:
         [...scForbiddenClaims, ...dontSay.split('\n').filter((line) => line.trim().length > 0)]
           .filter((line) => line.trim().length > 0)
-          .slice(0, 16)
+          .slice(0, 40)
           .join('\n') || legacyProfile?.doNotSay || '',
     };
 
@@ -1781,14 +1944,16 @@ export class EngineService implements OnModuleDestroy {
       .map((s, i) => `${i + 1}. ${s.name}${s.goals ? ` — ${s.goals}` : ''}`)
       .join('\n');
 
-    const checklistItems = state.checklistState.map((i) => i.label);
+    const checklistItems = state.checklistState.map(
+      (item) => `${item.done ? '[x]' : '[ ]'} ${item.label}`,
+    );
 
     const recentTurns = state.transcriptBuffer
       .slice(-15)
       .map((t) => `${t.speaker}: ${t.text}`)
       .join('\n');
     const ragSnippets = this.retrieveCompanySnippets(
-      context.companyProfile,
+      context.ragDocuments,
       recentTurns,
       state.stats.objectionDetected,
     );
@@ -1808,7 +1973,10 @@ export class EngineService implements OnModuleDestroy {
         [...state.transcriptBuffer].reverse().find((t) => t.speaker === 'PROSPECT')?.text) ??
       '';
     const slots = this.extractProspectSlots(lastProspectLine);
-    const requiredMove = this.resolveRequiredMove(state.coachMemory.last_move_type);
+    const requiresDirectAnswerFirst = this.isDirectInfoTurn(lastProspectLine, slots);
+    const requiredMove = requiresDirectAnswerFirst
+      ? ''
+      : this.resolveRequiredMove(state.coachMemory.last_move_type);
     const userPrompt =
       `Conversation window (REP/PROSPECT only):\n${recentTurns}\n\n` +
       `prospect_last_final_utterance: "${lastProspectLine || 'None'}"\n` +
@@ -1828,6 +1996,7 @@ export class EngineService implements OnModuleDestroy {
       const llmPromise = this.llm.chatFast(systemPrompt, userPrompt, {
         model: context.llmModel,
         jsonMode: true,
+        temperature: 0.5,
       });
       const timeoutPromise: Promise<null | '__skip__'> = shouldUseFastInterim
         ? new Promise<null>((resolve) => setTimeout(() => resolve(null), FAST_INTERIM_MS))
@@ -1884,7 +2053,7 @@ export class EngineService implements OnModuleDestroy {
         const retryRaw = await this.llm.chatFast(
           systemPrompt,
           `${userPrompt}\nReturn strictly valid JSON with keys: moment, primary, move_type, nudges, context_toast, ask, used_updates.`,
-          { model: context.llmModel, jsonMode: true },
+          { model: context.llmModel, jsonMode: true, temperature: 0.45 },
         );
         parsed = this.llm.parseJson(retryRaw, parsed);
       }
@@ -1895,6 +2064,7 @@ export class EngineService implements OnModuleDestroy {
         const completionRaw = await this.llm.chatFast(systemPrompt, completionRetryPrompt, {
           model: context.llmModel,
           jsonMode: true,
+          temperature: 0.4,
         });
         const completionParsed = this.llm.parseJson<typeof parsed>(completionRaw, {});
         if (completionParsed.primary && this.isOutputComplete(completionParsed.primary)) {
@@ -1916,6 +2086,7 @@ export class EngineService implements OnModuleDestroy {
         const retryRaw = await this.llm.chatFast(systemPrompt, specificityRetryPrompt, {
           model: context.llmModel,
           jsonMode: true,
+          temperature: 0.45,
         });
         const retryParsed = this.llm.parseJson<typeof parsed>(retryRaw, {});
         if (retryParsed.primary && !this.isGenericPrimary(retryParsed.primary)) {
@@ -2829,6 +3000,23 @@ export class EngineService implements OnModuleDestroy {
     return fallback.slice(0, limit);
   }
 
+  private clipPromptBlock(
+    value: string,
+    opts: { maxChars?: number; maxLines?: number } = {},
+  ) {
+    const maxChars = opts.maxChars ?? 850;
+    const maxLines = opts.maxLines ?? 16;
+    const lines = value
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .slice(0, maxLines);
+    if (lines.length === 0) return 'None';
+    const joined = lines.join('\n');
+    if (joined.length <= maxChars) return joined;
+    return `${joined.slice(0, maxChars - 1).trimEnd()}...`;
+  }
+
   // ── Private: prompt builder ─────────────────────────────────────────────────
 
   private buildSystemPrompt(
@@ -2840,9 +3028,6 @@ export class EngineService implements OnModuleDestroy {
     suggestionCount: 1 | 3 = 3,
     recentPrimarySuggestions: string[] = [],
   ): string {
-    void stageList;
-    void checklistItems;
-    void suggestionCount;
     const company = context.companyProfile;
     const offerMode = context.productContext.mode === ProductsMode.SELECTED ? 'SELECTED' : 'ALL';
     const offerNames =
@@ -2853,8 +3038,17 @@ export class EngineService implements OnModuleDestroy {
       context.productContext.snippets.length > 0
         ? context.productContext.snippets.slice(0, 8).join('\n')
         : context.productContext.summary;
-    const forbiddenClaims = company.doNotSay || 'None configured.';
-    const salesPolicies = company.pricingGuidance || 'None configured.';
+    const forbiddenClaims = this.clipPromptBlock(company.doNotSay || 'None configured.');
+    const salesPolicies = this.clipPromptBlock(company.pricingGuidance || 'None configured.');
+    const strategyBlock = this.clipPromptBlock(context.strategy || DEFAULT_SALES_STRATEGY, {
+      maxChars: 1200,
+      maxLines: 18,
+    });
+    const stagePlan = stageList || 'No stage map configured.';
+    const checklistBlock =
+      checklistItems && checklistItems.length > 0
+        ? checklistItems.slice(0, 20).join('\n')
+        : 'No checklist configured for this stage.';
     const recentPrimary =
       recentPrimarySuggestions.length > 0
         ? recentPrimarySuggestions.map((item, index) => `${index + 1}. ${item}`).join('\n')
@@ -2882,42 +3076,63 @@ export class EngineService implements OnModuleDestroy {
     const agentBlock = context.agentUseDefaultTemplate
       ? `Agent Add-on Instructions: ${context.agentPromptDelta || 'None.'}`
       : `Agent Prompt: ${context.agentFullPrompt || context.agentPrompt || 'None.'}`;
+    const configRules = (context.agentConfigJson?.rules ?? {}) as Record<string, boolean>;
+    const activeRules = FUNDAMENTAL_RULES.filter(
+      (r) => configRules[r.key] === true || (configRules[r.key] !== false && r.default),
+    );
+    const rulesBlock =
+      activeRules.length > 0
+        ? `Active Sales Rules:\n${activeRules.map((r) => `- ${r.text}`).join('\n')}`
+        : '';
 
     return (
       `${systemCore}\n\n` +
       `${agentBlock}\n\n` +
+      (rulesBlock ? `${rulesBlock}\n\n` : '') +
+      `Sales strategy:\n${strategyBlock}\n\n` +
       `Sales Context:\n` +
       `Company: ${company.companyName || 'Unknown'}\n` +
-      `What we sell: ${company.productSummary || company.productName || 'Unknown'}\n` +
-      `ICP: ${company.idealCustomerProfile || 'Unknown'}\n` +
-      `Proof points:\n${company.proofPoints || 'None'}\n` +
-      `Value props:\n${company.valueProposition || 'None'}\n` +
-      `Differentiators:\n${company.differentiators || 'None'}\n` +
-      `How we work / delivery:\n${company.implementationGuidance || 'None'}\n` +
+      `What we sell: ${this.clipPromptBlock(company.productSummary || company.productName || 'Unknown', { maxChars: 520, maxLines: 8 })}\n` +
+      `ICP: ${this.clipPromptBlock(company.idealCustomerProfile || 'Unknown', { maxChars: 600, maxLines: 8 })}\n` +
+      `Proof points:\n${this.clipPromptBlock(company.proofPoints || 'None')}\n` +
+      `Value props:\n${this.clipPromptBlock(company.valueProposition || 'None')}\n` +
+      `Differentiators:\n${this.clipPromptBlock(company.differentiators || 'None')}\n` +
+      `How we work / delivery:\n${this.clipPromptBlock(company.implementationGuidance || 'None')}\n` +
       `Allowed claims and policies:\n${salesPolicies}\n` +
       `Forbidden claims:\n${forbiddenClaims}\n` +
-      `Discovery guidance:\n${company.discoveryGuidance || 'None'}\n` +
-      `Qualification guidance:\n${company.qualificationGuidance || 'None'}\n` +
-      `Competitor stance:\n${company.competitorGuidance || 'None'}\n` +
-      `Next-step guidance:\n${company.repTalkingPoints || 'None'}\n\n` +
+      `Discovery guidance:\n${this.clipPromptBlock(company.discoveryGuidance || 'None')}\n` +
+      `Qualification guidance:\n${this.clipPromptBlock(company.qualificationGuidance || 'None')}\n` +
+      `Competitor stance:\n${this.clipPromptBlock(company.competitorGuidance || 'None')}\n` +
+      `Next-step guidance:\n${this.clipPromptBlock(company.repTalkingPoints || 'None')}\n\n` +
       `Offerings Context:\n` +
       `Mode: ${offerMode}\n` +
       `Selected offerings: ${offerNames}\n` +
-      `Condensed offerings summary:\n${condensedOfferings || 'None'}\n\n` +
+      `Condensed offerings summary:\n${this.clipPromptBlock(condensedOfferings || 'None', { maxChars: 1200, maxLines: 18 })}\n\n` +
+      (context.productContext.names.length >= 2
+        ? `Multi-Offering Guidance:\n` +
+          `This company sells multiple services. Conduct discovery FIRST to understand the prospect's core challenge, then steer toward the single most relevant offering. ` +
+          `Do NOT pitch all offerings in the same breath — ask 1-2 targeted questions to identify fit before recommending anything specific.\n` +
+          `Clarity rule: Make it explicit early in the call that ${company.companyName || 'this company'} is a ${company.productSummary ? company.productSummary.split(/[.,]/)[0].trim().toLowerCase() : 'consulting and services firm'} — the prospect must understand the category before you pitch.\n\n`
+        : '') +
+      `Playbook context:\n` +
+      `Stage map:\n${stagePlan}\n` +
+      `Current stage checklist:\n${checklistBlock}\n\n` +
       `Live call metadata:\n` +
       `Current stage: ${currentStage.name}\n` +
       `Realtime model: ${context.llmModel}\n` +
       `Call type: ${context.callType}\n` +
       `Call mode: ${context.callMode}\n` +
       `Call notes: ${context.notes || 'None'}\n\n` +
+      `Desired response count right now: ${suggestionCount}\n\n` +
       `Retrieved snippets for this turn:\n${ragSection}\n\n` +
       `Recent primary suggestions:\n${recentPrimary}\n\n` +
       `Coach memory:\n${memorySection}\n\n` +
       `Rules:\n` +
-      `- Never invent company/product claims.\n` +
-      `- Never invent numeric metrics unless explicitly present in proof points.\n` +
-      `- If uncertain, ask a clarifying question.\n` +
+      `- Never invent hard facts (numeric metrics, legal certifications, named customers, firm pricing guarantees).\n` +
+      `- You may use careful, non-numeric inference when context is partial (say "typically" or "likely", not absolutes).\n` +
+      `- If uncertain, ask one clarifying question.\n` +
       `- If the prospect asks a direct question, answer it directly first with one concrete point, then ask at most one clarifier.\n` +
+      `- Avoid question-only loops. If the prospect asks for specifics, provide one concrete mechanism before any clarifier.\n` +
       `- Do not repeat recent arguments unless prospect asks again.\n` +
       `- Primary must be 1-2 sentences and speakable.\n` +
       `- Nudges must be 2-3 items, <=6 words each.\n` +
@@ -3047,111 +3262,156 @@ export class EngineService implements OnModuleDestroy {
     lastProspectLine = '',
   ): string[] {
     const stage = stageName.toLowerCase();
-    const last = lastProspectLine.toLowerCase();
+    const last = lastProspectLine.toLowerCase().replace(/\s+/g, ' ').trim();
     const primaryProduct = productContext.names[0] || company.productName || 'your service';
     const productPitch =
       productContext.snippets[0] ??
       `${primaryProduct} for ${company.idealCustomerProfile || 'your target customers'}.`;
-    const proofs = this
-      .splitToSnippets(company.proofPoints)
-      .filter((line) => /\d/.test(line));
-    const pickProof = (fallback: string) =>
-      proofs.length > 0 ? proofs[Math.floor(Math.random() * proofs.length)] ?? fallback : fallback;
-    const proofA = pickProof('we focus on reliable delivery and clear handoffs.');
-    const proofB = pickProof('teams typically care most about speed, consistency, and reduced rework.');
-    const proofC = pickProof('we can share relevant proof points once we confirm your use case.');
+    const proofs = this.splitToSnippets(company.proofPoints);
+    const seed = `${stage}|${last}|${objection ?? 'none'}|${primaryProduct}`;
+    const pickProof = (proofSeed: string, fallback: string) =>
+      this.pickDeterministicLine(
+        proofSeed,
+        proofs.length > 0 ? proofs : [fallback],
+      ) || fallback;
+    const proofA = pickProof(`${seed}|proofA`, 'what specific outcomes have you been most focused on improving this year?');
+    const proofB = pickProof(
+      `${seed}|proofB`,
+      'what would success look like for you three months from now?',
+    );
+    const proofC = pickProof(
+      `${seed}|proofC`,
+      'can you tell me more about where things are slowing down most right now?',
+    );
 
     if (/price|pricing|cost|budget|package/.test(last)) {
       return [
-        `Pricing for ${primaryProduct} depends on scope and goals. Which use case should we size first?`,
+        this.pickDeterministicLine(`${seed}|pricing`, [
+          `Pricing for ${primaryProduct} is scoped by what you need — scope, timeline, and support level. Which of those would you want to size first?`,
+          `Pricing usually depends on the scope and pace of what you're trying to solve. Do you want a quick baseline estimate or a deeper comparison based on your use case?`,
+          `Teams usually compare ${primaryProduct} on total cost of impact, not just line-item price. Should we map one concrete use case so the comparison is meaningful?`,
+        ]),
       ];
     }
     if (/revision|adjust|changes|edit/.test(last)) {
       return [
-        'Revision handling depends on scope and workflow. What level of flexibility do you need in practice?',
+        this.pickDeterministicLine(`${seed}|revision`, [
+          'We define change handling upfront so it stays predictable. What kind of flexibility do you need most often?',
+          'Change management is built into the process at defined checkpoints. Is your bigger concern turnaround impact or total change volume?',
+          'Revisions are most predictable when scope and approval points are agreed early. Which part of that is currently a pain point?',
+        ]),
       ];
     }
-    if (/what kind|which service|services|media|what do you provide/.test(last)) {
+    if (/what kind|which service|services|what do you provide|how does it work/.test(last)) {
       return [
-        `Short answer: teams pick ${primaryProduct} when they need predictable speed and consistent quality. Which result matters most to you first?`,
+        this.pickDeterministicLine(`${seed}|services`, [
+          `What does your current setup for this look like, and where does it fall short?`,
+          `Can you tell me a bit about how you're currently handling that, so I can show you exactly where ${primaryProduct} fits in?`,
+          `What's the biggest gap you're trying to close with a solution like ${primaryProduct}?`,
+        ]),
       ];
     }
-    if (/quality|consistent|how do you ensure/.test(last)) {
+    if (/support|updates?|outdated|maintenance|roadmap|release|feature/.test(last)) {
       return [
-        'We use a standardized process and clear QA checkpoints. Which quality issues have caused the most friction recently?',
+        this.pickDeterministicLine(`${seed}|support`, [
+          'Support quality usually comes from clear ownership, defined SLAs, and proactive release communication. Which of those matters most to your team?',
+          'We keep things current with structured update cadence and fast issue response, so disruption stays low. What does your current support experience look like?',
+          'Reliable support means explicit ownership and early communication on changes. What gaps have you seen with past vendors?',
+        ]),
+      ];
+    }
+    if (/quality|consistent|how do you ensure|reliable|handoff|standard/.test(last)) {
+      return [
+        this.pickDeterministicLine(`${seed}|quality`, [
+          'Consistency comes from standardized process, explicit QA checkpoints, and one accountable owner per handoff. Where does quality break down most in your current setup?',
+          'We protect quality with checkpoint-based reviews at each delivery stage, so issues are caught early. What does inconsistency cost you right now?',
+          'Reliability comes from clear pass/fail criteria at each stage with explicit ownership. Which stage causes the most rework for your team?',
+        ]),
       ];
     }
     if (/turnaround|how fast|delivery|deliver/.test(last)) {
       return [
-        'Turnaround depends on package scope and timeline. What deadline are you working against for the next listing?',
+        this.pickDeterministicLine(`${seed}|turnaround`, [
+          'Turnaround is scoped upfront based on complexity and quality bar, then committed against a real deadline. What timeline are you typically working against?',
+          'Speed is managed through stage-level SLAs and tighter handoff discipline — not rushing at the end. Where does your current process lose time?',
+          'Timelines stay predictable when scope and approval checkpoints are locked early. Is speed or predictability the bigger issue for you right now?',
+        ]),
       ];
     }
 
     if (stage.includes('opening')) {
       return [
-        `Hi there—quick question: are you the right person for ${primaryProduct}?`,
-        `Quick context: ${proofA}`,
-        `Can I ask 2 quick questions to see if ${primaryProduct} fits your current workflow?`,
+        `Quick question — are you the right person to evaluate something like ${primaryProduct}, or is there someone else I should loop in?`,
+        `I'll keep this short. We work with teams on ${primaryProduct}. Is that anywhere near what you're dealing with right now?`,
+        `Before I pitch anything, can I ask one question about how you currently handle this?`,
       ];
     }
 
     if (stage.includes('discovery')) {
       return [
-        'How are you handling this process today?',
-        'What is the biggest friction point right now?',
-        `If one issue got fixed this quarter, would it be speed, consistency, or conversion? ${proofB}`,
+        this.pickDeterministicLine(`${seed}|discovery1`, [
+          'Based on what you just shared, where does the biggest bottleneck show up — intake, execution, or handoff?',
+          'Which part of your current process creates the most rework when things get urgent?',
+          'Where do delays or quality drops typically show up first in your workflow?',
+        ]),
+        this.pickDeterministicLine(`${seed}|discovery2`, [
+          'What is costing you more right now — slow turnaround, inconsistent output, or coordination overhead?',
+          'If you could remove one operational bottleneck this quarter, which would it be?',
+          'Which part of your process is hardest to keep consistent at scale?',
+        ]),
+        `If you could fix one thing this quarter — speed, consistency, or cost — which would move the needle most? ${proofB}`,
       ];
     }
 
     if (stage.includes('solution') || stage.includes('pitch') || stage.includes('fit')) {
       return [
-        `You mentioned speed and consistency; ${productPitch}`,
-        `We handle outcomes with one accountable workflow; ${proofC}`,
-        'Would starting with 1 pilot listing this week be a practical next step?',
+        `Based on what you described, ${productPitch}`,
+        `We handle that with one accountable workflow end to end. ${proofC}`,
+        'Would it make sense to scope a small pilot so you can see the impact before committing fully?',
       ];
     }
 
     if (stage.includes('objection') || objection) {
       if (objection === 'BUDGET') {
         return [
-          'Is your concern upfront cost or overall return?',
-          `Teams usually justify spend when outcomes improve. ${proofB}`,
-          'Would a small pilot help you compare cost versus impact?',
+          'Teams usually justify the investment when it cuts rework and improves reliability. Is your concern the upfront cost, or confidence that the ROI will materialize?',
+          `Most teams find the spend pays off when we map it to a specific outcome. ${proofB}`,
+          'Would a smaller scoped pilot help you validate the ROI before a larger commitment?',
         ];
       }
       if (objection === 'COMPETITOR') {
         return [
-          'What works with your current option, and where are the gaps?',
-          `Reliability and execution consistency tend to matter most. ${proofA}`,
-          'Would a side-by-side pilot be fair to evaluate fit?',
+          'What is working well with what you have today, and where are you feeling friction?',
+          `The difference usually comes down to execution consistency and support responsiveness. ${proofA}`,
+          'Would a parallel trial make sense so you can compare against what you already have?',
         ];
       }
       if (objection === 'TIMING') {
         return [
-          'What timeline are you working against?',
-          `We can align scope to that timeline. ${proofA}`,
-          'Would now or next week be better for a pilot kickoff?',
+          'Timing concerns are usually solved by scoping a low-friction first step. What timeline are you working against?',
+          `We can structure something that fits within your current window. ${proofA}`,
+          'Would it help to block a tentative start date so the decision does not drag on?',
         ];
       }
       return [
-        'Can I clarify the main blocker before I suggest next steps?',
-        `Here is the practical difference we deliver: ${proofA}`,
-        'Does that address the concern enough to test one listing?',
+        `The real difference comes down to concrete outcomes for companies like yours. ${proofA}`,
+        'Which concern should we address first — results, speed, or support responsiveness?',
+        'Does that address the concern enough to make a next step worth exploring?',
       ];
     }
 
     if (stage.includes('close') || stage.includes('next step')) {
       return [
-        `Based on what you shared, ${proofA}`,
-        'Would a 15-minute fit call later this week work better than next week?',
-        'Can we lock a small pilot date now to benchmark results?',
+        `Based on everything you shared, ${proofA}`,
+        'Would a 15-minute call later this week work to map out a concrete next step?',
+        'Can we lock a small pilot start date now so we have something to benchmark against?',
       ];
     }
 
     return [
-      `Quick recap: ${proofA}`,
-      `Relevant benchmark: ${proofB}`,
-      'Should we schedule 15 minutes this week for a concrete pilot plan?',
+      proofA,
+      `Teams in similar situations typically see value in: ${proofB}`,
+      'Should we find 15 minutes this week to map out what a first step would look like?',
     ];
   }
 
@@ -3197,12 +3457,24 @@ export class EngineService implements OnModuleDestroy {
     if (!strictQuestionTurn) return trimmed;
 
     const lower = trimmed.toLowerCase();
+    const questionMarks = (trimmed.match(/\?/g) ?? []).length;
     const servicePitchPattern =
       /\b(we\s+(can|offer|provide|do|handle|have)|our\s+(service|services|team|platform)|the right package)\b/i;
     const hasDirectAnswerFrame =
-      /\?|short answer|depends on|specifically|based on|first/i.test(lower);
+      /\b(short answer|typically|in practice|our approach|the advantage|we\s+(do|handle|support|use|keep)|it works by)\b/i.test(
+        lower,
+      );
 
     if (servicePitchPattern.test(trimmed) && !hasDirectAnswerFrame) {
+      const fallbackSpecific =
+        lastProspectLine.trim().length > 0
+          ? this.buildDeterministicFallback(lastProspectLine, slots)
+          : fallback;
+      return this.makeSuggestionSpecific(fallbackSpecific, company, fallback);
+    }
+
+    const directQuestionTurn = this.isDirectInfoTurn(lastProspectLine, slots);
+    if (directQuestionTurn && (questionMarks > 1 || (questionMarks >= 1 && !hasDirectAnswerFrame))) {
       const fallbackSpecific =
         lastProspectLine.trim().length > 0
           ? this.buildDeterministicFallback(lastProspectLine, slots)
@@ -3214,17 +3486,29 @@ export class EngineService implements OnModuleDestroy {
   }
 
   private retrieveCompanySnippets(
-    profile: CompanyProfile,
+    docs: RagDocument[],
     recentTurns: string,
     objectionDetected: string | null,
   ): RagSnippet[] {
-    const docs = this.explodeProfileDocuments(profile);
-    const queryTokens = this.tokenizeForRag(
-      `${recentTurns}\n${objectionDetected ?? ''}\n${profile.productName}\n${profile.companyName}`,
-    );
+    if (docs.length === 0) return [];
+
+    // Expand synonyms in query text before tokenizing
+    const expandedQuery = recentTurns
+      .replace(/\broi\b/gi, 'roi return value')
+      .replace(/\bcost\b/gi, 'cost price budget')
+      .replace(/\bbudget\b/gi, 'budget cost price')
+      .replace(/\bproof\b/gi, 'proof example result case study')
+      .replace(/\bexample\b/gi, 'example proof case study result')
+      .replace(/\bresult\b/gi, 'result outcome proof case study')
+      .replace(/\bcompetitor\b/gi, 'competitor alternative comparison');
+
+    const queryTokens = this.tokenizeForRag(`${expandedQuery}\n${objectionDetected ?? ''}`);
     const boostedFields = objectionDetected
       ? FIELD_BOOSTS_BY_OBJECTION[objectionDetected] ?? []
       : [];
+
+    // Detect info-request signals in recent turns to boost proof/example fields
+    const isAskingForExample = /example|prove|show me|case stud|reference|result|outcome|who else|similar company|customer|client/i.test(recentTurns);
 
     const scored = docs
       .map((doc) => {
@@ -3233,27 +3517,39 @@ export class EngineService implements OnModuleDestroy {
           if (doc.text.toLowerCase().includes(token)) score += 1;
         }
         if (boostedFields.includes(doc.field)) score += 3;
-        if (doc.field === 'proofPoints') score += 1;
+        if (doc.field === 'proofPoints') score += 1.1;
         if (doc.field === 'differentiators') score += 1;
+        if (doc.field === 'valueProposition') score += 0.7;
+        if (doc.field === 'strategy') score += 0.5;
+        // Boost evidence fields when prospect is asking for examples or proof
+        if (isAskingForExample && (doc.field === 'proofPoints' || doc.field === 'caseStudies')) score += 3;
         return { ...doc, score };
       })
       .filter((doc) => doc.score > 0)
       .sort((a, b) => b.score - a.score);
 
-    if (scored.length > 0) return scored.slice(0, 8);
+    // Return more snippets when asking for examples so LLM has richer evidence to draw from
+    const maxSnippets = isAskingForExample ? 12 : 8;
+    if (scored.length > 0) return scored.slice(0, maxSnippets);
 
     return docs
       .filter(
         (doc) =>
           doc.field === 'proofPoints' ||
+          doc.field === 'caseStudies' ||
           doc.field === 'differentiators' ||
-          doc.field === 'valueProposition',
+          doc.field === 'valueProposition' ||
+          doc.field === 'strategy',
       )
       .slice(0, 6)
       .map((doc) => ({ ...doc, score: 1 }));
   }
 
-  private explodeProfileDocuments(profile: CompanyProfile): Array<Omit<RagSnippet, 'score'>> {
+  private buildRagDocuments(
+    profile: CompanyProfile,
+    knowledgeAppendix: string,
+    strategy: string,
+  ): RagDocument[] {
     const fields: Array<keyof CompanyProfile> = [
       'productSummary',
       'idealCustomerProfile',
@@ -3271,24 +3567,43 @@ export class EngineService implements OnModuleDestroy {
       'doNotSay',
     ];
 
-    const docs: Array<Omit<RagSnippet, 'score'>> = [];
+    const docs: RagDocument[] = [];
 
     for (const field of fields) {
-      for (const snippet of this.splitToSnippets(profile[field])) {
+      for (const snippet of this.splitToSnippets(profile[field], 80)) {
         docs.push({ field, text: snippet });
       }
+    }
+
+    for (const snippet of this.splitToSnippets(strategy, 30)) {
+      docs.push({ field: 'strategy', text: snippet });
+    }
+    for (const snippet of this.splitToSnippets(knowledgeAppendix, 180)) {
+      docs.push({ field: 'knowledgeAppendix', text: snippet });
     }
 
     return docs;
   }
 
-  private splitToSnippets(text: string): string[] {
-    return text
+  private sampleSnippets(snippets: string[], max: number) {
+    if (snippets.length <= max) return snippets;
+    const out: string[] = [];
+    const step = snippets.length / max;
+    for (let i = 0; i < max; i += 1) {
+      const idx = Math.min(snippets.length - 1, Math.floor(i * step));
+      const value = snippets[idx];
+      if (value) out.push(value);
+    }
+    return out;
+  }
+
+  private splitToSnippets(text: string, maxSnippets = 80): string[] {
+    const snippets = text
       .split('\n')
       .flatMap((line) => line.split(/(?<=[.!?])\s+/))
       .map((line) => line.replace(/^[-*]\s*/, '').trim())
-      .filter((line) => line.length >= 16)
-      .slice(0, 80);
+      .filter((line) => line.length >= 16);
+    return this.sampleSnippets(snippets, maxSnippets);
   }
 
   private countWords(text: string): number {
@@ -3361,7 +3676,11 @@ export class EngineService implements OnModuleDestroy {
       objection_type = 'authority';
     else if (/not interested|we.re fine|don.t need|happy with|no thanks|not looking/.test(lower))
       objection_type = 'need';
-    else if (/how does|how do you|what is|what does|explain|tell me|describe/.test(lower))
+    else if (
+      /how does|how do you|what is|what does|explain|tell me|describe|has your|have you|can your|is your|are your/.test(
+        lower,
+      )
+    )
       objection_type = 'info_request';
     const priceMatch = utterance.match(/\$[\d,]+k?|\d[\d,]*\s*(?:k|dollars|per month|\/month|monthly)/gi);
     if (priceMatch) entities.push(...priceMatch.map((m) => m.trim()));
@@ -3380,7 +3699,7 @@ export class EngineService implements OnModuleDestroy {
     let intent = 'other';
     if (
       /\?/.test(utterance) &&
-      /how|what|why|when|where|can you|would you|could you|do you/.test(lower)
+      /how|what|why|when|where|can you|would you|could you|do you|has|have|is|are/.test(lower)
     )
       intent = 'asking_info';
     else if (
@@ -3407,12 +3726,35 @@ export class EngineService implements OnModuleDestroy {
     const trimmed = primary.trim();
     if (/clear yes or clear no/i.test(trimmed)) return true;
     if (/when you say\s+["']?.+["']?,\s*can you help me understand/i.test(trimmed)) return true;
+    if (/^how are you handling this process today\??$/i.test(trimmed)) return true;
+    if (/^can i clarify the main blocker/i.test(trimmed)) return true;
     for (const pattern of this.BANNED_GENERIC_PATTERNS) {
       if (!pattern.test(trimmed)) continue;
       const remainder = trimmed.replace(pattern, '').replace(/^[,.\s]+/, '');
       if (remainder.length < 25) return true;
     }
     return false;
+  }
+
+  private isDirectInfoTurn(
+    utterance: string,
+    slots: { objection_type: string; entities: string[]; intent: string },
+  ) {
+    const line = utterance.trim();
+    if (!line) return false;
+    if (slots.intent === 'asking_info' || slots.objection_type === 'info_request') return true;
+    if (!line.includes('?')) return false;
+    const lower = line.toLowerCase();
+    return /\b(how|what|why|when|where|can you|do you|does|would|could)\b/.test(lower);
+  }
+
+  private inferInfoAnswerFocus(utterance: string): 'quality' | 'support' | 'speed' | 'pricing' | 'general' {
+    const lower = utterance.toLowerCase();
+    if (/support|update|outdated|maintenance|release|roadmap|feature/.test(lower)) return 'support';
+    if (/quality|consistent|reliable|handoff|standard|checkpoint/.test(lower)) return 'quality';
+    if (/turnaround|how fast|delivery|deadline|sla/.test(lower)) return 'speed';
+    if (/price|pricing|cost|budget/.test(lower)) return 'pricing';
+    return 'general';
   }
 
   private pickDeterministicLine(seed: string, options: string[]): string {
@@ -3432,9 +3774,9 @@ export class EngineService implements OnModuleDestroy {
         : '';
     if (slots.objection_type === 'pricing')
       return this.pickDeterministicLine(`${utterance}|pricing|${slots.entities.join(',')}`, [
-        'On pricing, is the blocker budget limits, uncertainty about ROI, or timing of spend?',
-        'For budget, is the issue total cost, cash-flow timing, or confidence in payback?',
-        'Should we break pricing into scope, timeline, and ROI so we can pinpoint what feels off?',
+        'Pricing usually tracks scope, speed, and support requirements. Is your concern the total budget, confidence in ROI, or the timing of spend?',
+        'Budget concerns are often solved by scoping one high-impact area first. Is the issue total cost or cash-flow timing?',
+        'A fair pricing comparison needs scope and timeline context first. Should we map one concrete use case so the numbers are accurate?',
       ]);
     if (slots.objection_type === 'timing') {
       return `You mentioned ${slots.entities[0] ?? 'timing as a factor'} — what would need to change for this to become a priority before then?`;
@@ -3451,8 +3793,22 @@ export class EngineService implements OnModuleDestroy {
         'What outcome would need to improve for this to move from optional to important?',
         'What pain would need to get worse before solving this becomes a priority?',
       ]);
-    if (slots.objection_type === 'info_request')
-      return `Short answer: it depends on your workflow and target outcome. Which matters most right now: speed, consistency, or conversion?`;
+    if (slots.objection_type === 'info_request') {
+      const focus = this.inferInfoAnswerFocus(utterance);
+      if (focus === 'quality') {
+        return 'The advantage is consistency under pressure — standardized workflow checkpoints and clear ownership at each handoff. Which part of that matters most in your situation?';
+      }
+      if (focus === 'support') {
+        return 'The advantage is predictable support and structured update cadence, so quality stays stable as your needs grow. What does your current support experience look like?';
+      }
+      if (focus === 'speed') {
+        return 'The advantage is faster delivery without quality tradeoffs — because stages and approvals are structured upfront. Where does your current process lose the most time?';
+      }
+      if (focus === 'pricing') {
+        return 'Pricing is usually scoped by use case, so teams can start focused and expand once value is proven. What scope are you thinking about starting with?';
+      }
+      return 'Teams typically choose this for more predictable execution, clearer ownership, and better consistency at scale. Which of those matters most to you right now?';
+    }
     const clean = shortUtterance.replace(/^["'\s]+|["'\s]+$/g, '');
     const mention =
       clean.length > 0 ? `Based on what you just said${entityHint}` : `Given your context${entityHint}`;
@@ -3480,10 +3836,10 @@ export class EngineService implements OnModuleDestroy {
 
   private resolveRequiredMove(lastMove: string): string {
     const sequence: Record<string, string> = {
-      empathize: 'clarify',
+      empathize: 'value_map',
       clarify: 'value_map',
       value_map: 'next_step_close',
-      next_step_close: 'clarify',
+      next_step_close: '',
     };
     return sequence[lastMove] ?? '';
   }

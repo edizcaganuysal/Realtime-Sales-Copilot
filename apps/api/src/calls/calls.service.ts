@@ -311,6 +311,29 @@ export class CallsService {
     return settings;
   }
 
+  private async resolvePlaybookId(orgId: string, requestedPlaybookId?: string | null) {
+    if (requestedPlaybookId) {
+      const [playbook] = await this.db
+        .select({ id: schema.playbooks.id })
+        .from(schema.playbooks)
+        .where(and(eq(schema.playbooks.orgId, orgId), eq(schema.playbooks.id, requestedPlaybookId)))
+        .limit(1);
+      if (!playbook) {
+        throw new BadRequestException('playbookId is invalid for this org');
+      }
+      return playbook.id;
+    }
+
+    const [defaultPlaybook] = await this.db
+      .select({ id: schema.playbooks.id })
+      .from(schema.playbooks)
+      .where(and(eq(schema.playbooks.orgId, orgId), eq(schema.playbooks.isDefault, true)))
+      .orderBy(asc(schema.playbooks.createdAt))
+      .limit(1);
+
+    return defaultPlaybook?.id ?? null;
+  }
+
   private normalizeSelectedProductIds(ids?: string[]) {
     if (!ids || ids.length === 0) return [];
     return [...new Set(ids.filter((id) => id && id.length > 0))];
@@ -475,6 +498,7 @@ export class CallsService {
     const selectedProductIds = this.normalizeSelectedProductIds(dto.selected_product_ids);
     const callMode = dto.mode ?? 'OUTBOUND';
     const callType = dto.call_type ?? 'cold_outbound';
+    const playbookId = await this.resolvePlaybookId(user.orgId, dto.playbookId);
     await this.creditsService.requireAvailable(user.orgId, 1);
 
     const contactJson: Record<string, unknown> = {};
@@ -489,7 +513,7 @@ export class CallsService {
           orgId: user.orgId,
           userId: user.sub,
           agentId: dto.agentId ?? null,
-          playbookId: null,
+          playbookId,
           mode: callMode,
           callType,
           guidanceLevel,

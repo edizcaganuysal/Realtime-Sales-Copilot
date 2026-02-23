@@ -1,11 +1,21 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Bot, Plus, X } from 'lucide-react';
+import { Plus, Target, X } from 'lucide-react';
 import { PageHeader } from '@/components/ui/page-header';
 import { EmptyState } from '@/components/ui/empty-state';
 import { LoadingSkeleton } from '@/components/ui/loading-skeleton';
 import { INPUT_BASE } from '@/components/ui/form-field';
+
+type SalesRules = {
+  spin?: boolean;
+  anti_repeat?: boolean;
+  concise?: boolean;
+  next_step?: boolean;
+  challenger?: boolean;
+  feature_last?: boolean;
+  no_filler?: boolean;
+};
 
 type Agent = {
   id: string;
@@ -14,6 +24,7 @@ type Agent = {
   useDefaultTemplate?: boolean;
   promptDelta?: string | null;
   fullPromptOverride?: string | null;
+  configJson?: { rules?: SalesRules } | null;
   openers?: string[] | null;
   createdAt: string;
 };
@@ -23,7 +34,28 @@ type AgentForm = {
   useDefaultTemplate: boolean;
   promptDelta: string;
   fullPromptOverride: string;
+  rules: SalesRules;
   openers: string[];
+};
+
+const RULE_DEFS: { key: keyof SalesRules; label: string; description: string; recommended: boolean }[] = [
+  { key: 'spin', label: 'SPIN discovery', description: 'Ask Situation/Problem/Implication/Need questions before pitching.', recommended: true },
+  { key: 'anti_repeat', label: 'No repetition', description: 'Never repeat a value prop or differentiator already used this call.', recommended: true },
+  { key: 'concise', label: 'Short suggestions', description: 'All suggestions must be 1–2 speakable sentences. No paragraphs.', recommended: true },
+  { key: 'next_step', label: 'Push next steps', description: 'Periodically propose a concrete next step (calendar hold, pilot, short call).', recommended: true },
+  { key: 'challenger', label: 'Challenger insights', description: 'Share a concise reframing insight when prospect is stuck on status quo.', recommended: true },
+  { key: 'feature_last', label: 'Discovery before features', description: 'Never lead with product features — always start with the prospect\'s situation.', recommended: false },
+  { key: 'no_filler', label: 'No generic openers', description: 'Never start with "I understand", "That makes sense", "Great question", etc.', recommended: false },
+];
+
+const DEFAULT_RULES: SalesRules = {
+  spin: true,
+  anti_repeat: true,
+  concise: true,
+  next_step: true,
+  challenger: true,
+  feature_last: false,
+  no_filler: false,
 };
 
 const DEFAULT_FORM: AgentForm = {
@@ -31,16 +63,22 @@ const DEFAULT_FORM: AgentForm = {
   useDefaultTemplate: true,
   promptDelta: '',
   fullPromptOverride: '',
+  rules: { ...DEFAULT_RULES },
   openers: [],
 };
 
 function toForm(agent: Agent): AgentForm {
-  const useDefaultTemplate = agent.useDefaultTemplate ?? true;
+  const savedRules = agent.configJson?.rules ?? {};
+  const rules: SalesRules = {};
+  for (const def of RULE_DEFS) {
+    rules[def.key] = savedRules[def.key] !== undefined ? savedRules[def.key] : def.recommended;
+  }
   return {
     name: agent.name,
-    useDefaultTemplate,
+    useDefaultTemplate: agent.useDefaultTemplate ?? true,
     promptDelta: agent.promptDelta?.trim() || agent.prompt.trim(),
     fullPromptOverride: agent.fullPromptOverride?.trim() || agent.prompt.trim(),
+    rules,
     openers: Array.isArray(agent.openers) ? agent.openers : [],
   };
 }
@@ -48,16 +86,14 @@ function toForm(agent: Agent): AgentForm {
 function toPayload(form: AgentForm) {
   const trimmedName = form.name.trim();
   const delta = form.promptDelta.trim();
-  const full = form.fullPromptOverride.trim();
-  const useDefaultTemplate = form.useDefaultTemplate;
-  const fallbackPrompt = useDefaultTemplate ? delta : full;
 
   return {
     name: trimmedName,
-    prompt: fallbackPrompt,
-    useDefaultTemplate,
-    promptDelta: useDefaultTemplate ? delta : '',
-    fullPromptOverride: useDefaultTemplate ? null : full,
+    prompt: delta,
+    useDefaultTemplate: true,
+    promptDelta: delta,
+    fullPromptOverride: null,
+    configJson: { rules: form.rules },
     openers: form.openers.map((o) => o.trim()).filter((o) => o.length > 0),
   };
 }
@@ -72,6 +108,7 @@ export default function AgentsPage() {
   const [error, setError] = useState('');
   const [newOpener, setNewOpener] = useState('');
   const [draftingOpeners, setDraftingOpeners] = useState(false);
+  const [generatingStrategy, setGeneratingStrategy] = useState(false);
 
   useEffect(() => {
     void loadAgents();
@@ -105,15 +142,11 @@ export default function AgentsPage() {
     e.preventDefault();
     const payload = toPayload(form);
     if (!payload.name) {
-      setError('Agent name is required.');
+      setError('Strategy name is required.');
       return;
     }
-    if (payload.useDefaultTemplate && !payload.promptDelta.trim()) {
-      setError('Agent add-on instructions are required.');
-      return;
-    }
-    if (!payload.useDefaultTemplate && !payload.fullPromptOverride?.trim()) {
-      setError('Full agent prompt is required.');
+    if (!payload.promptDelta.trim()) {
+      setError('Strategy instructions are required.');
       return;
     }
 
@@ -177,18 +210,65 @@ export default function AgentsPage() {
     }
   }
 
+  async function handleGenerateStrategy() {
+    setGeneratingStrategy(true);
+    let agentId = editAgent?.id;
+
+    if (!agentId) {
+      // Auto-save the agent first to get an ID, then generate
+      const trimmedName = form.name.trim();
+      if (!trimmedName) {
+        setError('Enter a strategy name first, then generate.');
+        setGeneratingStrategy(false);
+        return;
+      }
+      const saveRes = await fetch('/api/agents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...toPayload(form),
+          promptDelta: form.promptDelta.trim() || 'Generating from context…',
+          prompt: form.promptDelta.trim() || 'Generating from context…',
+        }),
+      });
+      const savedData = await saveRes.json().catch(() => ({}));
+      if (!saveRes.ok) {
+        setError(Array.isArray(savedData?.message) ? savedData.message[0] : (savedData?.message ?? 'Failed to create agent'));
+        setGeneratingStrategy(false);
+        return;
+      }
+      agentId = (savedData as { id: string }).id;
+      setEditAgent(savedData as Agent);
+      void loadAgents();
+    }
+
+    const res = await fetch(`/api/agents/${agentId}/generate-strategy`, { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    setGeneratingStrategy(false);
+    if (res.ok && typeof data?.strategy === 'string') {
+      setForm((prev) => ({ ...prev, promptDelta: data.strategy }));
+    }
+  }
+
+  function toggleRule(key: keyof SalesRules) {
+    setForm((prev) => ({
+      ...prev,
+      rules: { ...prev.rules, [key]: !prev.rules[key] },
+    }));
+  }
+
   return (
     <div className="p-8 max-w-4xl">
       <PageHeader
-        title="Agents"
-        description="Create and manage your personal coaching agents."
+        title="Copilot Strategy"
+        description="Define how your sales copilot should behave. Add an opening line and write how you want it to respond — length, tone, focus areas."
         actions={
           <button
             onClick={openCreate}
             className="flex items-center gap-1.5 rounded-lg bg-sky-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-sky-500"
           >
             <Plus size={14} />
-            New agent
+            New strategy
           </button>
         }
       />
@@ -196,7 +276,20 @@ export default function AgentsPage() {
       {loading ? (
         <LoadingSkeleton count={3} height="h-20" />
       ) : agents.length === 0 ? (
-        <EmptyState icon={Bot} message="No agents yet" className="py-16" />
+        <EmptyState
+          icon={Target}
+          message="No strategies yet"
+          className="py-16"
+          action={
+            <button
+              onClick={openCreate}
+              className="flex items-center gap-1.5 rounded-lg bg-sky-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-sky-500"
+            >
+              <Plus size={14} />
+              Create strategy
+            </button>
+          }
+        />
       ) : (
         <div className="space-y-3">
           {agents.map((agent) => (
@@ -205,9 +298,6 @@ export default function AgentsPage() {
                 <div className="min-w-0 flex-1">
                   <div className="mb-1 flex items-center gap-2">
                     <span className="text-sm font-medium text-white">{agent.name}</span>
-                    <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[11px] text-slate-300">
-                      {(agent.useDefaultTemplate ?? true) ? 'Default template' : 'Full prompt'}
-                    </span>
                     {Array.isArray(agent.openers) && agent.openers.length > 0 && (
                       <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-[11px] text-sky-300">
                         {agent.openers.length} opener{agent.openers.length !== 1 ? 's' : ''}
@@ -215,9 +305,7 @@ export default function AgentsPage() {
                     )}
                   </div>
                   <p className="line-clamp-2 text-xs text-slate-500">
-                    {(agent.useDefaultTemplate ?? true)
-                      ? (agent.promptDelta?.trim() || agent.prompt)
-                      : (agent.fullPromptOverride?.trim() || agent.prompt)}
+                    {agent.promptDelta?.trim() || agent.prompt}
                   </p>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
@@ -241,15 +329,15 @@ export default function AgentsPage() {
       )}
 
       {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 overflow-y-auto py-8">
-          <div className="w-full max-w-xl rounded-xl border border-slate-800 bg-slate-900 p-6 mx-4">
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 overflow-y-auto py-8">
+          <div className="w-full max-w-xl rounded-xl border border-slate-800 bg-slate-900 p-6 mx-4 my-auto">
             <div className="mb-5 flex items-center justify-between">
-              <h2 className="text-base font-semibold text-white">{editAgent ? 'Edit agent' : 'New agent'}</h2>
+              <h2 className="text-base font-semibold text-white">{editAgent ? 'Edit strategy' : 'New strategy'}</h2>
               <button onClick={() => setShowModal(false)} className="text-slate-500 hover:text-white">
                 <X size={18} />
               </button>
             </div>
-            <form onSubmit={handleSubmitForm} className="space-y-4">
+            <form onSubmit={handleSubmitForm} className="space-y-5">
               <div>
                 <label className="mb-1.5 block text-xs text-slate-400">Name</label>
                 <input
@@ -258,54 +346,76 @@ export default function AgentsPage() {
                   className={INPUT_BASE}
                   value={form.name}
                   onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
-                  placeholder="Example: Discovery Coach"
+                  placeholder="Example: Discovery-First, Enterprise Closer"
                 />
               </div>
 
-              <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3">
-                <label className="flex items-center gap-2 text-sm text-slate-200">
-                  <input
-                    type="checkbox"
-                    checked={form.useDefaultTemplate}
-                    onChange={(e) =>
-                      setForm((prev) => ({ ...prev, useDefaultTemplate: e.target.checked }))
-                    }
-                  />
-                  Use default sales template
-                </label>
-                <p className="mt-1 text-xs text-slate-500">
-                  Recommended. Keep this on unless you need a complete custom prompt.
-                </p>
+              {/* Fundamental rules toggles */}
+              <div>
+                <label className="mb-0.5 block text-xs text-slate-400">Fundamental Rules</label>
+                <p className="mb-2.5 text-[11px] text-slate-500">Toggle the rules the copilot should follow during calls.</p>
+                <div className="space-y-1.5">
+                  {RULE_DEFS.map((rule) => (
+                    <button
+                      key={rule.key}
+                      type="button"
+                      onClick={() => toggleRule(rule.key)}
+                      className={`w-full flex items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${
+                        form.rules[rule.key]
+                          ? 'border-sky-500/40 bg-sky-500/10'
+                          : 'border-slate-700 bg-slate-800/40'
+                      }`}
+                    >
+                      <div className={`mt-0.5 h-4 w-4 shrink-0 rounded border flex items-center justify-center transition-colors ${
+                        form.rules[rule.key]
+                          ? 'border-sky-500 bg-sky-500'
+                          : 'border-slate-600'
+                      }`}>
+                        {form.rules[rule.key] && (
+                          <svg viewBox="0 0 10 8" className="w-2.5 h-2" fill="none">
+                            <path d="M1 4l3 3 5-6" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-medium text-slate-200">{rule.label}</span>
+                          {rule.recommended && (
+                            <span className="rounded bg-emerald-500/15 px-1 py-0.5 text-[10px] text-emerald-400">Recommended</span>
+                          )}
+                        </div>
+                        <p className="mt-0.5 text-[11px] text-slate-500">{rule.description}</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
               </div>
 
-              {form.useDefaultTemplate ? (
-                <div>
-                  <label className="mb-1.5 block text-xs text-slate-400">Agent add-on instructions</label>
-                  <textarea
-                    required
-                    rows={6}
-                    className={INPUT_BASE + ' resize-none'}
-                    value={form.promptDelta}
-                    onChange={(e) => setForm((prev) => ({ ...prev, promptDelta: e.target.value }))}
-                    placeholder="Example: Focus on sharp discovery questions and concise objection handling."
-                  />
+              {/* Strategy instructions */}
+              <div>
+                <div className="mb-1.5 flex items-center justify-between">
+                  <label className="text-xs text-slate-400">Strategy instructions</label>
+                  <button
+                    type="button"
+                    disabled={generatingStrategy}
+                    onClick={handleGenerateStrategy}
+                    className="text-[11px] rounded-md border border-sky-500/30 bg-sky-500/10 px-2 py-1 text-sky-300 transition-colors hover:border-sky-500/60 disabled:opacity-50"
+                  >
+                    {generatingStrategy ? 'Generating...' : 'Generate from Context'}
+                  </button>
                 </div>
-              ) : (
-                <div>
-                  <label className="mb-1.5 block text-xs text-slate-400">Full agent prompt</label>
-                  <textarea
-                    required
-                    rows={8}
-                    className={INPUT_BASE + ' resize-none'}
-                    value={form.fullPromptOverride}
-                    onChange={(e) =>
-                      setForm((prev) => ({ ...prev, fullPromptOverride: e.target.value }))
-                    }
-                    placeholder="Paste the full prompt this agent should use."
-                  />
-                </div>
-              )}
+                <p className="mb-2 text-[11px] text-slate-500">Describe how you want the copilot to behave. Write in plain language — no prompt engineering needed.</p>
+                <textarea
+                  required
+                  rows={5}
+                  className={INPUT_BASE + ' resize-none'}
+                  value={form.promptDelta}
+                  onChange={(e) => setForm((prev) => ({ ...prev, promptDelta: e.target.value }))}
+                  placeholder={"Examples:\n• 'Keep suggestions under 15 words.'\n• 'Always ask about timeline before proposing next steps.'\n• 'Focus on ROI discovery before pitching features.'\n• 'Use a consultative, not pushy, tone.'"}
+                />
+              </div>
 
+              {/* Openers */}
               <div>
                 <div className="flex items-center justify-between mb-1.5">
                   <div>
@@ -368,7 +478,7 @@ export default function AgentsPage() {
                   disabled={submitting}
                   className="flex-1 rounded-lg bg-sky-600 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-500 disabled:opacity-50"
                 >
-                  {submitting ? 'Saving...' : editAgent ? 'Save changes' : 'Create agent'}
+                  {submitting ? 'Saving...' : editAgent ? 'Save changes' : 'Create strategy'}
                 </button>
                 <button
                   type="button"

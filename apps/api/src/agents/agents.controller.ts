@@ -43,4 +43,9 @@ export class AgentsController {
   draftOpeners(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.agentsService.draftOpeners(user, id);
   }
+
+  @Post(':id/generate-strategy')
+  generateStrategy(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.agentsService.generateStrategy(user, id);
+  }
 }

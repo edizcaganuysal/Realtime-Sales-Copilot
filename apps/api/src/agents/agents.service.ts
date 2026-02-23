@@ -166,6 +166,85 @@ export class AgentsService {
     }
   }
 
+  async generateStrategy(user: JwtPayload, agentId: string) {
+    const [agent] = await this.db
+      .select()
+      .from(schema.agents)
+      .where(and(eq(schema.agents.id, agentId), eq(schema.agents.orgId, user.orgId)))
+      .limit(1);
+
+    if (!agent) throw new NotFoundException('Agent not found');
+
+    const [contextRow, productRows] = await Promise.all([
+      this.db
+        .select({
+          companyName: schema.salesContext.companyName,
+          whatWeSell: schema.salesContext.whatWeSell,
+          targetCustomer: schema.salesContext.targetCustomer,
+          targetRoles: schema.salesContext.targetRoles,
+          industries: schema.salesContext.industries,
+          globalValueProps: schema.salesContext.globalValueProps,
+          proofPoints: schema.salesContext.proofPoints,
+          caseStudies: schema.salesContext.caseStudies,
+          buyingTriggers: schema.salesContext.buyingTriggers,
+        })
+        .from(schema.salesContext)
+        .where(eq(schema.salesContext.orgId, user.orgId))
+        .limit(1)
+        .then((rows) => rows[0] ?? null),
+      this.db
+        .select({ name: schema.products.name, elevatorPitch: schema.products.elevatorPitch })
+        .from(schema.products)
+        .where(eq(schema.products.orgId, user.orgId)),
+    ]);
+
+    const toList = (val: unknown): string[] =>
+      Array.isArray(val) ? val.filter((v): v is string => typeof v === 'string') : [];
+
+    const companyName = contextRow?.companyName?.trim() || '';
+    const whatWeSell = contextRow?.whatWeSell?.trim() || '';
+    const targetCustomer = contextRow?.targetCustomer?.trim() || '';
+    const valueProps = toList(contextRow?.globalValueProps).slice(0, 5).join('; ');
+    const proofPoints = toList(contextRow?.proofPoints).slice(0, 4).join('; ');
+    const buyingTriggers = toList(contextRow?.buyingTriggers).slice(0, 4).join('; ');
+    const industries = toList(contextRow?.industries).slice(0, 4).join(', ');
+    const productSummary = productRows
+      .map((p) => `${p.name}${p.elevatorPitch ? ': ' + p.elevatorPitch : ''}`)
+      .join('. ');
+
+    const FALLBACK_STRATEGY =
+      `Focus on consultative discovery first: ask about the prospect's current situation and challenges before introducing features. ` +
+      `Keep suggestions concise (1-2 sentences). Always move toward a concrete next step after handling an objection. ` +
+      `Use specific proof points when available. Avoid generic empathy openers.`;
+
+    if (!this.llm.available) {
+      return { strategy: FALLBACK_STRATEGY };
+    }
+
+    try {
+      const system =
+        'You are an expert B2B sales coach. Write copilot strategy instructions that tell an AI sales assistant exactly how to behave during sales calls for this company. ' +
+        'Output plain text only — 4 to 8 sentences. No markdown, no bullet points, no headers. Be specific about tone, discovery approach, objection handling, and what to emphasize.';
+      const userPrompt =
+        (companyName ? `Company: ${companyName}\n` : '') +
+        (whatWeSell ? `What we sell: ${whatWeSell}\n` : '') +
+        (productSummary ? `Products/services: ${productSummary}\n` : '') +
+        (targetCustomer ? `Target customer: ${targetCustomer}\n` : '') +
+        (industries ? `Industries: ${industries}\n` : '') +
+        (valueProps ? `Key value props: ${valueProps}\n` : '') +
+        (proofPoints ? `Proof points: ${proofPoints}\n` : '') +
+        (buyingTriggers ? `Typical buying triggers: ${buyingTriggers}\n` : '') +
+        `\nWrite a sales copilot strategy (4-8 sentences) that specifies: the recommended tone (consultative/direct/challenger), ` +
+        `what discovery questions to prioritize, how to handle objections specific to this product and industry, ` +
+        `which value props to lead with, and when to push for a next step. Make it specific to this company — not generic advice.`;
+      const raw = await this.llm.chatFast(system, userPrompt);
+      const strategy = raw?.trim() || FALLBACK_STRATEGY;
+      return { strategy };
+    } catch {
+      return { strategy: FALLBACK_STRATEGY };
+    }
+  }
+
   private normalizeOpeners(openers: string[] | undefined): string[] {
     if (!Array.isArray(openers)) return [];
     return openers

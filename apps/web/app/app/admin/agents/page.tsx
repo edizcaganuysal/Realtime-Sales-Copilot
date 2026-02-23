@@ -169,13 +169,13 @@ export default function AdminAgentsPage() {
         <div className="mb-4">
           <h2 className="text-base font-semibold text-white">Pending Approval</h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            Review prompt and settings before approving/rejecting.
+            Review strategy instructions before approving or rejecting.
           </p>
         </div>
 
         {pending.length === 0 ? (
           <div className="bg-slate-900 border border-slate-800 rounded-xl px-5 py-8 text-center">
-            <p className="text-slate-500 text-sm">No pending agents</p>
+            <p className="text-slate-500 text-sm">No pending strategies</p>
           </div>
         ) : (
           <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden divide-y divide-slate-800">
@@ -211,13 +211,13 @@ export default function AdminAgentsPage() {
 
       <section>
         <div className="mb-4">
-          <h2 className="text-base font-semibold text-white">Org Agents</h2>
-          <p className="text-xs text-slate-500 mt-0.5">Edit or delete pre-made and org-shared agents</p>
+          <h2 className="text-base font-semibold text-white">Org Strategies</h2>
+          <p className="text-xs text-slate-500 mt-0.5">Edit or delete pre-made and org-shared copilot strategies</p>
         </div>
 
         {sortedOrgAgents.length === 0 ? (
           <div className="bg-slate-900 border border-slate-800 rounded-xl px-5 py-8 text-center">
-            <p className="text-slate-500 text-sm">No org agents yet</p>
+            <p className="text-slate-500 text-sm">No org strategies yet</p>
           </div>
         ) : (
           <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
@@ -276,7 +276,7 @@ export default function AdminAgentsPage() {
         <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
           <div className="w-full max-w-3xl bg-slate-900 border border-slate-800 rounded-xl p-5">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-white font-semibold text-base">Review Agent</h3>
+              <h3 className="text-white font-semibold text-base">Review Strategy</h3>
               <button onClick={() => setReviewing(null)} className="text-slate-500 hover:text-white">
                 <X size={18} />
               </button>
@@ -341,7 +341,7 @@ export default function AdminAgentsPage() {
         <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
           <div className="w-full max-w-3xl bg-slate-900 border border-slate-800 rounded-xl p-5">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-white font-semibold text-base">Edit Agent</h3>
+              <h3 className="text-white font-semibold text-base">Edit Strategy</h3>
               <button onClick={() => setEditing(null)} className="text-slate-500 hover:text-white">
                 <X size={18} />
               </button>
@@ -366,39 +366,15 @@ export default function AdminAgentsPage() {
                 />
               </div>
               <div>
-                <label className="text-xs text-slate-400 block mb-1.5">Prompt mode</label>
-                <select
-                  value={form.useDefaultTemplate ? 'DEFAULT' : 'FULL'}
-                  onChange={(e) =>
-                    setForm((p) => ({ ...p, useDefaultTemplate: e.target.value === 'DEFAULT' }))
-                  }
+                <label className="text-xs text-slate-400 block mb-1.5">Strategy instructions</label>
+                <p className="text-[11px] text-slate-500 mb-1.5">Plain-language instructions for how the copilot should behave on calls using this strategy.</p>
+                <textarea
+                  rows={5}
+                  value={form.promptDelta}
+                  onChange={(e) => setForm((p) => ({ ...p, promptDelta: e.target.value, useDefaultTemplate: true }))}
                   className={INPUT_CLASS}
-                >
-                  <option value="DEFAULT">Default template + context + delta</option>
-                  <option value="FULL">Context + full override prompt</option>
-                </select>
+                />
               </div>
-              {form.useDefaultTemplate ? (
-                <div>
-                  <label className="text-xs text-slate-400 block mb-1.5">Agent add-on prompt (delta)</label>
-                  <textarea
-                    rows={5}
-                    value={form.promptDelta}
-                    onChange={(e) => setForm((p) => ({ ...p, promptDelta: e.target.value }))}
-                    className={INPUT_CLASS}
-                  />
-                </div>
-              ) : (
-                <div>
-                  <label className="text-xs text-slate-400 block mb-1.5">Full prompt override</label>
-                  <textarea
-                    rows={6}
-                    value={form.fullPromptOverride}
-                    onChange={(e) => setForm((p) => ({ ...p, fullPromptOverride: e.target.value }))}
-                    className={INPUT_CLASS}
-                  />
-                </div>
-              )}
               <div>
                 <label className="text-xs text-slate-400 block mb-1.5">Scope</label>
                 <select

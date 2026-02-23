@@ -72,10 +72,65 @@ export class MediaStreamService implements OnApplicationBootstrap {
       this.logger.log('Media stream WS connected — waiting for start event to get callId');
 
       let callId: string | null = null;
-      let deepgramWs: WebSocket | null = null;
-      let speaker = 'PROSPECT';
-      // Buffer media messages received before the start event
-      const earlyMediaBuffer: Buffer[] = [];
+      const deepgramByTrack = new Map<string, WebSocket>();
+      const earlyMediaBuffer: Array<{ track: string; audio: Buffer }> = [];
+
+      const normalizeTrack = (rawTrack: string) => {
+        const value = rawTrack.toLowerCase();
+        if (value.includes('outbound')) return 'outbound';
+        if (value.includes('inbound')) return 'inbound';
+        return 'inbound';
+      };
+
+      const speakerForTrack = (rawTrack: string) =>
+        normalizeTrack(rawTrack) === 'outbound' ? 'REP' : 'PROSPECT';
+
+      const closeSessions = () => {
+        for (const session of deepgramByTrack.values()) {
+          session.close();
+        }
+        deepgramByTrack.clear();
+      };
+
+      const ensureDeepgramSession = (rawTrack: string) => {
+        if (!this.sttService.available) return null;
+        const trackKey = normalizeTrack(rawTrack);
+        const existing = deepgramByTrack.get(trackKey);
+        if (existing) return existing;
+        const speaker = speakerForTrack(trackKey);
+        const session = this.sttService.createDeepgramSession(
+          speaker,
+          async (text, isFinal, spk) => {
+            const callRef = callId;
+            if (!callRef) return;
+            if (!text.trim()) return;
+            const tsMs = Date.now();
+
+            this.gateway.emitToCall(
+              callRef,
+              isFinal ? 'transcript.final' : 'transcript.partial',
+              { speaker: spk, text, tsMs, isFinal },
+            );
+
+            if (!isFinal) {
+              this.engineService.signalSpeaking(callRef, spk, text);
+            }
+
+            if (isFinal) {
+              this.engineService.pushTranscript(callRef, spk, text);
+              await this.db.insert(schema.callTranscript).values({
+                callId: callRef,
+                tsMs,
+                speaker: spk,
+                text,
+                isFinal: true,
+              });
+            }
+          },
+        );
+        deepgramByTrack.set(trackKey, session);
+        return session;
+      };
 
       ws.on('message', (rawData) => {
         let msg: TwilioMsg;
@@ -93,13 +148,15 @@ export class MediaStreamService implements OnApplicationBootstrap {
           }
 
           case 'start': {
-            // Extract callId from customParameters (set via TwiML <Parameter>)
             callId = msg.start.customParameters?.callId ?? null;
+            const tracks = Array.isArray(msg.start.tracks) && msg.start.tracks.length > 0
+              ? msg.start.tracks
+              : ['inbound_track'];
 
             this.logger.log(
               `Media stream start — callId: ${callId ?? 'MISSING'}, ` +
               `streamSid: ${msg.start.streamSid}, callSid: ${msg.start.callSid}, ` +
-              `tracks: [${msg.start.tracks.join(',')}], ` +
+              `tracks: [${tracks.join(',')}], ` +
               `customParams: ${JSON.stringify(msg.start.customParameters ?? {})}`,
             );
 
@@ -109,45 +166,21 @@ export class MediaStreamService implements OnApplicationBootstrap {
               return;
             }
 
-            // "inbound" track = prospect speaking (called party)
-            speaker = msg.start.tracks.some((t) => t.includes('inbound')) ? 'PROSPECT' : 'REP';
             this.logger.log(
-              `Media stream identified — call ${callId}, speaker: ${speaker}, STT: ${this.sttService.available}`,
+              `Media stream identified — call ${callId}, tracks=${tracks.join(',')}, STT: ${this.sttService.available}`,
             );
 
             if (this.sttService.available) {
-              deepgramWs = this.sttService.createDeepgramSession(
-                speaker,
-                async (text, isFinal, spk) => {
-                  if (!text.trim()) return;
-                  const tsMs = Date.now();
+              for (const track of tracks) {
+                ensureDeepgramSession(track);
+              }
+              if (deepgramByTrack.size === 0) {
+                ensureDeepgramSession('inbound');
+              }
 
-                  this.gateway.emitToCall(
-                    callId!,
-                    isFinal ? 'transcript.final' : 'transcript.partial',
-                    { speaker: spk, text, tsMs, isFinal },
-                  );
-
-                  if (!isFinal) {
-                    this.engineService.signalSpeaking(callId!, spk, text);
-                  }
-
-                  if (isFinal) {
-                    this.engineService.pushTranscript(callId!, spk, text);
-                    await this.db.insert(schema.callTranscript).values({
-                      callId: callId!,
-                      tsMs,
-                      speaker: spk,
-                      text,
-                      isFinal: true,
-                    });
-                  }
-                },
-              );
-
-              // Flush any buffered media that arrived before start
-              for (const buf of earlyMediaBuffer) {
-                if (deepgramWs?.readyState === 1) deepgramWs.send(buf);
+              for (const buffered of earlyMediaBuffer) {
+                const session = ensureDeepgramSession(buffered.track);
+                if (session?.readyState === 1) session.send(buffered.audio);
               }
               earlyMediaBuffer.length = 0;
             }
@@ -155,27 +188,29 @@ export class MediaStreamService implements OnApplicationBootstrap {
           }
 
           case 'media': {
+            const track = normalizeTrack(msg.media.track || '');
+            const audio = Buffer.from(msg.media.payload, 'base64');
             if (!callId) {
-              // Buffer media until we get the start event
-              earlyMediaBuffer.push(Buffer.from(msg.media.payload, 'base64'));
+              earlyMediaBuffer.push({ track, audio });
               break;
             }
-            if (deepgramWs?.readyState === 1) {
-              deepgramWs.send(Buffer.from(msg.media.payload, 'base64'));
+            const session = ensureDeepgramSession(track);
+            if (session?.readyState === 1) {
+              session.send(audio);
             }
             break;
           }
 
           case 'stop': {
             this.logger.log(`Media stream stopped — call ${callId ?? 'unknown'}`);
-            deepgramWs?.close();
+            closeSessions();
             break;
           }
         }
       });
 
       ws.on('close', () => {
-        deepgramWs?.close();
+        closeSessions();
         this.logger.log(`Media stream WS closed — call ${callId ?? 'unknown'}`);
       });
 

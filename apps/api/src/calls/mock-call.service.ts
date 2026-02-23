@@ -87,9 +87,37 @@ export class MockCallService implements OnApplicationBootstrap {
     const practicePersonaId = (contactJson.practicePersonaId as string) ?? null;
     const customPersonaPrompt = (contactJson.customPersonaPrompt as string) ?? null;
 
+    // Load org sales context and products so the prospect AI knows what is being sold
+    const [ctxRow, productRows] = await Promise.all([
+      this.db
+        .select({
+          companyName: schema.salesContext.companyName,
+          whatWeSell: schema.salesContext.whatWeSell,
+          targetCustomer: schema.salesContext.targetCustomer,
+          targetRoles: schema.salesContext.targetRoles,
+          industries: schema.salesContext.industries,
+          globalValueProps: schema.salesContext.globalValueProps,
+          proofPoints: schema.salesContext.proofPoints,
+          caseStudies: schema.salesContext.caseStudies,
+          buyingTriggers: schema.salesContext.buyingTriggers,
+        })
+        .from(schema.salesContext)
+        .where(eq(schema.salesContext.orgId, callRow.orgId))
+        .limit(1)
+        .then((rows) => rows[0] ?? null),
+      this.db
+        .select({
+          name: schema.products.name,
+          elevatorPitch: schema.products.elevatorPitch,
+          valueProps: schema.products.valueProps,
+        })
+        .from(schema.products)
+        .where(eq(schema.products.orgId, callRow.orgId)),
+    ]);
+
     let prospectPersona: string;
     if (customPersonaPrompt) {
-      prospectPersona = this.buildCustomPersona(customPersonaPrompt, callRow.notes ?? null);
+      prospectPersona = this.buildCustomPersona(customPersonaPrompt, callRow.notes ?? null, ctxRow, productRows);
     } else if (practicePersonaId?.startsWith('custom:')) {
       // Load saved custom persona from agents table
       const agentId = practicePersonaId.replace(/^custom:/, '');
@@ -99,10 +127,10 @@ export class MockCallService implements OnApplicationBootstrap {
         .where(eq(schema.agents.id, agentId))
         .limit(1);
       prospectPersona = agent
-        ? this.buildCustomPersona(agent.prompt, callRow.notes ?? null)
-        : this.buildProspectPersona(null, callRow.notes ?? null);
+        ? this.buildCustomPersona(agent.prompt, callRow.notes ?? null, ctxRow, productRows)
+        : this.buildProspectPersona(null, callRow.notes ?? null, ctxRow, productRows);
     } else {
-      prospectPersona = this.buildProspectPersona(practicePersonaId, callRow.notes ?? null);
+      prospectPersona = this.buildProspectPersona(practicePersonaId, callRow.notes ?? null, ctxRow, productRows);
     }
 
     const openaiWs = new WebSocket(
@@ -127,6 +155,8 @@ export class MockCallService implements OnApplicationBootstrap {
     let assistantAudioTimer: ReturnType<typeof setTimeout> | null = null;
     let assistantSpeakingBroadcast = false;
     let responseDoneFallbackTimer: ReturnType<typeof setTimeout> | null = null;
+    let responseWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastAssistantAudioAt = 0;
     let lastProspectFinalAt = 0;
     let lastProspectFinalText = '';
     let lastFinalTsMs = 0;
@@ -153,6 +183,26 @@ export class MockCallService implements OnApplicationBootstrap {
       if (!responseDoneFallbackTimer) return;
       clearTimeout(responseDoneFallbackTimer);
       responseDoneFallbackTimer = null;
+    };
+    const clearResponseWatchdog = () => {
+      if (!responseWatchdogTimer) return;
+      clearTimeout(responseWatchdogTimer);
+      responseWatchdogTimer = null;
+    };
+    const bumpResponseWatchdog = () => {
+      clearResponseWatchdog();
+      responseWatchdogTimer = setTimeout(() => {
+        responseWatchdogTimer = null;
+        if (!responseActive) return;
+        this.logger.warn(`Mock response watchdog released stuck response state — call ${callId}`);
+        responseActive = false;
+        partialAiText = '';
+        aiSpeechStartedAt = null;
+        assistantAudioActive = false;
+        clearAssistantAudioTimer();
+        emitAssistantSpeaking(false);
+        scheduleResponseKick();
+      }, 12_000);
     };
     const emitAssistantSpeaking = (speaking: boolean) => {
       if (assistantSpeakingBroadcast === speaking) return;
@@ -196,13 +246,18 @@ export class MockCallService implements OnApplicationBootstrap {
     };
     const markAssistantAudioActive = () => {
       assistantAudioActive = true;
+      lastAssistantAudioAt = Date.now();
       emitAssistantSpeaking(true);
       clearAssistantAudioTimer();
       assistantAudioTimer = setTimeout(() => {
         assistantAudioActive = false;
         assistantAudioTimer = null;
         emitAssistantSpeaking(false);
-      }, 2800);
+        // Flush audio buffered by OpenAI VAD during AI playback (prevents echo transcription)
+        if (openaiWs.readyState === WebSocket.OPEN) {
+          openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
+        }
+      }, 600);
     };
     const normalize = (value: string) =>
       value
@@ -211,15 +266,17 @@ export class MockCallService implements OnApplicationBootstrap {
         .replace(/\s+/g, ' ')
         .trim();
     const isLikelyEchoTranscript = (text: string) => {
+      if (Date.now() - lastAssistantAudioAt > 5000) return false;
       const normalizedText = normalize(text);
       const normalizedProspect = normalize(lastProspectFinalText);
       if (!normalizedText || !normalizedProspect) return false;
       const delta = Math.abs(normalizedText.length - normalizedProspect.length);
-      if (delta > Math.max(10, Math.floor(normalizedProspect.length * 0.2))) return false;
-      if (Date.now() - lastProspectFinalAt > 2200) return false;
+      if (delta > Math.max(8, Math.floor(normalizedProspect.length * 0.12))) return false;
+      if (Date.now() - lastProspectFinalAt > 5000) return false;
       return (
-        normalizedText.includes(normalizedProspect) ||
-        normalizedProspect.includes(normalizedText)
+        normalizedText === normalizedProspect ||
+        normalizedText.startsWith(normalizedProspect) ||
+        normalizedProspect.startsWith(normalizedText)
       );
     };
     const scheduleResponseKick = () => {
@@ -323,6 +380,7 @@ export class MockCallService implements OnApplicationBootstrap {
 
         case 'response.created': {
           responseActive = true;
+          bumpResponseWatchdog();
           break;
         }
 
@@ -330,6 +388,7 @@ export class MockCallService implements OnApplicationBootstrap {
           if (!repHasSpoken) {
             break;
           }
+          bumpResponseWatchdog();
           markAssistantAudioActive();
           this.engineService.signalSpeaking(callId, 'PROSPECT');
           // Stream AI audio back to browser
@@ -347,6 +406,7 @@ export class MockCallService implements OnApplicationBootstrap {
             aiSpeechStartedAt = null;
             break;
           }
+          bumpResponseWatchdog();
           markAssistantAudioActive();
           // Accumulate partial AI transcript
           const text = event.delta as string;
@@ -416,6 +476,7 @@ export class MockCallService implements OnApplicationBootstrap {
 
         case 'response.done': {
           responseActive = false;
+          clearResponseWatchdog();
           clearResponseDoneFallbackTimer();
           if (partialAiText.trim().length > 0) {
             const fallbackText = partialAiText.trim();
@@ -435,6 +496,7 @@ export class MockCallService implements OnApplicationBootstrap {
 
         case 'error': {
           responseActive = false;
+          clearResponseWatchdog();
           assistantAudioActive = false;
           clearAssistantAudioTimer();
           emitAssistantSpeaking(false);
@@ -464,6 +526,7 @@ export class MockCallService implements OnApplicationBootstrap {
     openaiWs.on('error', (err) => {
       this.logger.error(`OpenAI Realtime WS error — call ${callId}: ${err.message}`);
       responseActive = false;
+      clearResponseWatchdog();
       assistantAudioActive = false;
       clearAssistantAudioTimer();
       emitAssistantSpeaking(false);
@@ -477,6 +540,7 @@ export class MockCallService implements OnApplicationBootstrap {
     openaiWs.on('close', () => {
       this.logger.log(`OpenAI Realtime WS closed — call ${callId}`);
       responseActive = false;
+      clearResponseWatchdog();
       assistantAudioActive = false;
       clearAssistantAudioTimer();
       emitAssistantSpeaking(false);
@@ -496,12 +560,7 @@ export class MockCallService implements OnApplicationBootstrap {
       }
 
       if (msg.type === 'audio' && msg.data && openaiReady) {
-        if (
-          assistantAudioActive ||
-          responseActive ||
-          aiSpeechStartedAt !== null ||
-          partialAiText.trim().length > 0
-        ) {
+        if (assistantAudioActive || openaiWs.readyState !== WebSocket.OPEN) {
           return;
         }
         openaiWs.send(JSON.stringify({
@@ -517,6 +576,7 @@ export class MockCallService implements OnApplicationBootstrap {
       clearAssistantAudioTimer();
       emitAssistantSpeaking(false);
       clearResponseDoneFallbackTimer();
+      clearResponseWatchdog();
       openaiWs.close();
     });
 
@@ -526,6 +586,7 @@ export class MockCallService implements OnApplicationBootstrap {
       clearAssistantAudioTimer();
       emitAssistantSpeaking(false);
       clearResponseDoneFallbackTimer();
+      clearResponseWatchdog();
       openaiWs.close();
     });
   }
@@ -541,11 +602,71 @@ export class MockCallService implements OnApplicationBootstrap {
     }));
   }
 
-  private buildProspectPersona(personaId: string | null, notes: string | null): string {
+  private buildCompanyContextBlock(
+    ctx: {
+      companyName?: string | null;
+      whatWeSell?: string | null;
+      targetCustomer?: string | null;
+      targetRoles?: unknown;
+      industries?: unknown;
+      globalValueProps?: unknown;
+      proofPoints?: unknown;
+      caseStudies?: unknown;
+      buyingTriggers?: unknown;
+    } | null,
+    products: { name: string; elevatorPitch?: string | null; valueProps?: unknown }[],
+  ): string {
+    if (!ctx) return '';
+    const toList = (val: unknown): string[] => (Array.isArray(val) ? val.filter((v): v is string => typeof v === 'string') : []);
+    const companyName = ctx.companyName?.trim() || null;
+    const whatWeSell = ctx.whatWeSell?.trim() || null;
+    const targetCustomer = ctx.targetCustomer?.trim() || null;
+    const targetRoles = toList(ctx.targetRoles);
+    const industries = toList(ctx.industries);
+    const valueProps = toList(ctx.globalValueProps);
+    const proofPoints = toList(ctx.proofPoints);
+    const buyingTriggers = toList(ctx.buyingTriggers);
+
+    const productLines = products
+      .map((p) => {
+        const pitch = p.elevatorPitch?.trim() || '';
+        return pitch ? `  - ${p.name}: ${pitch}` : `  - ${p.name}`;
+      })
+      .join('\n');
+
+    if (!companyName && !whatWeSell && !targetCustomer && products.length === 0) return '';
+
+    const lines: string[] = ['\nCOMPANY CONTEXT — what the sales rep is selling:'];
+    if (companyName) lines.push(`- Company: ${companyName}`);
+    if (whatWeSell) lines.push(`- Offering: ${whatWeSell}`);
+    if (products.length > 0) lines.push(`- Products/services:\n${productLines}`);
+    if (targetCustomer) lines.push(`- Target customer (your profile): ${targetCustomer}`);
+    if (targetRoles.length > 0) lines.push(`- Target roles: ${targetRoles.join(', ')}`);
+    if (industries.length > 0) lines.push(`- Industries: ${industries.join(', ')}`);
+    if (buyingTriggers.length > 0) lines.push(`- Typical buying triggers: ${buyingTriggers.slice(0, 3).join('; ')}`);
+    if (valueProps.length > 0) lines.push(`- Their value claims: ${valueProps.slice(0, 4).join(' / ')}`);
+    if (proofPoints.length > 0) lines.push(`- Proof points they may cite: ${proofPoints.slice(0, 3).join(' / ')}`);
+    lines.push(
+      `\nYou are a realistic prospect matching the target customer profile above.`,
+      `You have a legitimate need in this space but are not yet convinced this rep or company is the right fit.`,
+      `React to every specific claim or product name the rep mentions — this is a real company's offering.`,
+      `Push the rep to prove their specific value for YOUR situation, not generic benefits.`,
+    );
+    return lines.join('\n');
+  }
+
+  private buildProspectPersona(
+    personaId: string | null,
+    notes: string | null,
+    ctx: Parameters<MockCallService['buildCompanyContextBlock']>[0],
+    products: Parameters<MockCallService['buildCompanyContextBlock']>[1],
+  ): string {
     const persona = getPersonaById(personaId);
     const variation = this.buildSessionVariation();
+    const companyBlock = this.buildCompanyContextBlock(ctx, products);
     return (
       persona.prompt +
+      companyBlock +
       `\nSESSION VARIATION:\n${variation}\n` +
       (notes
         ? `\nSCENARIO CONTEXT from the rep: ${notes}\nAdapt your persona to match this scenario while keeping your core personality.\n`
@@ -553,10 +674,17 @@ export class MockCallService implements OnApplicationBootstrap {
     );
   }
 
-  private buildCustomPersona(customPrompt: string, notes: string | null): string {
+  private buildCustomPersona(
+    customPrompt: string,
+    notes: string | null,
+    ctx: Parameters<MockCallService['buildCompanyContextBlock']>[0],
+    products: Parameters<MockCallService['buildCompanyContextBlock']>[1],
+  ): string {
     const variation = this.buildSessionVariation();
+    const companyBlock = this.buildCompanyContextBlock(ctx, products);
     return (
       customPrompt +
+      companyBlock +
       `\nSESSION VARIATION:\n${variation}\n` +
       (notes
         ? `\nSCENARIO CONTEXT from the rep: ${notes}\nAdapt your persona to match this scenario.\n`
@@ -571,13 +699,19 @@ export class MockCallService implements OnApplicationBootstrap {
       'You are cautious and analytical.',
       'You are polite but resistant.',
       'You are direct and time-constrained.',
+      'You are distracted — you have other things on your mind and are barely paying attention.',
+      'You are mildly curious but deeply noncommittal.',
+      'You are straightforward and no-nonsense; you dislike small talk.',
+      'You are politely dismissive — you would rather end the call quickly than engage.',
     ];
-    const firstPushbacks = [
-      "We're fine as is right now.",
-      "Not a priority for us today.",
-      "We already have something in place.",
-      "I don't see a strong reason to switch.",
-      "Honestly, this sounds like what everyone says.",
+    const openingStyle = [
+      'Open defensively — signal that you have limited time without being rude.',
+      'Open skeptically — make it clear you get a lot of sales calls and are not excited.',
+      'Open distantly — give short answers, offer nothing voluntarily.',
+      'Open neutrally — don\'t commit either way; let them do the work.',
+      'Open with mild curiosity but keep your guard up immediately after.',
+      'Open with a question that puts the rep on the spot.',
+      'Open with polite impatience — acknowledge the call but make clear you have other things going on.',
     ];
     const challengeModes = [
       'Press for concrete proof and examples from similar companies.',
@@ -585,6 +719,9 @@ export class MockCallService implements OnApplicationBootstrap {
       'Challenge timeline urgency and ask why now matters.',
       'Push on risk, implementation burden, and team adoption.',
       'Push on ROI credibility and total effort required.',
+      'Focus on whether this is actually solving a real problem you have right now.',
+      'Challenge whether the rep understands your specific situation at all.',
+      'Ask probing questions about what happens if this doesn\'t work out.',
     ];
     const styleShifts = [
       'Use short, skeptical follow-up questions.',
@@ -592,13 +729,25 @@ export class MockCallService implements OnApplicationBootstrap {
       'Avoid agreeing quickly; ask one hard question before softening.',
       'If the rep is vague, become more resistant immediately.',
       'If the rep is specific, soften slightly but keep pressure.',
+      'Frequently redirect back to your own priorities rather than their pitch.',
+      'Ask the same type of question twice in different ways to test consistency.',
+      'Respond with silence-like minimal answers ("mm", "okay", "sure") to make the rep work harder.',
     ];
+    const pacing = [
+      'Answer in one sentence, then wait for the rep to carry the conversation.',
+      'Give brief answers — let the rep fill the silence.',
+      'Give a bit more context than usual, but always follow with a skeptical question.',
+      'Be economical — only say what is necessary to respond, nothing more.',
+    ];
+    const sessionSeed = Date.now();
     const pick = <T>(arr: T[]) => arr[Math.floor(Math.random() * arr.length)]!;
     return [
+      `Session ID: ${sessionSeed} — vary your behavior; do not repeat patterns from any previous session.`,
       pick(tones),
-      `First response style: "${pick(firstPushbacks)}"`,
+      pick(openingStyle),
       pick(challengeModes),
       pick(styleShifts),
+      pick(pacing),
     ].join('\n');
   }
 }
