@@ -1,20 +1,21 @@
-import { IsArray, IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsArray, IsIn, IsOptional, IsString } from 'class-validator';
 
 export class UpdateSalesContextDto {
   @IsOptional()
   @IsString()
-  @MaxLength(240)
   companyName?: string;
 
   @IsOptional()
   @IsString()
-  @MaxLength(3000)
   whatWeSell?: string;
 
   @IsOptional()
   @IsString()
-  @MaxLength(3000)
   howItWorks?: string;
+
+  @IsOptional()
+  @IsString()
+  strategy?: string;
 
   @IsOptional()
   @IsString()
@@ -23,7 +24,6 @@ export class UpdateSalesContextDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(3000)
   targetCustomer?: string;
 
   @IsOptional()
@@ -92,6 +92,5 @@ export class UpdateSalesContextDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(20000)
   knowledgeAppendix?: string;
 }

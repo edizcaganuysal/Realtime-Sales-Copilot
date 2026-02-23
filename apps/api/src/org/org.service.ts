@@ -8,17 +8,17 @@ import { UpdateCompanyProfileDto } from './dto/update-company-profile.dto';
 import { UpdateSalesContextDto } from './dto/update-sales-context.dto';
 import { SubscribePlanDto } from './dto/subscribe-plan.dto';
 import { AdjustCreditsDto } from './dto/adjust-credits.dto';
+import { DEFAULT_SALES_STRATEGY } from './sales-context.defaults';
 
 @Injectable()
 export class OrgService {
   constructor(@Inject(DRIZZLE) private readonly db: DrizzleDb) {}
 
-  private normalizeTextArray(value: unknown, limit = 24) {
+  private normalizeTextArray(value: unknown) {
     if (!Array.isArray(value)) return [];
     return value
       .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
-      .filter((entry) => entry.length > 0)
-      .slice(0, limit);
+      .filter((entry) => entry.length > 0);
   }
 
   async listPlans() {
@@ -263,6 +263,17 @@ export class OrgService {
   }
 
   async getSalesContext(orgId: string) {
+    const withDefaultStrategy = <
+      T extends {
+        strategy: string | null;
+      },
+    >(
+      row: T,
+    ) => ({
+      ...row,
+      strategy: row.strategy?.trim() || DEFAULT_SALES_STRATEGY,
+    });
+
     const [existing] = await this.db
       .select()
       .from(schema.salesContext)
@@ -270,7 +281,7 @@ export class OrgService {
       .limit(1);
 
     if (existing) {
-      return existing;
+      return withDefaultStrategy(existing);
     }
 
     const [inserted] = await this.db
@@ -282,7 +293,7 @@ export class OrgService {
       .returning();
 
     if (inserted) {
-      return inserted;
+      return withDefaultStrategy(inserted);
     }
 
     const [created] = await this.db
@@ -291,12 +302,13 @@ export class OrgService {
       .where(eq(schema.salesContext.orgId, orgId))
       .limit(1);
 
-    return (
+    return withDefaultStrategy(
       created ?? {
         orgId,
         companyName: null,
         whatWeSell: null,
         howItWorks: null,
+        strategy: DEFAULT_SALES_STRATEGY,
         offerCategory: null,
         targetCustomer: null,
         targetRoles: [],
@@ -317,7 +329,7 @@ export class OrgService {
         qualificationRubric: [],
         knowledgeAppendix: null,
         updatedAt: new Date(),
-      }
+      },
     );
   }
 
@@ -327,6 +339,7 @@ export class OrgService {
     if (dto.companyName !== undefined) patch.companyName = dto.companyName.trim();
     if (dto.whatWeSell !== undefined) patch.whatWeSell = dto.whatWeSell.trim();
     if (dto.howItWorks !== undefined) patch.howItWorks = dto.howItWorks.trim();
+    if (dto.strategy !== undefined) patch.strategy = dto.strategy.trim();
     if (dto.offerCategory !== undefined) patch.offerCategory = dto.offerCategory.trim();
     if (dto.targetCustomer !== undefined) patch.targetCustomer = dto.targetCustomer.trim();
     if (dto.targetRoles !== undefined) patch.targetRoles = this.normalizeTextArray(dto.targetRoles);

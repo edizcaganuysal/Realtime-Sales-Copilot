@@ -8,6 +8,7 @@ type SalesContext = {
   companyName: string;
   whatWeSell: string;
   howItWorks: string;
+  strategy: string;
   offerCategory: string;
   targetCustomer: string;
   targetRoles: string[];
@@ -84,6 +85,7 @@ const DEFAULT_CONTEXT: SalesContext = {
   companyName: '',
   whatWeSell: '',
   howItWorks: '',
+  strategy: '',
   offerCategory: 'service',
   targetCustomer: '',
   targetRoles: [],
@@ -140,6 +142,15 @@ const CONTEXT_SECTIONS: Section[] = [
         helper: 'Describe your normal delivery flow in one compact block.',
         placeholder:
           'Example: Discovery call -> proposal -> kickoff -> weekly updates -> delivery -> support.',
+        type: 'long',
+      },
+      {
+        key: 'strategy',
+        label: 'Copilot behavior defaults',
+        helper:
+          'Define how the copilot should respond: tone, response length, objection flow, and next-step style. This applies to all calls unless overridden by a specific Copilot Strategy (see Strategy page).',
+        placeholder:
+          'Example: Answer direct questions first, then ask one clarifier. Handle objections with Clarify -> Value map -> Confirm next step. Keep suggestions under 20 words. Always push for a next step when momentum is positive.',
         type: 'long',
       },
       {
@@ -316,9 +327,9 @@ const CONTEXT_SECTIONS: Section[] = [
       {
         key: 'knowledgeAppendix',
         label: 'Knowledge appendix',
-        helper: 'Long-form details for deeper AI context when needed.',
+        helper: 'Long-form details the copilot can draw from during calls. Use for anything that does not fit in the structured fields above.',
         placeholder:
-          'Paste extra details: process docs, SOPs, brand voice, terms, product notes...',
+          'Add anything the copilot should know: FAQs with specific answers, customer success stories (names optional), common misconceptions, internal terminology, pricing tier details, implementation timelines, partner integrations, team structure, or onboarding steps.\n\nExample: "Our typical implementation takes 2–4 weeks: week 1 is configuration, weeks 2–3 are training, week 4 is go-live support."',
         type: 'long',
       },
     ],
@@ -390,6 +401,33 @@ export default function ContextPage() {
     [baseline, context],
   );
 
+  // Completeness: track the 5 fields most critical for copilot quality
+  const CRITICAL_FIELDS: Array<{ key: keyof SalesContext; label: string }> = [
+    { key: 'companyName', label: 'Company name' },
+    { key: 'whatWeSell', label: 'What we sell' },
+    { key: 'targetCustomer', label: 'Target customer' },
+    { key: 'globalValueProps', label: 'Value props' },
+    { key: 'proofPoints', label: 'Proof points' },
+  ];
+
+  const completenessScore = useMemo(() => {
+    return CRITICAL_FIELDS.filter(({ key }) => {
+      const val = context[key];
+      if (Array.isArray(val)) return val.length > 0;
+      return typeof val === 'string' && val.trim().length > 0;
+    }).length;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [context]);
+
+  const isContextEmpty = useMemo(() => {
+    return (
+      !context.companyName.trim() &&
+      !context.whatWeSell.trim() &&
+      context.globalValueProps.length === 0 &&
+      context.proofPoints.length === 0
+    );
+  }, [context]);
+
   useEffect(() => {
     async function bootstrap() {
       const [contextRes, productsRes, aiStatusRes] = await Promise.all([
@@ -408,6 +446,7 @@ export default function ContextPage() {
         companyName: contextData?.companyName ?? '',
         whatWeSell: contextData?.whatWeSell ?? '',
         howItWorks: contextData?.howItWorks ?? '',
+        strategy: contextData?.strategy ?? '',
         offerCategory: contextData?.offerCategory ?? 'service',
         targetCustomer: contextData?.targetCustomer ?? '',
         knowledgeAppendix: contextData?.knowledgeAppendix ?? '',
@@ -486,6 +525,7 @@ export default function ContextPage() {
       companyName: saved?.companyName ?? '',
       whatWeSell: saved?.whatWeSell ?? '',
       howItWorks: saved?.howItWorks ?? '',
+      strategy: saved?.strategy ?? '',
       offerCategory: saved?.offerCategory ?? 'service',
       targetCustomer: saved?.targetCustomer ?? '',
       knowledgeAppendix: saved?.knowledgeAppendix ?? '',
@@ -795,11 +835,19 @@ export default function ContextPage() {
     const busyDraft = aiBusyKey === `context:${String(field.key)}:draft`;
     const busyImprove = aiBusyKey === `context:${String(field.key)}:improve`;
 
+    const isRequired = CRITICAL_FIELDS.some((f) => f.key === field.key);
     return (
       <section key={field.key} className="rounded-xl border border-slate-800 bg-slate-900 p-4">
         <div className="mb-2 flex items-start justify-between gap-3">
           <div>
-            <h3 className="text-sm font-medium text-white">{field.label}</h3>
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-medium text-white">{field.label}</h3>
+              {isRequired && (
+                <span className="rounded bg-sky-500/20 px-1.5 py-0.5 text-[10px] font-medium text-sky-300">
+                  Key field
+                </span>
+              )}
+            </div>
             <p className="mt-0.5 text-xs text-slate-500">{field.helper}</p>
           </div>
           {field.type !== 'select' ? (
@@ -953,6 +1001,46 @@ export default function ContextPage() {
           </Link>
         </div>
       </div>
+
+      {/* Completeness banner */}
+      {isContextEmpty ? (
+        <div className="mb-6 flex items-center justify-between gap-4 rounded-xl border border-sky-500/30 bg-sky-500/10 px-5 py-4">
+          <div>
+            <p className="text-sm font-medium text-sky-200">Get started in 2 minutes</p>
+            <p className="mt-0.5 text-xs text-sky-300/80">
+              Use the Auto-fill button to crawl your website and pre-fill most fields automatically — no manual input needed.
+            </p>
+          </div>
+          <Link
+            href="/app/context/import"
+            className="shrink-0 rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-500"
+          >
+            Auto-fill from website
+          </Link>
+        </div>
+      ) : completenessScore < 5 ? (
+        <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 px-5 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm text-amber-200">
+              <span className="font-medium">{completenessScore}/5 key fields complete</span>
+              {' — '}the copilot may give generic answers until the remaining fields are filled.
+            </p>
+            <span className="shrink-0 text-xs text-amber-300/70">
+              Missing: {CRITICAL_FIELDS.filter(({ key }) => {
+                const val = context[key];
+                if (Array.isArray(val)) return val.length === 0;
+                return typeof val === 'string' && val.trim().length === 0;
+              }).map(f => f.label).join(', ')}
+            </span>
+          </div>
+        </div>
+      ) : (
+        <div className="mb-6 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-5 py-3">
+          <p className="text-sm text-emerald-200">
+            <span className="font-medium">5/5 key fields complete</span> — your copilot has everything it needs for quality suggestions.
+          </p>
+        </div>
+      )}
 
       <section className="mb-5 rounded-xl border border-slate-800 bg-slate-900 p-4">
         <div className="mb-3 flex items-center justify-between gap-3">

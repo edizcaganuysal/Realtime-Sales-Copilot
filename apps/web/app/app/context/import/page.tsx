@@ -23,11 +23,14 @@ type CompanyFieldKey =
   | 'target_customers'
   | 'value_props'
   | 'tone_style'
+  | 'sales_strategy'
   | 'compliance_and_policies'
   | 'forbidden_claims'
   | 'competitor_positioning'
   | 'escalation_rules'
   | 'knowledge_base_appendix';
+
+type IngestFocus = 'QUICK' | 'STANDARD' | 'DEEP';
 
 type ExtractedField = {
   value: string;
@@ -69,6 +72,7 @@ const FIELD_SPECS: Array<{ key: CompanyFieldKey; label: string; helper: string; 
   { key: 'target_customers', label: 'Target customers', helper: 'Describe ideal buyer types and common purchase triggers.', rows: 4 },
   { key: 'value_props', label: 'Value propositions', helper: 'Use one factual bullet per line.', rows: 5 },
   { key: 'tone_style', label: 'Rep tone style', helper: 'Guide call tone and communication style.', rows: 3 },
+  { key: 'sales_strategy', label: 'Sales strategy', helper: 'How reps should structure answers, objections, and next steps.', rows: 5 },
   { key: 'compliance_and_policies', label: 'Sales & service policies', helper: 'Booking, turnaround, cancellation, payment, licensing, and service-area guardrails.', rows: 5 },
   { key: 'forbidden_claims', label: 'Forbidden claims', helper: 'Claims reps should never make.', rows: 4 },
   { key: 'competitor_positioning', label: 'Competitor positioning', helper: 'How to compare safely and credibly.', rows: 4 },
@@ -81,6 +85,7 @@ const EMPTY_REVIEW: Record<CompanyFieldKey, ExtractedField> = {
   target_customers: { value: '', confidence: 0, citations: [], accepted: false, suggested: false },
   value_props: { value: '', confidence: 0, citations: [], accepted: false, suggested: false },
   tone_style: { value: '', confidence: 0, citations: [], accepted: false, suggested: false },
+  sales_strategy: { value: '', confidence: 0, citations: [], accepted: false, suggested: false },
   compliance_and_policies: { value: '', confidence: 0, citations: [], accepted: false, suggested: false },
   forbidden_claims: { value: '', confidence: 0, citations: [], accepted: false, suggested: false },
   competitor_positioning: { value: '', confidence: 0, citations: [], accepted: false, suggested: false },
@@ -158,6 +163,10 @@ export default function CombinedImportPage() {
   const [sourceType, setSourceType] = useState<SourceType>('WEBSITE');
   const [url, setUrl] = useState('');
   const [files, setFiles] = useState<File[]>([]);
+  const [focus, setFocus] = useState<IngestFocus>('STANDARD');
+  const [pagesToScan, setPagesToScan] = useState('30');
+  const [includePathsText, setIncludePathsText] = useState('');
+  const [excludePathsText, setExcludePathsText] = useState('');
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
   const [showOutOfCreditsModal, setShowOutOfCreditsModal] = useState(false);
@@ -229,6 +238,7 @@ export default function CombinedImportPage() {
             target_customers: parseExtractedField(fields.target_customers),
             value_props: parseExtractedField(fields.value_props),
             tone_style: parseExtractedField(fields.tone_style),
+            sales_strategy: parseExtractedField(fields.sales_strategy),
             compliance_and_policies: parseExtractedField(fields.compliance_and_policies),
             forbidden_claims: parseExtractedField(fields.forbidden_claims),
             competitor_positioning: parseExtractedField(fields.competitor_positioning),
@@ -323,7 +333,19 @@ export default function CombinedImportPage() {
     if (sourceType === 'WEBSITE') {
       if (!url.trim()) { setError('Website URL is required.'); setRunning(false); return; }
 
-      const payload = { url: url.trim() };
+      const payload = {
+        url: url.trim(),
+        focus,
+        pagesToScan: Math.max(1, Number.parseInt(pagesToScan, 10) || 30),
+        includePaths: includePathsText
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0),
+        excludePaths: excludePathsText
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0),
+      };
       const [cRes, pRes] = await Promise.all([
         fetch('/api/ingest/company/website', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }),
         fetch('/api/ingest/product/website', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }),
@@ -600,9 +622,62 @@ export default function CombinedImportPage() {
         <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5 space-y-4">
           <h2 className="text-base font-semibold text-white">Step 2: Configure</h2>
           {sourceType === 'WEBSITE' ? (
-            <div>
-              <label className="block text-xs text-slate-400 mb-1.5">Website URL</label>
-              <input value={url} onChange={(e) => setUrl(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white" placeholder="https://example.com" />
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs text-slate-400 mb-1.5">Website URL</label>
+                <input value={url} onChange={(e) => setUrl(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white" placeholder="https://example.com" />
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1.5">Scan depth</label>
+                  <select
+                    value={focus}
+                    onChange={(e) => setFocus(e.target.value as IngestFocus)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"
+                  >
+                    <option value="QUICK">Quick (fastest, lower detail)</option>
+                    <option value="STANDARD">Standard (balanced)</option>
+                    <option value="DEEP">Deep (most detail)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1.5">Pages to scan</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={80}
+                    value={pagesToScan}
+                    onChange={(e) => setPagesToScan(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"
+                  />
+                </div>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1.5">
+                    Include paths (optional, one per line)
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={includePathsText}
+                    onChange={(e) => setIncludePathsText(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"
+                    placeholder="/services&#10;/pricing&#10;/faq"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1.5">
+                    Exclude paths (optional, one per line)
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={excludePathsText}
+                    onChange={(e) => setExcludePathsText(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"
+                    placeholder="/blog&#10;/privacy&#10;/terms"
+                  />
+                </div>
+              </div>
             </div>
           ) : (
             <div className="space-y-3">

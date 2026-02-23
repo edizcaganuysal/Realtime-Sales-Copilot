@@ -85,6 +85,7 @@ export const salesContext = pgTable('sales_context', {
   companyName: text('company_name'),
   whatWeSell: text('what_we_sell'),
   howItWorks: text('how_it_works'),
+  strategy: text('strategy'),
   offerCategory: text('offer_category'),
   targetCustomer: text('target_customer'),
   targetRoles: jsonb('target_roles').default([]).notNull(),

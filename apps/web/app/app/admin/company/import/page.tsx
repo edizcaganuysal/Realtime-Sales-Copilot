@@ -29,11 +29,14 @@ type CompanyFieldKey =
   | 'target_customers'
   | 'value_props'
   | 'tone_style'
+  | 'sales_strategy'
   | 'compliance_and_policies'
   | 'forbidden_claims'
   | 'competitor_positioning'
   | 'escalation_rules'
   | 'knowledge_base_appendix';
+
+type IngestFocus = 'QUICK' | 'STANDARD' | 'DEEP';
 
 type AiSuggestion = {
   text: string;
@@ -71,6 +74,12 @@ const FIELD_SPECS: Array<{
     label: 'Rep tone style',
     helper: 'Guide call tone and communication style.',
     rows: 3,
+  },
+  {
+    key: 'sales_strategy',
+    label: 'Sales strategy',
+    helper: 'How reps should structure answers, objections, and next-step closes.',
+    rows: 5,
   },
   {
     key: 'compliance_and_policies',
@@ -156,6 +165,10 @@ export default function CompanyImportPage() {
   const [sourceType, setSourceType] = useState<SourceType>('WEBSITE');
   const [url, setUrl] = useState('');
   const [files, setFiles] = useState<File[]>([]);
+  const [focus, setFocus] = useState<IngestFocus>('STANDARD');
+  const [pagesToScan, setPagesToScan] = useState('30');
+  const [includePathsText, setIncludePathsText] = useState('');
+  const [excludePathsText, setExcludePathsText] = useState('');
   const [jobId, setJobId] = useState('');
   const [job, setJob] = useState<JobPayload | null>(null);
   const [running, setRunning] = useState(false);
@@ -174,6 +187,7 @@ export default function CompanyImportPage() {
     target_customers: { value: '', confidence: 0, citations: [], accepted: false, suggested: false },
     value_props: { value: '', confidence: 0, citations: [], accepted: false, suggested: false },
     tone_style: { value: '', confidence: 0, citations: [], accepted: false, suggested: false },
+    sales_strategy: { value: '', confidence: 0, citations: [], accepted: false, suggested: false },
     compliance_and_policies: { value: '', confidence: 0, citations: [], accepted: false, suggested: false },
     forbidden_claims: { value: '', confidence: 0, citations: [], accepted: false, suggested: false },
     competitor_positioning: { value: '', confidence: 0, citations: [], accepted: false, suggested: false },
@@ -223,6 +237,7 @@ export default function CompanyImportPage() {
           target_customers: parseExtractedField(fields.target_customers),
           value_props: parseExtractedField(fields.value_props),
           tone_style: parseExtractedField(fields.tone_style),
+          sales_strategy: parseExtractedField(fields.sales_strategy),
           compliance_and_policies: parseExtractedField(fields.compliance_and_policies),
           forbidden_claims: parseExtractedField(fields.forbidden_claims),
           competitor_positioning: parseExtractedField(fields.competitor_positioning),
@@ -264,6 +279,16 @@ export default function CompanyImportPage() {
 
       const payload = {
         url: url.trim(),
+        focus,
+        pagesToScan: Math.max(1, Number.parseInt(pagesToScan, 10) || 30),
+        includePaths: includePathsText
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0),
+        excludePaths: excludePathsText
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0),
       };
 
       const res = await fetch('/api/ingest/company/website', {
@@ -549,6 +574,57 @@ export default function CompanyImportPage() {
                   className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"
                   placeholder="https://www.gtaphotopro.com"
                 />
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1.5">Scan depth</label>
+                  <select
+                    value={focus}
+                    onChange={(event) => setFocus(event.target.value as IngestFocus)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"
+                  >
+                    <option value="QUICK">Quick (fastest, lower detail)</option>
+                    <option value="STANDARD">Standard (balanced)</option>
+                    <option value="DEEP">Deep (most detail)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1.5">Pages to scan</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={80}
+                    value={pagesToScan}
+                    onChange={(event) => setPagesToScan(event.target.value)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"
+                  />
+                </div>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1.5">
+                    Include paths (optional, one per line)
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={includePathsText}
+                    onChange={(event) => setIncludePathsText(event.target.value)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"
+                    placeholder="/services&#10;/pricing&#10;/faq"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1.5">
+                    Exclude paths (optional, one per line)
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={excludePathsText}
+                    onChange={(event) => setExcludePathsText(event.target.value)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"
+                    placeholder="/blog&#10;/privacy&#10;/terms"
+                  />
+                </div>
               </div>
             </div>
           ) : (

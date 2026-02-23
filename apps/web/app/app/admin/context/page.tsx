@@ -8,6 +8,7 @@ type SalesContext = {
   companyName: string;
   whatWeSell: string;
   howItWorks: string;
+  strategy: string;
   offerCategory: string;
   targetCustomer: string;
   targetRoles: string[];
@@ -84,6 +85,7 @@ const DEFAULT_CONTEXT: SalesContext = {
   companyName: '',
   whatWeSell: '',
   howItWorks: '',
+  strategy: '',
   offerCategory: 'service',
   targetCustomer: '',
   targetRoles: [],
@@ -140,6 +142,15 @@ const CONTEXT_SECTIONS: Section[] = [
         helper: 'Describe your normal delivery flow in one compact block.',
         placeholder:
           'Example: Discovery call -> proposal -> kickoff -> weekly updates -> delivery -> support.',
+        type: 'long',
+      },
+      {
+        key: 'strategy',
+        label: 'Sales strategy (style + flow)',
+        helper:
+          'Define how reps should respond: direct vs consultative, objection flow, and next-step style.',
+        placeholder:
+          'Example: Answer direct questions first, then ask one clarifier. Handle objections with Clarify -> Value map -> Confirm next step.',
         type: 'long',
       },
       {
@@ -405,6 +416,7 @@ export default function AdminContextPage() {
       const nextContext: SalesContext = {
         ...DEFAULT_CONTEXT,
         ...contextData,
+        strategy: contextData?.strategy ?? '',
         targetRoles: Array.isArray(contextData?.targetRoles) ? contextData.targetRoles : [],
         industries: Array.isArray(contextData?.industries) ? contextData.industries : [],
         buyingTriggers: Array.isArray(contextData?.buyingTriggers) ? contextData.buyingTriggers : [],
@@ -477,6 +489,7 @@ export default function AdminContextPage() {
     const nextContext: SalesContext = {
       ...DEFAULT_CONTEXT,
       ...saved,
+      strategy: saved?.strategy ?? '',
       targetRoles: Array.isArray(saved?.targetRoles) ? saved.targetRoles : [],
       industries: Array.isArray(saved?.industries) ? saved.industries : [],
       buyingTriggers: Array.isArray(saved?.buyingTriggers) ? saved.buyingTriggers : [],

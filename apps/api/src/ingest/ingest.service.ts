@@ -70,6 +70,7 @@ type CompanyExtractionResult = {
     target_customers: ExtractedField<string>;
     value_props: ExtractedField<string[]>;
     tone_style: ExtractedField<string>;
+    sales_strategy: ExtractedField<string>;
     compliance_and_policies: ExtractedField<string[]>;
     forbidden_claims: ExtractedField<string[]>;
     competitor_positioning: ExtractedField<string[]>;
@@ -1383,6 +1384,16 @@ export class IngestService {
   }
 
   private scoreSignalLine(line: string) {
+    const trimmed = line.trim();
+    // Hard-reject noise before any positive scoring
+    if (/^https?:\/\/\S+$/.test(trimmed)) return -10; // pure URL
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)) return -10; // UUID
+    if (/^[0-9a-f]{8,}(\.[a-zA-Z]{2,4})?$/.test(trimmed)) return -10; // CDN hex hash
+    if (/^\/?[\w-]+\.(js|css|png|jpg|jpeg|gif|svg|woff2?|ttf|ico|map|json)(\?[^\s]*)?$/i.test(trimmed)) return -10; // asset filename
+    // Short lines dominated by non-alphabetic chars (e.g. "::before", "var(--x)", "{ }")
+    const letterCount = (trimmed.match(/[a-zA-Z]/g) ?? []).length;
+    if (trimmed.length < 25 && trimmed.length > 0 && letterCount / trimmed.length < 0.45) return -10;
+
     const lower = line.toLowerCase();
     let score = 0;
     const strong = [
@@ -1454,6 +1465,107 @@ export class IngestService {
     } catch {
       return url;
     }
+  }
+
+  private selectAssetsForStructuring(
+    assets: CrawledAsset[],
+    target: IngestionTarget,
+  ): CrawledAsset[] {
+    if (assets.length <= 1) return assets;
+    const maxSources = target === 'COMPANY' ? 26 : 28;
+    const maxChars = target === 'COMPANY' ? 170_000 : 190_000;
+    const scored = assets
+      .map((asset, index) => ({
+        asset,
+        index,
+        score: this.scoreAssetForPrompt(asset, index),
+      }))
+      .sort((a, b) => {
+        if (b.score === a.score) return a.index - b.index;
+        return b.score - a.score;
+      });
+
+    const selected: CrawledAsset[] = [];
+    let totalChars = 0;
+
+    for (const entry of scored) {
+      if (selected.length >= maxSources) break;
+      const compact = this.compactSourceForPrompt(entry.asset.contentText);
+      if (!compact) continue;
+      if (
+        totalChars + compact.length > maxChars &&
+        selected.length >= Math.min(8, maxSources)
+      ) {
+        continue;
+      }
+      selected.push({
+        uri: entry.asset.uri,
+        title: entry.asset.title,
+        contentText: compact,
+      });
+      totalChars += compact.length;
+    }
+
+    return selected.length > 0 ? selected : assets.slice(0, Math.min(maxSources, assets.length));
+  }
+
+  private scoreAssetForPrompt(asset: CrawledAsset, index: number) {
+    const pathScore = (() => {
+      try {
+        const pathname = new URL(asset.uri).pathname || '/';
+        return this.rankPath(pathname, 'STANDARD');
+      } catch {
+        return 0;
+      }
+    })();
+    const lines = asset.contentText
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length >= 20)
+      .slice(0, 260);
+    const signal = lines.reduce((sum, line) => sum + Math.max(0, this.scoreSignalLine(line)), 0);
+    const density = lines.length > 0 ? signal / lines.length : 0;
+    const homepageBoost = index === 0 ? 8 : 0;
+    return pathScore + density * 5 + homepageBoost;
+  }
+
+  private compactSourceForPrompt(text: string, maxChars = 7600) {
+    const lines = this.uniqueLines(
+      text
+        .split('\n')
+        .map((line) => this.compactWhitespace(line))
+        .filter((line) => line.length >= 20),
+      2600,
+    );
+    if (lines.length === 0) return '';
+
+    const scored = lines.map((line, index) => ({
+      line,
+      index,
+      score: this.scoreSignalLine(line) + (index < 20 ? 1.2 : 0),
+    }));
+
+    const seeded = scored
+      .filter((row) => row.index < 20)
+      .map((row) => row.line);
+    const ranked = scored
+      .sort((a, b) => {
+        if (b.score === a.score) return a.index - b.index;
+        return b.score - a.score;
+      })
+      .slice(0, 260)
+      .sort((a, b) => a.index - b.index)
+      .map((row) => row.line);
+
+    const merged = this.uniqueLines([...seeded, ...ranked], 320);
+    const out: string[] = [];
+    let chars = 0;
+    for (const line of merged) {
+      if (chars + line.length + 1 > maxChars) break;
+      out.push(line);
+      chars += line.length + 1;
+    }
+    return out.join('\n');
   }
 
   private async storeAssets(jobId: string, kind: 'PDF' | 'PAGE', assets: CrawledAsset[]) {
@@ -1528,11 +1640,12 @@ export class IngestService {
     sourceType: 'WEBSITE' | 'PDF',
     assets: CrawledAsset[],
   ): Promise<IngestionResult> {
-    const sourceRefs = assets.map((asset, index) => ({
+    const selectedAssets = this.selectAssetsForStructuring(assets, target);
+    const sourceRefs = selectedAssets.map((asset, index) => ({
       id: `S${index + 1}`,
       title: asset.title,
       uri: asset.uri,
-      text: asset.contentText.slice(0, 14_000),
+      text: this.compactSourceForPrompt(asset.contentText),
     }));
 
     if (target === 'COMPANY') {
@@ -1552,12 +1665,17 @@ export class IngestService {
         'You are a sales enablement analyst. Extract concise company messaging with confidence and citations from sources. Do not fabricate claims.',
       user:
         'Given these sources, produce JSON with key fields. Schema:\n' +
-        '{ \"fields\": { \"company_name\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"what_we_sell\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"how_it_works\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"offer_category\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"target_customer\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"target_roles\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"industries\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"buying_triggers\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"disqualifiers\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"global_value_props\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"proof_points\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"case_studies\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"allowed_claims\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"sales_policies\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"forbidden_claims\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"competitors\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"positioning_rules\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"escalation_rules\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"discovery_questions\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"qualification_rubric\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"next_steps\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"knowledge_appendix\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"company_overview\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"target_customers\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"value_props\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"tone_style\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"compliance_and_policies\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"competitor_positioning\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"knowledge_base_appendix\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean} } }\n' +
+        '{ \"fields\": { \"company_name\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"what_we_sell\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"how_it_works\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"offer_category\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"target_customer\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"target_roles\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"industries\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"buying_triggers\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"disqualifiers\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"global_value_props\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"proof_points\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"case_studies\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"allowed_claims\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"sales_policies\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"forbidden_claims\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"competitors\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"positioning_rules\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"escalation_rules\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"discovery_questions\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"qualification_rubric\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"next_steps\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"knowledge_appendix\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"company_overview\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"target_customers\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"value_props\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"tone_style\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"sales_strategy\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"compliance_and_policies\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"competitor_positioning\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"knowledge_base_appendix\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean} } }\n' +
         'Rules:\n' +
         '- Extract as much relevant detail as possible from all sources. Avoid under-filling fields.\n' +
         '- Prefer concrete wording copied or closely paraphrased from source language.\n' +
-        '- For array fields, include up to 12 concise items when evidence exists.\n' +
+        '- Use one consistent output language across all fields: infer dominant source language, default to English.\n' +
+        '- For array fields, include up to 18 concise items when evidence exists.\n' +
+        '- company_overview should be 2-5 informative sentences when evidence exists, not a short fragment.\n' +
         '- Pull delivery workflow details, operating model, implementation steps, credibility proof, industry focus, and objection-relevant context whenever present.\n' +
+        '- proof_points MUST be specific and quotable: include numbers, percentages, timeframes, or named outcomes when available. Prefer "Reduced turnaround from 48h to 6h" over "faster delivery". Prefer "4.9/5 average rating across 3,000+ projects" over "high customer satisfaction". If no specific metric exists, use a factual operational claim (e.g., "Serving 500+ clients in 12 countries"). Never use vague generalities.\n' +
+        '- case_studies MUST describe a specific outcome: who (role/company type), what changed, and ideally a result. Example: "E-commerce brand reduced onboarding time by 40% after switching." If only general testimonials exist, extract the most specific quote available.\n' +
+        '- sales_strategy should describe how reps should respond in calls (direct answer style, objection flow, next-step style) when evidence exists.\n' +
         '- compliance_and_policies means SALES & SERVICE POLICIES only: booking process, turnaround time, reschedule/cancellation, deposits/payment expectations, licensing/usage rights, service area/travel fees, on-site privacy expectations.\n' +
         '- Do not use privacy policy, WCAG, cookie, or generic legal site content as compliance_and_policies unless it directly impacts sales/service delivery.\n' +
         '- If no reliable evidence exists for competitor_positioning or escalation_rules, provide practical suggested defaults with low confidence, suggested=true, and citations=[].\n' +
@@ -1593,44 +1711,47 @@ export class IngestService {
       ESCALATION_SUGGESTED_DEFAULTS,
     );
 
+    const normalizedFields: CompanyExtractionResult['fields'] = {
+      company_name: this.normalizeStringField(fields.company_name, valid),
+      what_we_sell: this.normalizeStringField(fields.what_we_sell, valid),
+      how_it_works: this.normalizeStringField(fields.how_it_works, valid),
+      offer_category: this.normalizeStringField(fields.offer_category, valid),
+      target_customer: this.normalizeStringField(fields.target_customer, valid),
+      target_roles: this.normalizeStringArrayField(fields.target_roles, valid),
+      industries: this.normalizeStringArrayField(fields.industries, valid),
+      buying_triggers: this.normalizeStringArrayField(fields.buying_triggers, valid),
+      disqualifiers: this.normalizeStringArrayField(fields.disqualifiers, valid),
+      global_value_props: this.normalizeStringArrayField(fields.global_value_props, valid),
+      proof_points: this.normalizeStringArrayField(fields.proof_points, valid),
+      case_studies: this.normalizeStringArrayField(fields.case_studies, valid),
+      allowed_claims: this.normalizeStringArrayField(fields.allowed_claims, valid),
+      sales_policies: this.normalizeSalesPoliciesField(
+        this.normalizeStringArrayField(fields.sales_policies, valid),
+      ),
+      competitors: this.normalizeStringArrayField(fields.competitors, valid),
+      positioning_rules: this.normalizeStringArrayField(fields.positioning_rules, valid),
+      discovery_questions: this.normalizeStringArrayField(fields.discovery_questions, valid),
+      qualification_rubric: this.normalizeStringArrayField(fields.qualification_rubric, valid),
+      next_steps: this.normalizeStringArrayField(fields.next_steps, valid),
+      knowledge_appendix: this.normalizeStringField(fields.knowledge_appendix, valid),
+      company_overview: this.normalizeStringField(fields.company_overview, valid),
+      target_customers: this.normalizeStringField(fields.target_customers, valid),
+      value_props: this.normalizeStringArrayField(fields.value_props, valid),
+      tone_style: this.normalizeStringField(fields.tone_style, valid),
+      sales_strategy: this.normalizeStringField(fields.sales_strategy, valid),
+      compliance_and_policies: this.normalizeSalesPoliciesField(
+        complianceAndPolicies,
+      ),
+      forbidden_claims: this.normalizeStringArrayField(fields.forbidden_claims, valid),
+      competitor_positioning: competitorPositioning,
+      escalation_rules: escalationRules,
+      knowledge_base_appendix: this.normalizeStringField(fields.knowledge_base_appendix, valid),
+    };
+
     return {
       kind: 'COMPANY',
       sources: sources.map((source) => ({ id: source.id, title: source.title, uri: source.uri })),
-      fields: {
-        company_name: this.normalizeStringField(fields.company_name, valid),
-        what_we_sell: this.normalizeStringField(fields.what_we_sell, valid),
-        how_it_works: this.normalizeStringField(fields.how_it_works, valid),
-        offer_category: this.normalizeStringField(fields.offer_category, valid),
-        target_customer: this.normalizeStringField(fields.target_customer, valid),
-        target_roles: this.normalizeStringArrayField(fields.target_roles, valid),
-        industries: this.normalizeStringArrayField(fields.industries, valid),
-        buying_triggers: this.normalizeStringArrayField(fields.buying_triggers, valid),
-        disqualifiers: this.normalizeStringArrayField(fields.disqualifiers, valid),
-        global_value_props: this.normalizeStringArrayField(fields.global_value_props, valid),
-        proof_points: this.normalizeStringArrayField(fields.proof_points, valid),
-        case_studies: this.normalizeStringArrayField(fields.case_studies, valid),
-        allowed_claims: this.normalizeStringArrayField(fields.allowed_claims, valid),
-        sales_policies: this.normalizeSalesPoliciesField(
-          this.normalizeStringArrayField(fields.sales_policies, valid),
-        ),
-        competitors: this.normalizeStringArrayField(fields.competitors, valid),
-        positioning_rules: this.normalizeStringArrayField(fields.positioning_rules, valid),
-        discovery_questions: this.normalizeStringArrayField(fields.discovery_questions, valid),
-        qualification_rubric: this.normalizeStringArrayField(fields.qualification_rubric, valid),
-        next_steps: this.normalizeStringArrayField(fields.next_steps, valid),
-        knowledge_appendix: this.normalizeStringField(fields.knowledge_appendix, valid),
-        company_overview: this.normalizeStringField(fields.company_overview, valid),
-        target_customers: this.normalizeStringField(fields.target_customers, valid),
-        value_props: this.normalizeStringArrayField(fields.value_props, valid),
-        tone_style: this.normalizeStringField(fields.tone_style, valid),
-        compliance_and_policies: this.normalizeSalesPoliciesField(
-          complianceAndPolicies,
-        ),
-        forbidden_claims: this.normalizeStringArrayField(fields.forbidden_claims, valid),
-        competitor_positioning: competitorPositioning,
-        escalation_rules: escalationRules,
-        knowledge_base_appendix: this.normalizeStringField(fields.knowledge_base_appendix, valid),
-      },
+      fields: this.backfillCompanyReviewFields(normalizedFields, sources),
     };
   }
 
@@ -1648,6 +1769,7 @@ export class IngestService {
         '{ "name": {"value": string, "confidence": number, "citations": string[], "suggested": boolean}, "elevator_pitch": {"value": string, "confidence": number, "citations": string[], "suggested": boolean}, "value_props": {"value": string[], "confidence": number, "citations": string[], "suggested": boolean}, "differentiators": {"value": string[], "confidence": number, "citations": string[], "suggested": boolean}, "pricing_rules": {"value": object, "confidence": number, "citations": string[], "suggested": boolean}, "dont_say": {"value": string[], "confidence": number, "citations": string[], "suggested": boolean}, "faqs": {"value": array, "confidence": number, "citations": string[], "suggested": boolean}, "objections": {"value": array, "confidence": number, "citations": string[], "suggested": boolean} }\n' +
         'Rules:\n' +
         '- Extract as much offering detail as possible from all sources, including package names, service variants, deliverables, and workflow promises.\n' +
+        '- Use one consistent output language across all offerings (infer dominant source language, default to English).\n' +
         '- For service businesses, detect multiple offerings/packages/services, not the company name as a product.\n' +
         '- Product names must be offering names such as package/service names found in sources.\n' +
         '- Include up to 10 offerings when evidence exists.\n' +
@@ -1721,7 +1843,7 @@ export class IngestService {
 
   private normalizeStringField(input: unknown, validCitations: Set<string>): ExtractedField<string> {
     const record = this.asRecord(input);
-    const value = this.readString(record.value, 2400);
+    const value = this.readString(record.value, 7000);
     const citations = this.normalizeCitations(record.citations, validCitations);
     const confidence = this.normalizeConfidence(record.confidence);
     return {
@@ -1737,7 +1859,7 @@ export class IngestService {
     validCitations: Set<string>,
   ): ExtractedField<string[]> {
     const record = this.asRecord(input);
-    const array = this.toStringArray(record.value).slice(0, 12);
+    const array = this.toStringArray(record.value).slice(0, 24);
     const citations = this.normalizeCitations(record.citations, validCitations);
     const confidence = this.normalizeConfidence(record.confidence);
     return {
@@ -1842,6 +1964,225 @@ export class IngestService {
     };
   }
 
+  private mergeCitations(...lists: string[][]) {
+    return Array.from(
+      new Set(
+        lists.flatMap((list) =>
+          list
+            .map((entry) => entry.trim())
+            .filter((entry) => entry.length > 0),
+        ),
+      ),
+    ).slice(0, 6);
+  }
+
+  private buildKnowledgeAppendixFromSources(sources: SourceRef[]) {
+    const candidates: string[] = [];
+    for (const source of sources) {
+      const lines = source.text
+        .split('\n')
+        .map((line) => this.compactWhitespace(line))
+        .filter((line) => line.length >= 24)
+        .slice(0, 240);
+      for (const line of lines) {
+        if (this.scoreSignalLine(line) < 1) continue;
+        candidates.push(line);
+      }
+    }
+
+    const unique = this.uniqueLines(candidates, 260);
+    const out: string[] = [];
+    let chars = 0;
+    for (const line of unique) {
+      const withBullet = `- ${line}`;
+      if (chars + withBullet.length + 1 > 4200) break;
+      out.push(withBullet);
+      chars += withBullet.length + 1;
+      if (out.length >= 28) break;
+    }
+    return out.join('\n');
+  }
+
+  private backfillCompanyReviewFields(
+    fields: CompanyExtractionResult['fields'],
+    sources: SourceRef[],
+  ): CompanyExtractionResult['fields'] {
+    const next = { ...fields };
+
+    if (!next.company_overview.value.trim()) {
+      const overview = [next.what_we_sell.value, next.how_it_works.value]
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .join(' ');
+      if (overview) {
+        next.company_overview = {
+          value: overview.slice(0, 2600),
+          confidence: Math.max(next.what_we_sell.confidence, next.how_it_works.confidence) * 0.86,
+          citations: this.mergeCitations(next.what_we_sell.citations, next.how_it_works.citations),
+          suggested: false,
+        };
+      }
+    }
+
+    if (!next.target_customers.value.trim()) {
+      const parts = [
+        next.target_customer.value,
+        next.target_roles.value.length > 0 ? `Roles: ${next.target_roles.value.join(', ')}` : '',
+        next.industries.value.length > 0 ? `Industries: ${next.industries.value.join(', ')}` : '',
+        next.buying_triggers.value.length > 0
+          ? `Buying triggers: ${next.buying_triggers.value.join(', ')}`
+          : '',
+      ]
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+      if (parts.length > 0) {
+        next.target_customers = {
+          value: parts.join('\n').slice(0, 3200),
+          confidence:
+            Math.max(
+              next.target_customer.confidence,
+              next.target_roles.confidence,
+              next.industries.confidence,
+              next.buying_triggers.confidence,
+            ) * 0.88,
+          citations: this.mergeCitations(
+            next.target_customer.citations,
+            next.target_roles.citations,
+            next.industries.citations,
+            next.buying_triggers.citations,
+          ),
+          suggested: false,
+        };
+      }
+    }
+
+    if (next.value_props.value.length === 0) {
+      const valueProps = this.uniqueLines(
+        [...next.global_value_props.value, ...next.proof_points.value, ...next.case_studies.value],
+        24,
+      );
+      if (valueProps.length > 0) {
+        next.value_props = {
+          value: valueProps,
+          confidence:
+            Math.max(
+              next.global_value_props.confidence,
+              next.proof_points.confidence,
+              next.case_studies.confidence,
+            ) * 0.9,
+          citations: this.mergeCitations(
+            next.global_value_props.citations,
+            next.proof_points.citations,
+            next.case_studies.citations,
+          ),
+          suggested: false,
+        };
+      }
+    }
+
+    if (!next.tone_style.value.trim()) {
+      const fallbackTone = next.how_it_works.value.trim()
+        ? `Tone: consultative and concise. Delivery posture: ${next.how_it_works.value.trim()}`
+        : 'Tone: consultative, direct, and evidence-led. Answer clearly first, then ask one pointed clarifier.';
+      next.tone_style = {
+        value: fallbackTone.slice(0, 2200),
+        confidence: Math.max(next.how_it_works.confidence * 0.72, 0.34),
+        citations: next.how_it_works.citations,
+        suggested: true,
+      };
+    }
+
+    if (!next.sales_strategy.value.trim()) {
+      const strategyLines = this.uniqueLines(
+        [
+          'Answer direct questions first with one concrete mechanism, then ask at most one clarifier.',
+          ...next.discovery_questions.value.slice(0, 6).map(
+            (line) => `Discovery prompt: ${line}`,
+          ),
+          ...next.qualification_rubric.value.slice(0, 5).map(
+            (line) => `Qualification check: ${line}`,
+          ),
+          ...next.next_steps.value.slice(0, 5).map((line) => `Next-step style: ${line}`),
+        ],
+        18,
+      );
+      if (strategyLines.length > 0) {
+        next.sales_strategy = {
+          value: strategyLines.join('\n').slice(0, 3600),
+          confidence:
+            Math.max(
+              next.discovery_questions.confidence,
+              next.qualification_rubric.confidence,
+              next.next_steps.confidence,
+            ) * 0.78,
+          citations: this.mergeCitations(
+            next.discovery_questions.citations,
+            next.qualification_rubric.citations,
+            next.next_steps.citations,
+          ),
+          suggested: true,
+        };
+      }
+    }
+
+    if (next.compliance_and_policies.value.length === 0) {
+      const compliance = this.uniqueLines(
+        [...next.sales_policies.value, ...next.allowed_claims.value.map((line) => `Allowed claim: ${line}`)],
+        16,
+      );
+      if (compliance.length > 0) {
+        next.compliance_and_policies = {
+          value: compliance,
+          confidence: Math.max(next.sales_policies.confidence, next.allowed_claims.confidence) * 0.82,
+          citations: this.mergeCitations(
+            next.sales_policies.citations,
+            next.allowed_claims.citations,
+          ),
+          suggested: false,
+        };
+      }
+    }
+
+    if (next.competitor_positioning.value.length === 0) {
+      const positioning = this.uniqueLines(
+        [
+          ...next.positioning_rules.value,
+          ...next.competitors.value.map((line) => `Reference competitor: ${line}`),
+        ],
+        14,
+      );
+      if (positioning.length > 0) {
+        next.competitor_positioning = {
+          value: positioning,
+          confidence: Math.max(next.positioning_rules.confidence, next.competitors.confidence) * 0.8,
+          citations: this.mergeCitations(
+            next.positioning_rules.citations,
+            next.competitors.citations,
+          ),
+          suggested: false,
+        };
+      }
+    }
+
+    if (!next.knowledge_base_appendix.value.trim()) {
+      const appendix = next.knowledge_appendix.value.trim() || this.buildKnowledgeAppendixFromSources(sources);
+      if (appendix) {
+        next.knowledge_base_appendix = {
+          value: appendix.slice(0, 7000),
+          confidence: next.knowledge_appendix.value.trim()
+            ? Math.max(next.knowledge_appendix.confidence * 0.88, 0.36)
+            : 0.28,
+          citations: next.knowledge_appendix.value.trim()
+            ? next.knowledge_appendix.citations
+            : sources.slice(0, 4).map((source) => source.id),
+          suggested: true,
+        };
+      }
+    }
+
+    return next;
+  }
+
   private normalizeProductCandidate(
     candidate: ProductExtractionResult['products'][number],
     sources: SourceRef[],
@@ -1929,7 +2270,7 @@ export class IngestService {
     const response = await client.chat.completions.create({
       model,
       temperature: 0.15,
-      max_tokens: 3800,
+      max_tokens: 5200,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: input.system },
@@ -1998,8 +2339,46 @@ export class IngestService {
     const values = this.asRecord(bodyCompany.values);
     const appendKnowledgeBase = this.readBoolean(bodyCompany.appendToKnowledgeBase, false);
 
-    const readAccepted = (key: string) =>
-      accepted[key] === undefined ? true : this.readBoolean(accepted[key], true);
+    const acceptedKeys = new Set(Object.keys(accepted));
+    const hasExplicitAcceptedKeys = acceptedKeys.size > 0;
+    const acceptanceAliases: Record<string, string[]> = {
+      company_name: ['company_overview'],
+      what_we_sell: ['company_overview'],
+      how_it_works: ['company_overview', 'tone_style'],
+      offer_category: ['company_overview'],
+      target_customer: ['target_customers'],
+      target_roles: ['target_customers'],
+      industries: ['target_customers'],
+      buying_triggers: ['target_customers'],
+      disqualifiers: ['target_customers'],
+      global_value_props: ['value_props'],
+      proof_points: ['value_props'],
+      case_studies: ['value_props'],
+      allowed_claims: ['value_props', 'compliance_and_policies'],
+      sales_policies: ['compliance_and_policies'],
+      competitors: ['competitor_positioning'],
+      positioning_rules: ['competitor_positioning'],
+      discovery_questions: ['target_customers', 'escalation_rules'],
+      qualification_rubric: ['target_customers', 'escalation_rules'],
+      next_steps: ['tone_style', 'escalation_rules'],
+      knowledge_appendix: ['knowledge_base_appendix'],
+      sales_strategy: ['sales_strategy', 'tone_style'],
+    };
+
+    const readAccepted = (key: string) => {
+      if (accepted[key] !== undefined) return this.readBoolean(accepted[key], true);
+      if (values[key] !== undefined) {
+        return this.readString(values[key], 20).length > 0;
+      }
+      if (!hasExplicitAcceptedKeys) return true;
+      const aliases = acceptanceAliases[key] ?? [];
+      for (const aliasKey of aliases) {
+        if (accepted[aliasKey] !== undefined) {
+          return this.readBoolean(accepted[aliasKey], true);
+        }
+      }
+      return false;
+    };
     const readValue = (key: string) => {
       const raw = values[key];
       if (typeof raw === 'string') return raw.trim();
@@ -2007,7 +2386,7 @@ export class IngestService {
     };
     const readExtractedText = (key: string) => {
       const field = this.asRecord(company[key]);
-      return this.readString(field.value, 6000);
+      return this.readString(field.value, 20000);
     };
     const readExtractedList = (key: string) => {
       const field = this.asRecord(company[key]);
@@ -2077,7 +2456,12 @@ export class IngestService {
       const list = value
         ? this.splitLines(value)
         : readExtractedList('escalation_rules');
-      if (list.length > 0) patch.objectionHandling = list.map((item) => `- ${item}`).join('\n');
+      if (list.length > 0) {
+        const escalationText = list.map((item) => `- Escalate: ${item}`).join('\n');
+        patch.pricingGuidance = patch.pricingGuidance
+          ? `${patch.pricingGuidance}\n${escalationText}`
+          : escalationText;
+      }
     }
 
     const salesPatch: Partial<typeof schema.salesContext.$inferInsert> = {};
@@ -2089,6 +2473,9 @@ export class IngestService {
 
     const howItWorks = readTextCandidate(['how_it_works', 'tone_style']);
     if (howItWorks) salesPatch.howItWorks = howItWorks;
+
+    const strategy = readTextCandidate(['sales_strategy', 'tone_style']);
+    if (strategy) salesPatch.strategy = strategy;
 
     const offerCategory = readTextCandidate(['offer_category']).toLowerCase();
     if (['service', 'software', 'marketplace', 'other'].includes(offerCategory)) {
