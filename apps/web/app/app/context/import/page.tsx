@@ -967,6 +967,11 @@ export default function CombinedImportPage() {
             </div>
           )}
 
+          {/* Proof points reminder */}
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-xs text-amber-300">
+            <span className="font-medium">Reminder:</span> Proof points (specific numbers, outcomes, client results) are rarely published on websites and were not auto-extracted. Add them manually in <strong>Section 4 — Messaging &amp; proof</strong> on the Context page after applying.
+          </div>
+
           {/* Apply bar */}
           <div className="flex items-center gap-3 flex-wrap">
             <button onClick={applyAll} disabled={applying || bothApplied || (!companySucceeded && !productSucceeded)} className="px-4 py-2 text-sm font-medium rounded-lg bg-sky-600 hover:bg-sky-500 text-white disabled:opacity-50">

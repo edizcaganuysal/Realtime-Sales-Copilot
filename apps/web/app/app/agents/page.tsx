@@ -200,13 +200,47 @@ export default function AgentsPage() {
   }
 
   async function handleDraftOpeners() {
-    if (!editAgent) return;
     setDraftingOpeners(true);
-    const res = await fetch(`/api/agents/${editAgent.id}/draft-openers`, { method: 'POST' });
+    setError('');
+
+    let agentId = editAgent?.id;
+
+    // If creating a new agent, auto-save it first to get an ID for the API call
+    if (!agentId) {
+      const payload = toPayload(form);
+      if (!payload.name) {
+        setError('Add a strategy name before drafting openers.');
+        setDraftingOpeners(false);
+        return;
+      }
+      if (!payload.promptDelta.trim()) {
+        setError('Add strategy instructions before drafting openers.');
+        setDraftingOpeners(false);
+        return;
+      }
+      const saveRes = await fetch('/api/agents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const saveData = await saveRes.json().catch(() => ({}));
+      if (!saveRes.ok) {
+        setError(Array.isArray(saveData?.message) ? saveData.message[0] : (saveData?.message ?? 'Failed to save strategy before drafting openers.'));
+        setDraftingOpeners(false);
+        return;
+      }
+      setEditAgent(saveData as Agent);
+      agentId = saveData.id as string;
+      void loadAgents();
+    }
+
+    const res = await fetch(`/api/agents/${agentId}/draft-openers`, { method: 'POST' });
     const data = await res.json().catch(() => ({}));
     setDraftingOpeners(false);
     if (res.ok && Array.isArray(data?.openers)) {
       setForm((prev) => ({ ...prev, openers: data.openers as string[] }));
+    } else {
+      setError(Array.isArray(data?.message) ? data.message[0] : (data?.message ?? 'Failed to draft openers.'));
     }
   }
 
@@ -394,16 +428,14 @@ export default function AgentsPage() {
                     <label className="text-xs text-slate-400">Openers</label>
                     <p className="text-[11px] text-slate-600 mt-0.5">1 sentence openers. Keep under ~18 words.</p>
                   </div>
-                  {editAgent && (
-                    <button
-                      type="button"
-                      disabled={draftingOpeners}
-                      onClick={handleDraftOpeners}
-                      className="text-[11px] rounded-md border border-sky-500/30 bg-sky-500/10 px-2 py-1 text-sky-300 transition-colors hover:border-sky-500/60 disabled:opacity-50"
-                    >
-                      {draftingOpeners ? 'Drafting...' : 'AI Draft Openers'}
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    disabled={draftingOpeners}
+                    onClick={handleDraftOpeners}
+                    className="text-[11px] rounded-md border border-sky-500/30 bg-sky-500/10 px-2 py-1 text-sky-300 transition-colors hover:border-sky-500/60 disabled:opacity-50"
+                  >
+                    {draftingOpeners ? 'Drafting...' : 'AI Draft Openers'}
+                  </button>
                 </div>
                 <div className="space-y-1.5">
                   {form.openers.map((opener, idx) => (
