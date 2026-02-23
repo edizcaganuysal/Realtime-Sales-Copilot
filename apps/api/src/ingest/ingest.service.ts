@@ -2269,7 +2269,6 @@ export class IngestService {
 
     const response = await client.chat.completions.create({
       model,
-      temperature: 0.15,
       max_completion_tokens: 5200,
       response_format: { type: 'json_object' },
       messages: [
