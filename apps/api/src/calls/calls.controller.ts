@@ -278,7 +278,7 @@ export class CallsController {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'tts-1',
+        model: 'gpt-4o-mini-tts',
         voice: validVoice,
         input: "Hey, how's it going? I wanted to reach out because I think we could really help your team.",
         response_format: 'mp3',
@@ -415,6 +415,20 @@ export class TwilioWebhookController {
     @Inject(DRIZZLE) private readonly db: DrizzleDb,
   ) {}
 
+  /** Serve cached TTS audio for Twilio <Play> URLs (public — no auth) */
+  @Get('tts/:audioId')
+  async ttsAudio(@Param('audioId') audioId: string, @Res() res: Response) {
+    const buffer = this.aiCallService.getTtsAudio(audioId);
+    if (!buffer) {
+      res.status(404).json({ message: 'Audio not found' });
+      return;
+    }
+    res
+      .set('Content-Type', 'audio/mpeg')
+      .set('Cache-Control', 'no-store')
+      .send(buffer);
+  }
+
   /**
    * Twilio fetches this TwiML when the outbound call is answered.
    * AI_CALLER → HTTP-based <Gather> loop (no WebSocket needed).
@@ -432,17 +446,22 @@ export class TwilioWebhookController {
     if (callId && isUuid) {
       try {
         const [callRow] = await this.db
-          .select({ mode: schema.calls.mode, preparedOpenerText: schema.calls.preparedOpenerText })
+          .select({
+            mode: schema.calls.mode,
+            preparedOpenerText: schema.calls.preparedOpenerText,
+            contactJson: schema.calls.contactJson,
+          })
           .from(schema.calls)
           .where(eq(schema.calls.id, callId))
           .limit(1);
 
         if (callRow?.mode === 'AI_CALLER') {
-          // AI_CALLER uses HTTP-based <Say>+<Gather> loop (Chat Completions per turn)
-          // Railway doesn't forward Twilio WebSocket upgrades, so <Connect><Stream> fails.
           const opener = callRow.preparedOpenerText?.trim() || 'Hi, this is Alex. Do you have a quick moment?';
           const gatherAction = `${base}/calls/ai-gather?callId=${callId}`;
-          this.logger.log(`TwiML AI_CALLER gather — callId: ${callId}`);
+          const contactCfg = (callRow.contactJson ?? {}) as Record<string, unknown>;
+          const voice = typeof contactCfg.aiVoice === 'string' ? contactCfg.aiVoice : 'marin';
+
+          this.logger.log(`TwiML AI_CALLER — callId: ${callId}, voice: ${voice}`);
 
           // Persist opener as first REP transcript
           void this.db
@@ -453,12 +472,25 @@ export class TwilioWebhookController {
             speaker: 'REP', text: opener, tsMs: Date.now(), isFinal: true,
           });
 
-          return `<?xml version="1.0" encoding="UTF-8"?>
+          // Generate TTS with selected OpenAI voice; fall back to Polly if TTS fails
+          try {
+            const audioId = await this.aiCallService.generateTts(opener, voice);
+            const playUrl = `${base}/calls/tts/${audioId}`;
+            return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Matthew-Neural">${escapeXml(opener)}</Say>
-  <Gather input="speech" action="${gatherAction}" speechTimeout="2" speechModel="phone_call" timeout="8" />
+  <Play>${playUrl}</Play>
+  <Gather input="speech" action="${gatherAction}" speechTimeout="auto" speechModel="phone_call" timeout="8" />
   <Redirect>${gatherAction}</Redirect>
 </Response>`;
+          } catch (err) {
+            this.logger.warn(`TTS failed for opener, falling back to Polly: ${(err as Error).message}`);
+            return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Matthew-Neural">${escapeXml(opener)}</Say>
+  <Gather input="speech" action="${gatherAction}" speechTimeout="auto" speechModel="phone_call" timeout="8" />
+  <Redirect>${gatherAction}</Redirect>
+</Response>`;
+          }
         }
       } catch (err) {
         this.logger.error(`TwiML DB lookup error: ${(err as Error).message}`);
@@ -504,42 +536,46 @@ export class TwilioWebhookController {
       return `<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`;
     }
 
-    const { aiText, shouldHangup } = await this.aiCallService.handleGatherWebhook(
+    const { aiText, shouldHangup, voice } = await this.aiCallService.handleGatherWebhook(
       callId,
       speechResult,
     );
 
     this.logger.log(
-      `AI Gather response — shouldHangup: ${shouldHangup}, text: "${aiText.slice(0, 60)}"`,
+      `AI Gather response — shouldHangup: ${shouldHangup}, voice: ${voice}, text: "${aiText.slice(0, 60)}"`,
     );
 
     const gatherAction = `${base}/calls/ai-gather?callId=${callId}`;
 
+    // Generate TTS with the selected OpenAI voice
+    let audioTag: string;
+    try {
+      const audioId = await this.aiCallService.generateTts(aiText, voice);
+      audioTag = `<Play>${base}/calls/tts/${audioId}</Play>`;
+    } catch (err) {
+      this.logger.warn(`TTS failed, falling back to Polly: ${(err as Error).message}`);
+      audioTag = `<Say voice="Polly.Matthew-Neural">${escapeXml(aiText)}</Say>`;
+    }
+
     if (shouldHangup) {
-      // Mark call as completed in DB
       void this.db
         .update(schema.calls)
         .set({ status: 'COMPLETED', endedAt: new Date() })
         .where(eq(schema.calls.id, callId))
         .catch(() => {});
       this.gateway.emitToCall(callId, 'call.status', { status: 'COMPLETED' });
+      this.aiCallService.clearCallCache(callId);
       return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Matthew-Neural">${escapeXml(aiText)}</Say>
+  ${audioTag}
   <Hangup/>
 </Response>`;
     }
 
-    // Persist AI response transcript immediately (fire-and-forget)
-    void this.db
-      .insert(schema.callTranscript)
-      .values({ callId, tsMs: Date.now(), speaker: 'REP', text: aiText, isFinal: true })
-      .catch(() => {});
-
     return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Matthew-Neural">${escapeXml(aiText)}</Say>
-  <Gather input="speech" action="${gatherAction}" speechTimeout="2" speechModel="phone_call" timeout="8" />
+  ${audioTag}
+  <Gather input="speech" action="${gatherAction}" speechTimeout="auto" speechModel="phone_call" timeout="8" />
   <Redirect>${gatherAction}</Redirect>
 </Response>`;
   }

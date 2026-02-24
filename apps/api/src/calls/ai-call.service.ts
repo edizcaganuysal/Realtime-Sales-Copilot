@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { HttpAdapterHost } from '@nestjs/core';
 import {
   Inject,
@@ -20,6 +21,16 @@ export class AiCallService implements OnApplicationBootstrap {
   private readonly logger = new Logger(AiCallService.name);
   private readonly apiKey = process.env['LLM_API_KEY'] ?? '';
 
+  /** In-memory context cache per callId — eliminates redundant DB loads on turns 2+ */
+  private readonly callContextCache = new Map<string, {
+    orgId: string;
+    voice: string;
+    messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
+  }>();
+
+  /** TTS audio cache for Twilio <Play> URLs — auto-expires after 5 min */
+  private readonly ttsAudioCache = new Map<string, { buffer: Buffer; createdAt: number }>();
+
   constructor(
     private readonly httpAdapterHost: HttpAdapterHost,
     private readonly gateway: CallsGateway,
@@ -29,6 +40,44 @@ export class AiCallService implements OnApplicationBootstrap {
 
   get available(): boolean {
     return !!this.apiKey;
+  }
+
+  /** Generate TTS audio with OpenAI, cache it, return audioId for serving */
+  async generateTts(text: string, voice: string): Promise<string> {
+    const audioId = randomUUID();
+    const ttsRes = await fetch('https://api.openai.com/v1/audio/speech', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini-tts',
+        voice,
+        input: text,
+        response_format: 'mp3',
+        speed: 1.0,
+      }),
+    });
+    if (!ttsRes.ok) throw new Error(`TTS failed: ${ttsRes.status}`);
+    const buffer = Buffer.from(await ttsRes.arrayBuffer());
+    this.ttsAudioCache.set(audioId, { buffer, createdAt: Date.now() });
+    // Clean stale entries (> 5 min)
+    const now = Date.now();
+    for (const [id, entry] of this.ttsAudioCache) {
+      if (now - entry.createdAt > 5 * 60_000) this.ttsAudioCache.delete(id);
+    }
+    return audioId;
+  }
+
+  /** Get cached TTS audio buffer by ID */
+  getTtsAudio(audioId: string): Buffer | null {
+    return this.ttsAudioCache.get(audioId)?.buffer ?? null;
+  }
+
+  /** Clear call context cache (call when call ends) */
+  clearCallCache(callId: string) {
+    this.callContextCache.delete(callId);
   }
 
   onApplicationBootstrap() {
@@ -57,138 +106,133 @@ export class AiCallService implements OnApplicationBootstrap {
 
   /**
    * HTTP-based AI call turn handler — used with Twilio <Gather> TwiML.
-   * Persists prospect speech, calls OpenAI Chat Completions, returns AI response text.
-   * Prefix [HANGUP] in the AI response signals that the call should end.
+   * Uses in-memory context cache to eliminate DB queries on turns 2+.
+   * Returns AI text, hangup flag, and selected voice for TTS.
    */
   async handleGatherWebhook(
     callId: string,
     speechResult: string | null,
-  ): Promise<{ aiText: string; shouldHangup: boolean }> {
-    const fallback = { aiText: 'Thank you for your time. Have a great day!', shouldHangup: true };
+  ): Promise<{ aiText: string; shouldHangup: boolean; voice: string }> {
+    const fallback = { aiText: 'Thank you for your time. Have a great day!', shouldHangup: true, voice: 'marin' };
     if (!this.apiKey) return fallback;
 
     try {
-      // 1. Persist prospect speech and load call row in parallel (saves ~80ms vs sequential)
+      // Persist prospect speech in background (don't block the response)
       const prospectText = speechResult?.trim() ?? null;
-      const prospectTsMs = prospectText ? Date.now() : 0;
+      if (prospectText) {
+        const tsMs = Date.now();
+        void this.db
+          .insert(schema.callTranscript)
+          .values({ callId, tsMs, speaker: 'PROSPECT', text: prospectText, isFinal: true })
+          .catch((err: Error) => this.logger.warn(`Speech persist error: ${err.message}`));
+        this.gateway.emitToCall(callId, 'transcript.final', {
+          speaker: 'PROSPECT', text: prospectText, tsMs, isFinal: true,
+        });
+      }
 
-      const persistSpeech = prospectText
-        ? this.db
-            .insert(schema.callTranscript)
-            .values({ callId, tsMs: prospectTsMs, speaker: 'PROSPECT', text: prospectText, isFinal: true })
-            .then(() => {
-              this.gateway.emitToCall(callId, 'transcript.final', {
-                speaker: 'PROSPECT',
-                text: prospectText,
-                tsMs: prospectTsMs,
-                isFinal: true,
-              });
-            })
-            .catch((err: Error) => this.logger.warn(`Speech persist error: ${err.message}`))
-        : Promise.resolve();
-
-      const [[callRow]] = await Promise.all([
-        this.db
+      // Use cached context if available; otherwise cold-load from DB
+      let ctx = this.callContextCache.get(callId);
+      if (!ctx) {
+        const [callRow] = await this.db
           .select({
             orgId: schema.calls.orgId,
             agentId: schema.calls.agentId,
             preparedOpenerText: schema.calls.preparedOpenerText,
+            contactJson: schema.calls.contactJson,
           })
           .from(schema.calls)
           .where(eq(schema.calls.id, callId))
-          .limit(1),
-        persistSpeech,
-      ]);
+          .limit(1);
 
-      if (!callRow) return fallback;
+        if (!callRow) return fallback;
 
-      // 2. Load context + last 16 transcript rows in parallel
-      const [ctxRow, productRows, agentRow, transcriptRows] = await Promise.all([
-        this.db
-          .select({
-            companyName: schema.salesContext.companyName,
-            whatWeSell: schema.salesContext.whatWeSell,
-            targetCustomer: schema.salesContext.targetCustomer,
-            globalValueProps: schema.salesContext.globalValueProps,
-            proofPoints: schema.salesContext.proofPoints,
-          })
-          .from(schema.salesContext)
-          .where(eq(schema.salesContext.orgId, callRow.orgId))
-          .limit(1)
-          .then((rows) => rows[0] ?? null),
-        this.db
-          .select({ name: schema.products.name, elevatorPitch: schema.products.elevatorPitch })
-          .from(schema.products)
-          .where(eq(schema.products.orgId, callRow.orgId)),
-        callRow.agentId
-          ? this.db
-              .select({
-                prompt: schema.agents.prompt,
-                promptDelta: schema.agents.promptDelta,
-                openers: schema.agents.openers,
-              })
-              .from(schema.agents)
-              .where(eq(schema.agents.id, callRow.agentId))
-              .limit(1)
-              .then((rows) => rows[0] ?? null)
-          : Promise.resolve(null),
-        // Fetch last 16 rows (8 turns) newest-first, then reverse for chronological order
-        this.db
-          .select({ speaker: schema.callTranscript.speaker, text: schema.callTranscript.text })
-          .from(schema.callTranscript)
-          .where(eq(schema.callTranscript.callId, callId))
-          .orderBy(desc(schema.callTranscript.tsMs))
-          .limit(16)
-          .then((rows) => rows.reverse()),
-      ]);
+        const contactCfg = (callRow.contactJson ?? {}) as Record<string, unknown>;
+        const voice = typeof contactCfg.aiVoice === 'string' ? contactCfg.aiVoice : 'marin';
 
-      const toList = (val: unknown): string[] =>
-        Array.isArray(val) ? val.filter((v): v is string => typeof v === 'string') : [];
+        // Load context + transcript in parallel
+        const [ctxRow, productRows, agentRow, transcriptRows] = await Promise.all([
+          this.db
+            .select({
+              companyName: schema.salesContext.companyName,
+              whatWeSell: schema.salesContext.whatWeSell,
+              targetCustomer: schema.salesContext.targetCustomer,
+              globalValueProps: schema.salesContext.globalValueProps,
+              proofPoints: schema.salesContext.proofPoints,
+            })
+            .from(schema.salesContext)
+            .where(eq(schema.salesContext.orgId, callRow.orgId))
+            .limit(1)
+            .then((rows) => rows[0] ?? null),
+          this.db
+            .select({ name: schema.products.name, elevatorPitch: schema.products.elevatorPitch })
+            .from(schema.products)
+            .where(eq(schema.products.orgId, callRow.orgId)),
+          callRow.agentId
+            ? this.db
+                .select({ prompt: schema.agents.prompt, promptDelta: schema.agents.promptDelta, openers: schema.agents.openers })
+                .from(schema.agents)
+                .where(eq(schema.agents.id, callRow.agentId))
+                .limit(1)
+                .then((rows) => rows[0] ?? null)
+            : Promise.resolve(null),
+          this.db
+            .select({ speaker: schema.callTranscript.speaker, text: schema.callTranscript.text })
+            .from(schema.callTranscript)
+            .where(eq(schema.callTranscript.callId, callId))
+            .orderBy(desc(schema.callTranscript.tsMs))
+            .limit(16)
+            .then((rows) => rows.reverse()),
+        ]);
 
-      const openers = toList(agentRow?.openers);
-      const opener =
-        callRow.preparedOpenerText?.trim() ||
-        (openers.length > 0 ? openers[0] : null) ||
-        `Hi, this is Alex from ${ctxRow?.companyName || 'our company'}. Quick question — do you have 30 seconds?`;
+        const toList = (val: unknown): string[] =>
+          Array.isArray(val) ? val.filter((v): v is string => typeof v === 'string') : [];
 
-      const strategy = agentRow?.promptDelta?.trim() || agentRow?.prompt?.trim() || '';
+        const openers = toList(agentRow?.openers);
+        const opener =
+          callRow.preparedOpenerText?.trim() ||
+          (openers.length > 0 ? openers[0] : null) ||
+          `Hi, this is Alex from ${ctxRow?.companyName || 'our company'}. Quick question — do you have 30 seconds?`;
 
-      const systemPrompt = buildAiCallerPrompt({
-        companyName: ctxRow?.companyName ?? '',
-        whatWeSell: ctxRow?.whatWeSell ?? '',
-        targetCustomer: ctxRow?.targetCustomer ?? '',
-        globalValueProps: toList(ctxRow?.globalValueProps),
-        proofPoints: toList(ctxRow?.proofPoints),
-        products: productRows,
-        strategy,
-        opener,
-      });
+        const strategy = agentRow?.promptDelta?.trim() || agentRow?.prompt?.trim() || '';
 
-      // 3. Build Chat Completions message history
-      // REP utterances → assistant turns; PROSPECT utterances → user turns
-      const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
-        {
-          role: 'system',
-          content:
-            systemPrompt +
-            '\n\nIMPORTANT: When you want to end the call, place [HANGUP] anywhere in your response. It will be removed before the prospect hears it.',
-        },
-      ];
+        const systemPrompt = buildAiCallerPrompt({
+          companyName: ctxRow?.companyName ?? '',
+          whatWeSell: ctxRow?.whatWeSell ?? '',
+          targetCustomer: ctxRow?.targetCustomer ?? '',
+          globalValueProps: toList(ctxRow?.globalValueProps),
+          proofPoints: toList(ctxRow?.proofPoints),
+          products: productRows,
+          strategy,
+          opener,
+        });
 
-      for (const row of transcriptRows) {
-        if (row.speaker === 'REP') {
-          messages.push({ role: 'assistant', content: row.text });
-        } else {
-          messages.push({ role: 'user', content: row.text });
+        const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+          {
+            role: 'system',
+            content: systemPrompt + '\n\nIMPORTANT: When you want to end the call, place [HANGUP] anywhere in your response. It will be removed before the prospect hears it.',
+          },
+        ];
+
+        // Rebuild message history from existing transcript
+        for (const row of transcriptRows) {
+          messages.push({ role: row.speaker === 'REP' ? 'assistant' : 'user', content: row.text });
         }
+
+        ctx = { orgId: callRow.orgId, voice, messages };
+        this.callContextCache.set(callId, ctx);
+        this.logger.log(`Context cached for call ${callId} (voice=${voice}, ${transcriptRows.length} transcript rows)`);
       }
 
-      // First turn — no transcript yet
-      if (transcriptRows.length === 0) {
-        messages.push({ role: 'user', content: '[Call connected — begin with your opener now]' });
+      // Append prospect speech (or silence signal) to message history
+      if (prospectText) {
+        ctx.messages.push({ role: 'user', content: prospectText });
+      } else if (ctx.messages.length <= 1) {
+        ctx.messages.push({ role: 'user', content: '[Call connected — begin with your opener now]' });
+      } else {
+        ctx.messages.push({ role: 'user', content: '[No response — brief silence from prospect]' });
       }
 
-      // 4. Call OpenAI Chat Completions
+      // Call OpenAI Chat Completions (the only network call on cached turns)
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -197,7 +241,7 @@ export class AiCallService implements OnApplicationBootstrap {
         },
         body: JSON.stringify({
           model: 'gpt-4o-mini',
-          messages,
+          messages: ctx.messages,
           max_completion_tokens: 80,
           temperature: 0.7,
         }),
@@ -205,7 +249,7 @@ export class AiCallService implements OnApplicationBootstrap {
 
       if (!response.ok) {
         this.logger.error(`OpenAI Chat error ${response.status}: ${await response.text()}`);
-        return fallback;
+        return { ...fallback, voice: ctx.voice };
       }
 
       const json = (await response.json()) as {
@@ -214,38 +258,39 @@ export class AiCallService implements OnApplicationBootstrap {
       };
       let aiText = json.choices[0]?.message?.content?.trim() ?? '';
 
-      // Debit credits based on actual token usage (fire-and-forget)
+      // Debit credits (fire-and-forget)
       const promptTokens = Number(json.usage?.prompt_tokens ?? 0);
       const completionTokens = Number(json.usage?.completion_tokens ?? 0);
       if (promptTokens > 0 || completionTokens > 0) {
         void this.creditsService.debitForAiUsage(
-          callRow.orgId, 'gpt-4o-mini', promptTokens, completionTokens,
+          ctx.orgId, 'gpt-4o-mini', promptTokens, completionTokens,
           'USAGE_LLM_AI_CALLER_HTTP', { call_id: callId },
         );
       }
 
-      // Detect [HANGUP] anywhere in the response, then strip it
       const shouldHangup = /\[HANGUP\]/i.test(aiText);
       if (shouldHangup) aiText = aiText.replace(/\[HANGUP\]\s*/gi, '').trim();
 
       if (!aiText) {
-        return { aiText: 'Thank you, I appreciate your time.', shouldHangup: true };
+        return { aiText: 'Thank you, I appreciate your time.', shouldHangup: true, voice: ctx.voice };
       }
 
-      // 5. Emit transcript immediately; persist in background (saves ~80ms)
+      // Append AI response to cached message history
+      ctx.messages.push({ role: 'assistant', content: aiText });
+
+      // Emit + persist transcript in background
       const aiTsMs = Date.now();
       this.gateway.emitToCall(callId, 'transcript.final', {
-        speaker: 'REP',
-        text: aiText,
-        tsMs: aiTsMs,
-        isFinal: true,
+        speaker: 'REP', text: aiText, tsMs: aiTsMs, isFinal: true,
       });
       void this.db
         .insert(schema.callTranscript)
         .values({ callId, tsMs: aiTsMs, speaker: 'REP', text: aiText, isFinal: true })
         .catch((err: Error) => this.logger.warn(`AI persist error: ${err.message}`));
 
-      return { aiText, shouldHangup };
+      if (shouldHangup) this.callContextCache.delete(callId);
+
+      return { aiText, shouldHangup, voice: ctx.voice };
     } catch (err) {
       this.logger.error(`handleGatherWebhook error: ${(err as Error).message}`);
       return fallback;
