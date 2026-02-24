@@ -185,7 +185,7 @@ export class ActionRunnerService {
         signal: AbortSignal.timeout(15_000),
       });
 
-      const outputJson = await response.json().catch(() => ({ raw: await response.text() }));
+      const outputJson = await response.json().catch(async () => ({ raw: await response.text() }));
 
       const [completed] = await this.db
         .update(schema.actionExecutions)

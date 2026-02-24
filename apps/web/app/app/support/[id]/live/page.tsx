@@ -385,7 +385,7 @@ export default function LiveSupportPage() {
 
                   {action.status === 'COMPLETED' && action.output && (
                     <pre className="mt-2 text-[10px] text-emerald-300 bg-emerald-500/10 rounded p-2 overflow-x-auto max-h-32">
-                      {JSON.stringify(action.output, null, 2).slice(0, 500)}
+                      {JSON.stringify(action.output as Record<string, unknown>, null, 2).slice(0, 500)}
                     </pre>
                   )}
 
