@@ -74,12 +74,7 @@ function makeMocks() {
 
   const db = {} as never;
 
-  const creditsService = {
-    debitForAiUsage: jest.fn().mockResolvedValue({ debited: 0, costUsd: 0 }),
-    debitForRealtimeAudio: jest.fn().mockResolvedValue({ debited: 0, costUsd: 0 }),
-  } as never;
-
-  return { gateway, llm, db, creditsService };
+  return { gateway, llm, db };
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -90,7 +85,7 @@ describe('EngineService — stage hysteresis', () => {
 
   beforeEach(() => {
     mocks = makeMocks();
-    engine = new EngineService(mocks.gateway, mocks.llm, mocks.db, mocks.creditsService);
+    engine = new EngineService(mocks.gateway, mocks.llm, mocks.db);
   });
 
   const stages = [
@@ -177,7 +172,7 @@ describe('EngineService — pushTranscript', () => {
 
   beforeEach(() => {
     mocks = makeMocks();
-    engine = new EngineService(mocks.gateway, mocks.llm, mocks.db, mocks.creditsService);
+    engine = new EngineService(mocks.gateway, mocks.llm, mocks.db);
   });
 
   it('does not crash when pushing transcript for unknown callId', () => {
@@ -196,7 +191,7 @@ describe('EngineService — getAlternatives stub fallback', () => {
   beforeEach(() => {
     mocks = makeMocks();
     jest.spyOn(mocks.llm, 'available', 'get').mockReturnValue(false);
-    engine = new EngineService(mocks.gateway, mocks.llm, mocks.db, mocks.creditsService);
+    engine = new EngineService(mocks.gateway, mocks.llm, mocks.db);
   });
 
   it('returns 1 stub alternative when LLM is not available', async () => {

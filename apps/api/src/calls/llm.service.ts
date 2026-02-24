@@ -1,16 +1,47 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { FAST_CALL_MODELS, type FastCallModel } from '@live-sales-coach/shared';
+import { CreditsService } from '../credits/credits.service';
+
+/**
+ * Billing info for automatic credit deduction.
+ *
+ * ┌──────────────────────────────────────────────────────────────┐
+ * │  IMPORTANT FOR NEW FEATURES:                                  │
+ * │                                                               │
+ * │  When calling chatFast() or chat(), ALWAYS pass `billing`     │
+ * │  to automatically debit credits based on actual token usage.  │
+ * │                                                               │
+ * │  Example:                                                     │
+ * │    const result = await this.llm.chatFast(system, user, {     │
+ * │      billing: {                                               │
+ * │        orgId: user.orgId,                                     │
+ * │        ledgerType: 'USAGE_LLM_MY_FEATURE',                   │
+ * │      },                                                       │
+ * │    });                                                        │
+ * │    // Credits are auto-debited. Use result.text for content.  │
+ * │                                                               │
+ * │  If you use the OpenAI SDK directly (not LlmService), you    │
+ * │  must call CreditsService.debitForAiUsage() manually.         │
+ * └──────────────────────────────────────────────────────────────┘
+ */
+export type BillingInfo = {
+  orgId: string;
+  ledgerType: string;
+  metadata?: Record<string, unknown>;
+};
 
 type ChatOptions = {
   model?: string;
   jsonMode?: boolean;
   temperature?: number;
   maxTokens?: number;
+  /** Pass billing to auto-debit credits after the LLM call (fire-and-forget). */
+  billing?: BillingInfo;
 };
 
 /**
  * Result of an LLM call, including token usage for cost-based credit billing.
- * Every caller receives this so it can pass usage to CreditsService.debitForAiUsage().
+ * When `billing` is passed to chatFast()/chat(), credits are debited automatically.
  */
 export type LlmResult = {
   text: string;
@@ -40,6 +71,21 @@ export class LlmService implements OnModuleInit {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private client: any = null;
+
+  constructor(@Optional() private readonly creditsService?: CreditsService) {}
+
+  /** Fire-and-forget credit debit when billing info is provided. */
+  private autoBill(result: LlmResult, billing?: BillingInfo): void {
+    if (!billing || !this.creditsService) return;
+    void this.creditsService.debitForAiUsage(
+      billing.orgId,
+      result.model,
+      result.promptTokens,
+      result.completionTokens,
+      billing.ledgerType,
+      billing.metadata ?? {},
+    );
+  }
 
   onModuleInit() {
     if (!this.available) {
@@ -144,7 +190,7 @@ export class LlmService implements OnModuleInit {
 
   /**
    * Fast chat completion using mini-class GPT models for real-time coaching.
-   * Returns LlmResult with token usage for cost-based credit billing.
+   * Pass `billing` in options to automatically debit credits (fire-and-forget).
    */
   async chatFast(
     systemPrompt: string,
@@ -152,8 +198,9 @@ export class LlmService implements OnModuleInit {
     options: ChatOptions = {},
   ): Promise<LlmResult> {
     const selected = this.resolveFastModel(options.model);
+    let result: LlmResult;
     try {
-      return await this.runFastCompletion(selected, systemPrompt, userPrompt, options);
+      result = await this.runFastCompletion(selected, systemPrompt, userPrompt, options);
     } catch (err) {
       if (!this.isModelSelectionError(err)) throw err;
       this.unavailableFastModels.add(selected);
@@ -162,10 +209,16 @@ export class LlmService implements OnModuleInit {
       this.logger.warn(
         `Fast model "${selected}" unavailable. Retrying with "${fallback}".`,
       );
-      return this.runFastCompletion(fallback, systemPrompt, userPrompt, options);
+      result = await this.runFastCompletion(fallback, systemPrompt, userPrompt, options);
     }
+    this.autoBill(result, options.billing);
+    return result;
   }
 
+  /**
+   * Chat completion using the default model (gpt-4o or LLM_MODEL env).
+   * Pass `billing` in options to automatically debit credits (fire-and-forget).
+   */
   async chat(
     systemPrompt: string,
     userPrompt: string,
@@ -184,12 +237,14 @@ export class LlmService implements OnModuleInit {
       ...(options.jsonMode ? { response_format: { type: 'json_object' } } : {}),
     });
     const text = ((resp.choices[0]?.message?.content as string | null | undefined) ?? '').trim();
-    return {
+    const result: LlmResult = {
       text,
       model: usedModel,
       promptTokens: Number(resp.usage?.prompt_tokens ?? 0),
       completionTokens: Number(resp.usage?.completion_tokens ?? 0),
     };
+    this.autoBill(result, options.billing);
+    return result;
   }
 
   parseJson<T>(text: string, fallback: T): T {

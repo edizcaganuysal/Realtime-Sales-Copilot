@@ -9,7 +9,6 @@ import type { LlmResult } from './llm.service';
 import { PROFESSIONAL_SALES_CALL_AGENT_PROMPT } from './professional-sales-agent.prompt';
 import { EMPTY_COMPANY_PROFILE_DEFAULTS } from '../org/company-profile.defaults';
 import { DEFAULT_SALES_STRATEGY } from '../org/sales-context.defaults';
-import { CreditsService } from '../credits/credits.service';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -339,7 +338,6 @@ export class EngineService implements OnModuleDestroy {
     private readonly gateway: CallsGateway,
     private readonly llm: LlmService,
     @Inject(DRIZZLE) private readonly db: DrizzleDb,
-    private readonly creditsService: CreditsService,
   ) {}
 
   onModuleDestroy() {
@@ -914,11 +912,8 @@ export class EngineService implements OnModuleDestroy {
         model: context.llmModel,
         jsonMode: true,
         temperature: 0.62,
+        billing: { orgId: context.orgId, ledgerType: 'USAGE_LLM_ENGINE_ALTERNATIVES', metadata: { call_id: context.callId } },
       });
-      void this.creditsService.debitForAiUsage(
-        context.orgId, altResult.model, altResult.promptTokens, altResult.completionTokens,
-        'USAGE_LLM_ENGINE_ALTERNATIVES', { call_id: context.callId },
-      );
       const parsed = this.llm.parseJson<{ suggestions?: string[] }>(altResult.text, {});
       let texts = this.normalizeSuggestions(
         parsed.suggestions ?? [],
@@ -1106,11 +1101,8 @@ export class EngineService implements OnModuleDestroy {
         model: context.llmModel,
         jsonMode: true,
         temperature: 0.48,
+        billing: { orgId, ledgerType: 'USAGE_LLM_ENGINE_TICK', metadata: { debug: true } },
       });
-      void this.creditsService.debitForAiUsage(
-        orgId, debugResult.model, debugResult.promptTokens, debugResult.completionTokens,
-        'USAGE_LLM_ENGINE_TICK', { debug: true },
-      );
       const parsed = this.llm.parseJson<{
         primary?: string;
         moment?: string;
@@ -2011,6 +2003,7 @@ export class EngineService implements OnModuleDestroy {
         model: context.llmModel,
         jsonMode: true,
         temperature: 0.5,
+        billing: { orgId: context.orgId, ledgerType: 'USAGE_LLM_ENGINE_TICK', metadata: { call_id: callId } },
       });
       const timeoutPromise: Promise<null | '__skip__'> = shouldUseFastInterim
         ? new Promise<null>((resolve) => setTimeout(() => resolve(null), FAST_INTERIM_MS))
@@ -2039,11 +2032,6 @@ export class EngineService implements OnModuleDestroy {
 
       const llmResult: LlmResult = raceResult !== null && raceResult !== '__skip__' ? raceResult : await llmPromise;
       const raw = llmResult.text;
-      // Debit credits for the main LLM tick (fire-and-forget — never blocks suggestions)
-      void this.creditsService.debitForAiUsage(
-        context.orgId, llmResult.model, llmResult.promptTokens, llmResult.completionTokens,
-        'USAGE_LLM_ENGINE_TICK', { call_id: callId },
-      );
       const llmLatency = Date.now() - llmStartedAt;
       state.avgLlmLatencyMs =
         state.avgLlmLatencyMs === 0
@@ -2073,11 +2061,7 @@ export class EngineService implements OnModuleDestroy {
         const retryResult = await this.llm.chatFast(
           systemPrompt,
           `${userPrompt}\nReturn strictly valid JSON with keys: moment, primary, move_type, nudges, context_toast, ask, used_updates.`,
-          { model: context.llmModel, jsonMode: true, temperature: 0.45 },
-        );
-        void this.creditsService.debitForAiUsage(
-          context.orgId, retryResult.model, retryResult.promptTokens, retryResult.completionTokens,
-          'USAGE_LLM_ENGINE_TICK', { call_id: callId, retry: true },
+          { model: context.llmModel, jsonMode: true, temperature: 0.45, billing: { orgId: context.orgId, ledgerType: 'USAGE_LLM_ENGINE_TICK', metadata: { call_id: callId, retry: true } } },
         );
         parsed = this.llm.parseJson(retryResult.text, parsed);
       }
@@ -2089,11 +2073,8 @@ export class EngineService implements OnModuleDestroy {
           model: context.llmModel,
           jsonMode: true,
           temperature: 0.4,
+          billing: { orgId: context.orgId, ledgerType: 'USAGE_LLM_ENGINE_TICK', metadata: { call_id: callId, completion_retry: true } },
         });
-        void this.creditsService.debitForAiUsage(
-          context.orgId, completionResult.model, completionResult.promptTokens, completionResult.completionTokens,
-          'USAGE_LLM_ENGINE_TICK', { call_id: callId, completion_retry: true },
-        );
         const completionParsed = this.llm.parseJson<typeof parsed>(completionResult.text, {});
         if (completionParsed.primary && this.isOutputComplete(completionParsed.primary)) {
           parsed = completionParsed;
@@ -2115,11 +2096,8 @@ export class EngineService implements OnModuleDestroy {
           model: context.llmModel,
           jsonMode: true,
           temperature: 0.45,
+          billing: { orgId: context.orgId, ledgerType: 'USAGE_LLM_ENGINE_TICK', metadata: { call_id: callId, specificity_retry: true } },
         });
-        void this.creditsService.debitForAiUsage(
-          context.orgId, specificityResult.model, specificityResult.promptTokens, specificityResult.completionTokens,
-          'USAGE_LLM_ENGINE_TICK', { call_id: callId, specificity_retry: true },
-        );
         const retryParsed = this.llm.parseJson<typeof parsed>(specificityResult.text, {});
         if (retryParsed.primary && !this.isGenericPrimary(retryParsed.primary)) {
           parsed = retryParsed;
@@ -2789,13 +2767,10 @@ export class EngineService implements OnModuleDestroy {
     const userPrompt = `Transcript:\n${transcriptText}`;
 
     try {
-      const postCallResult = await this.llm.chat(systemPrompt, userPrompt, { jsonMode: true });
-      if (orgId) {
-        void this.creditsService.debitForAiUsage(
-          orgId, postCallResult.model, postCallResult.promptTokens, postCallResult.completionTokens,
-          'USAGE_LLM_ENGINE_TICK', { call_id: callId, post_call: true },
-        );
-      }
+      const postCallResult = await this.llm.chat(systemPrompt, userPrompt, {
+        jsonMode: true,
+        ...(orgId && { billing: { orgId, ledgerType: 'USAGE_LLM_ENGINE_TICK', metadata: { call_id: callId, post_call: true } } }),
+      });
       const parsed = this.llm.parseJson<{
         summary?: string;
         keyMoments?: string[];

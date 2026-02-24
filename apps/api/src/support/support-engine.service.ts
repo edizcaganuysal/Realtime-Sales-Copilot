@@ -7,7 +7,6 @@ import { SupportGateway } from './support.gateway';
 import { LlmService } from '../calls/llm.service';
 import type { LlmResult } from '../calls/llm.service';
 import { ActionRunnerService } from './action-runner.service';
-import { CreditsService } from '../credits/credits.service';
 import {
   SUPPORT_COPILOT_SYSTEM_PROMPT,
   buildSupportContextBlock,
@@ -180,7 +179,6 @@ export class SupportEngineService implements OnModuleDestroy {
     private readonly llm: LlmService,
     private readonly actionRunner: ActionRunnerService,
     @Inject(DRIZZLE) private readonly db: DrizzleDb,
-    private readonly creditsService: CreditsService,
   ) {}
 
   onModuleDestroy() {
@@ -789,6 +787,7 @@ export class SupportEngineService implements OnModuleDestroy {
         model: context.llmModel,
         jsonMode: true,
         temperature: 0.5,
+        billing: { orgId: context.orgId, ledgerType: 'USAGE_LLM_SUPPORT_ENGINE_TICK', metadata: { session_id: sessionId } },
       });
 
       const shouldUseFastInterim = opts.reason === 'customer_final' || opts.reason === 'customer_silence';
@@ -812,11 +811,6 @@ export class SupportEngineService implements OnModuleDestroy {
 
       const llmResult: LlmResult = raceResult !== null && raceResult !== '__skip__' ? raceResult : await llmPromise;
       const raw = llmResult.text;
-      // Debit credits for the support engine tick (fire-and-forget)
-      void this.creditsService.debitForAiUsage(
-        context.orgId, llmResult.model, llmResult.promptTokens, llmResult.completionTokens,
-        'USAGE_LLM_SUPPORT_ENGINE_TICK', { session_id: sessionId },
-      );
       const llmLatency = Date.now() - llmStartedAt;
       state.avgLlmLatencyMs =
         state.avgLlmLatencyMs === 0
@@ -845,11 +839,12 @@ export class SupportEngineService implements OnModuleDestroy {
         const retryResult = await this.llm.chatFast(
           systemPrompt,
           `${userPrompt}\nReturn strictly valid JSON with keys: moment, primary, nudges, proposed_actions, issue_type, resolution_status.`,
-          { model: context.llmModel, jsonMode: true, temperature: 0.45 },
-        );
-        void this.creditsService.debitForAiUsage(
-          context.orgId, retryResult.model, retryResult.promptTokens, retryResult.completionTokens,
-          'USAGE_LLM_SUPPORT_ENGINE_TICK', { session_id: sessionId, retry: true },
+          {
+            model: context.llmModel,
+            jsonMode: true,
+            temperature: 0.45,
+            billing: { orgId: context.orgId, ledgerType: 'USAGE_LLM_SUPPORT_ENGINE_TICK', metadata: { session_id: sessionId, retry: true } },
+          },
         );
         parsed = this.llm.parseJson(retryResult.text, parsed);
       }

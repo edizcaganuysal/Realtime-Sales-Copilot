@@ -224,21 +224,19 @@ export class CallsService {
         `Offering summary: ${summary || 'None'}\n` +
         `Notes: ${notes ?? 'None'}\n` +
         'Generate exactly ONE sentence opener for the rep, max 18 words. Prefer: "Hi [Name]—quick question: are you the right person for [topic]?" Do not mention the seller company name. Mention a company name only if prospect company is known and different from seller company. If prospect company is unknown, use "your team" or "your org". Output plain text only, no markdown, no labels.';
-      const openerResult = await this.llm.chatFast(system, user, { model: llmModel });
-      void this.creditsService.debitForAiUsage(
-        orgId, openerResult.model, openerResult.promptTokens, openerResult.completionTokens,
-        'USAGE_LLM_ENGINE_TICK', { call_id: callId, prepared_opener: true },
-      );
+      const openerResult = await this.llm.chatFast(system, user, {
+        model: llmModel,
+        billing: { orgId, ledgerType: 'USAGE_LLM_ENGINE_TICK', metadata: { call_id: callId, prepared_opener: true } },
+      });
       const opener = openerResult.text.replace(/\s+/g, ' ').trim();
       if (this.isOpenerValid(opener, context)) return opener;
       const retryResult = await this.llm.chatFast(
         system,
         `${user}\nHard rule: never include the seller company name. Keep one complete sentence only.`,
-        { model: llmModel },
-      );
-      void this.creditsService.debitForAiUsage(
-        orgId, retryResult.model, retryResult.promptTokens, retryResult.completionTokens,
-        'USAGE_LLM_ENGINE_TICK', { call_id: callId, prepared_opener_retry: true },
+        {
+          model: llmModel,
+          billing: { orgId, ledgerType: 'USAGE_LLM_ENGINE_TICK', metadata: { call_id: callId, prepared_opener_retry: true } },
+        },
       );
       const retry = retryResult.text.replace(/\s+/g, ' ').trim();
       if (this.isOpenerValid(retry, context)) return retry;
@@ -298,11 +296,10 @@ export class CallsService {
         `Offerings: ${names.length > 0 ? names.join(', ') : 'None'}\n` +
         'Generate 3 short discovery questions (max 12 words each) a rep can ask after the prospect responds to the opener. Return a JSON array of 3 strings.';
 
-      const seedResult = await this.llm.chatFast(system, user, { model: llmModel });
-      void this.creditsService.debitForAiUsage(
-        orgId, seedResult.model, seedResult.promptTokens, seedResult.completionTokens,
-        'USAGE_LLM_ENGINE_TICK', { call_id: callId, followup_seed: true },
-      );
+      const seedResult = await this.llm.chatFast(system, user, {
+        model: llmModel,
+        billing: { orgId, ledgerType: 'USAGE_LLM_ENGINE_TICK', metadata: { call_id: callId, followup_seed: true } },
+      });
       const parsed = this.llm.parseJson<string[]>(seedResult.text, []);
       const questions = Array.isArray(parsed)
         ? parsed.map((q) => (typeof q === 'string' ? q.trim() : '')).filter((q) => q.length > 0).slice(0, 3)
