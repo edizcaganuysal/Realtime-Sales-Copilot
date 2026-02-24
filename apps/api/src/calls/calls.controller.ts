@@ -255,6 +255,48 @@ export class CallsController {
     return this.callsService.list(user);
   }
 
+  /** Generate a short TTS audio sample for a given voice name. */
+  @Get('voice-preview')
+  async voicePreview(
+    @Query('voice') voice: string,
+    @Res() res: Response,
+  ) {
+    const validVoice = AI_CALLER_VOICES.includes(voice as (typeof AI_CALLER_VOICES)[number])
+      ? voice
+      : 'marin';
+
+    const apiKey = process.env['LLM_API_KEY'] ?? '';
+    if (!apiKey) {
+      res.status(503).json({ message: 'TTS not available' });
+      return;
+    }
+
+    const ttsRes = await fetch('https://api.openai.com/v1/audio/speech', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'tts-1',
+        voice: validVoice,
+        input: "Hey, how's it going? I wanted to reach out because I think we could really help your team.",
+        response_format: 'mp3',
+      }),
+    });
+
+    if (!ttsRes.ok) {
+      res.status(502).json({ message: 'TTS generation failed' });
+      return;
+    }
+
+    const arrayBuffer = await ttsRes.arrayBuffer();
+    res
+      .set('Content-Type', 'audio/mpeg')
+      .set('Cache-Control', 'public, max-age=86400')
+      .send(Buffer.from(arrayBuffer));
+  }
+
   @Get(':id')
   get(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.callsService.get(user, id);
@@ -340,48 +382,6 @@ export class CallsController {
     return { ok: true };
   }
 
-  /** Generate a short TTS audio sample for a given voice name. */
-  @Get('voice-preview')
-  async voicePreview(
-    @Query('voice') voice: string,
-    @Res() res: Response,
-  ) {
-    const validVoice = AI_CALLER_VOICES.includes(voice as (typeof AI_CALLER_VOICES)[number])
-      ? voice
-      : 'marin';
-
-    const apiKey = process.env['LLM_API_KEY'] ?? '';
-    if (!apiKey) {
-      res.status(503).json({ message: 'TTS not available' });
-      return;
-    }
-
-    const ttsRes = await fetch('https://api.openai.com/v1/audio/speech', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'tts-1',
-        voice: validVoice,
-        input: "Hey, how's it going? I wanted to reach out because I think we could really help your team.",
-        response_format: 'mp3',
-      }),
-    });
-
-    if (!ttsRes.ok) {
-      res.status(502).json({ message: 'TTS generation failed' });
-      return;
-    }
-
-    const arrayBuffer = await ttsRes.arrayBuffer();
-    res
-      .set('Content-Type', 'audio/mpeg')
-      .set('Cache-Control', 'public, max-age=86400')
-      .send(Buffer.from(arrayBuffer));
-  }
-
   @Post('prompt-debug')
   @Roles(Role.ADMIN)
   @HttpCode(200)
@@ -438,10 +438,9 @@ export class TwilioWebhookController {
           .limit(1);
 
         if (callRow?.mode === 'AI_CALLER') {
-          // Route AI_CALLER to Realtime API via WebSocket stream
-          // (eliminates 3-4s round-trip delay from old HTTP Gather approach)
+          // Route AI_CALLER directly to AiCallService's WebSocket (no media-stream handoff)
           const wsBase = base.replace(/^https/, 'wss').replace(/^http(?!s)/, 'ws');
-          const streamUrl = `${wsBase}/media-stream`;
+          const streamUrl = `${wsBase}/ai-call-stream`;
           this.logger.log(`TwiML AI_CALLER stream — callId: ${callId}, streamUrl: ${streamUrl}`);
           return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
