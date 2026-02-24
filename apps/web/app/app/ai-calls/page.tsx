@@ -2,9 +2,10 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { Bot, Phone, PhoneOff, Clock } from 'lucide-react';
+import { Bot, Phone, PhoneOff, Clock, Volume2, Square } from 'lucide-react';
 import { PageHeader } from '@/components/ui/page-header';
 import { INPUT_BASE } from '@/components/ui/form-field';
+import { AI_CALLER_VOICES, AI_CALLER_MODELS, type AiCallerVoice, type AiCallerModel } from '@live-sales-coach/shared';
 
 const WS_URL =
   process.env['NEXT_PUBLIC_WS_URL'] ??
@@ -22,6 +23,24 @@ type TranscriptLine = {
 
 type CallStatus = 'idle' | 'connecting' | 'in_progress' | 'ended' | 'failed';
 
+const VOICE_INFO: Record<AiCallerVoice, { label: string; desc: string }> = {
+  marin: { label: 'Marin', desc: 'Professional, clear' },
+  cedar: { label: 'Cedar', desc: 'Natural, conversational' },
+  ash: { label: 'Ash', desc: 'Confident, direct' },
+  ballad: { label: 'Ballad', desc: 'Warm, expressive' },
+  coral: { label: 'Coral', desc: 'Warm, friendly' },
+  sage: { label: 'Sage', desc: 'Calm, balanced' },
+  verse: { label: 'Verse', desc: 'Energetic, bright' },
+  alloy: { label: 'Alloy', desc: 'Neutral, versatile' },
+  echo: { label: 'Echo', desc: 'Deep, resonant' },
+  shimmer: { label: 'Shimmer', desc: 'Clear, articulate' },
+};
+
+const AI_MODEL_LABELS: Record<AiCallerModel, string> = {
+  'gpt-4o-mini-realtime-preview': 'GPT-4o Mini Realtime (Faster, lower cost)',
+  'gpt-4o-realtime-preview': 'GPT-4o Realtime (Higher quality)',
+};
+
 function useElapsed(startedAt: number | null) {
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
@@ -38,12 +57,16 @@ export default function AiCallsPage() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [phoneTo, setPhoneTo] = useState('');
   const [agentId, setAgentId] = useState('');
+  const [aiVoice, setAiVoice] = useState<AiCallerVoice>('marin');
+  const [aiModel, setAiModel] = useState<AiCallerModel>('gpt-4o-mini-realtime-preview');
   const [status, setStatus] = useState<CallStatus>('idle');
   const [callId, setCallId] = useState<string | null>(null);
   const [transcript, setTranscript] = useState<TranscriptLine[]>([]);
   const [partial, setPartial] = useState<{ speaker: 'REP' | 'PROSPECT'; text: string } | null>(null);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [error, setError] = useState('');
+  const [previewingVoice, setPreviewingVoice] = useState<string | null>(null);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const socketRef = useRef<Socket | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement>(null);
   const elapsed = useElapsed(startedAt);
@@ -62,8 +85,51 @@ export default function AiCallsPage() {
   useEffect(() => {
     return () => {
       socketRef.current?.disconnect();
+      if (previewAudioRef.current) {
+        previewAudioRef.current.pause();
+        previewAudioRef.current = null;
+      }
     };
   }, []);
+
+  async function previewVoice(voice: string) {
+    // Stop any currently playing preview
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current = null;
+    }
+
+    if (previewingVoice === voice) {
+      setPreviewingVoice(null);
+      return;
+    }
+
+    setPreviewingVoice(voice);
+    try {
+      const res = await fetch(`/api/calls/voice-preview?voice=${encodeURIComponent(voice)}`);
+      if (!res.ok) {
+        setPreviewingVoice(null);
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      previewAudioRef.current = audio;
+      audio.onended = () => {
+        setPreviewingVoice(null);
+        previewAudioRef.current = null;
+        URL.revokeObjectURL(url);
+      };
+      audio.onerror = () => {
+        setPreviewingVoice(null);
+        previewAudioRef.current = null;
+        URL.revokeObjectURL(url);
+      };
+      await audio.play();
+    } catch {
+      setPreviewingVoice(null);
+    }
+  }
 
   function connectSocket(cId: string) {
     const socket = io(WS_URL, {
@@ -111,6 +177,8 @@ export default function AiCallsPage() {
     const body: Record<string, unknown> = {
       mode: 'AI_CALLER',
       phoneTo: phoneTo.trim(),
+      ai_voice: aiVoice,
+      ai_model: aiModel,
     };
     if (agentId) body.agentId = agentId;
 
@@ -170,7 +238,7 @@ export default function AiCallsPage() {
 
       {/* Setup form */}
       {!isActive && !isDone && (
-        <div className="mt-6 rounded-xl border border-slate-800 bg-slate-900 p-6 space-y-4">
+        <div className="mt-6 rounded-xl border border-slate-800 bg-slate-900 p-6 space-y-5">
           <div>
             <label className="mb-1.5 block text-xs text-slate-400">Phone number</label>
             <input
@@ -181,6 +249,63 @@ export default function AiCallsPage() {
               onChange={(e) => setPhoneTo(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') void handleStart(); }}
             />
+          </div>
+
+          {/* Voice selection */}
+          <div>
+            <label className="mb-2 block text-xs text-slate-400">Voice</label>
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+              {AI_CALLER_VOICES.map((v) => {
+                const info = VOICE_INFO[v];
+                const isSelected = aiVoice === v;
+                const isPreviewing = previewingVoice === v;
+                return (
+                  <div
+                    key={v}
+                    className={`relative rounded-lg border text-center transition-all cursor-pointer ${
+                      isSelected
+                        ? 'border-sky-500/50 bg-sky-500/10 ring-1 ring-sky-500/20'
+                        : 'border-slate-700 bg-slate-800/60 hover:border-slate-500'
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setAiVoice(v)}
+                      className="w-full px-2 pt-2.5 pb-1"
+                    >
+                      <span className={`text-xs font-medium block ${isSelected ? 'text-sky-300' : 'text-white'}`}>
+                        {info.label}
+                      </span>
+                      <span className="text-[10px] text-slate-500 block mt-0.5">{info.desc}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void previewVoice(v)}
+                      className={`w-full flex items-center justify-center gap-1 py-1.5 text-[10px] transition-colors border-t ${
+                        isSelected ? 'border-sky-500/20' : 'border-slate-700/50'
+                      } ${isPreviewing ? 'text-sky-300' : 'text-slate-500 hover:text-slate-300'}`}
+                    >
+                      {isPreviewing ? <Square size={9} /> : <Volume2 size={10} />}
+                      {isPreviewing ? 'Stop' : 'Preview'}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* AI Model selection */}
+          <div>
+            <label className="mb-1.5 block text-xs text-slate-400">AI model</label>
+            <select
+              className={INPUT_BASE}
+              value={aiModel}
+              onChange={(e) => setAiModel(e.target.value as AiCallerModel)}
+            >
+              {AI_CALLER_MODELS.map((m) => (
+                <option key={m} value={m}>{AI_MODEL_LABELS[m]}</option>
+              ))}
+            </select>
           </div>
 
           <div>

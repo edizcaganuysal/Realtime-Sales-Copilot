@@ -2,8 +2,8 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { CallMode, FAST_CALL_MODELS, AI_CALLER_VOICES, AI_CALLER_MODELS, type FastCallModel, type AiCallerVoice, type AiCallerModel } from '@live-sales-coach/shared';
-import { Phone, Bot, PhoneOutgoing, Plus, ChevronRight, Shield, Zap, Users, Crown, Smile, X, Pencil, Trash2 } from 'lucide-react';
+import { CallMode, FAST_CALL_MODELS, type FastCallModel } from '@live-sales-coach/shared';
+import { Phone, Bot, Plus, ChevronRight, Shield, Zap, Users, Crown, Smile, X, Pencil, Trash2 } from 'lucide-react';
 import { OutOfCreditsModal } from '@/components/out-of-credits-modal';
 
 type Agent = { id: string; name: string; openers?: string[] | null };
@@ -69,22 +69,6 @@ const MODEL_LABELS: Record<FastCallModel, string> = {
   'gpt-4o': 'GPT-4o (Fast + higher quality)',
 };
 
-const AI_MODEL_LABELS: Record<AiCallerModel, string> = {
-  'gpt-4o-mini-realtime-preview': 'GPT-4o Mini Realtime (Faster, lower cost)',
-  'gpt-4o-realtime-preview': 'GPT-4o Realtime (Higher quality)',
-};
-
-const VOICE_LABELS: Record<AiCallerVoice, { label: string; desc: string }> = {
-  ash: { label: 'Ash', desc: 'Confident male' },
-  coral: { label: 'Coral', desc: 'Warm female' },
-  sage: { label: 'Sage', desc: 'Calm, neutral' },
-  ballad: { label: 'Ballad', desc: 'Warm, expressive' },
-  verse: { label: 'Verse', desc: 'Energetic' },
-  alloy: { label: 'Alloy', desc: 'Neutral' },
-  echo: { label: 'Echo', desc: 'Deep male' },
-  shimmer: { label: 'Shimmer', desc: 'Clear female' },
-};
-
 type ModelCostInfo = { id: string; displayName: string; estimatedCreditsPerMin: number };
 
 
@@ -106,8 +90,6 @@ export default function DialerPage() {
   const [form, setForm] = useState({ phoneTo: '', agentId: '', notes: '' });
   const [selectedOpenerIdx, setSelectedOpenerIdx] = useState(0);
   const [llmModel, setLlmModel] = useState<FastCallModel>('gpt-5-mini');
-  const [aiVoice, setAiVoice] = useState<AiCallerVoice>('ash');
-  const [aiModel, setAiModel] = useState<AiCallerModel>('gpt-4o-mini-realtime-preview');
   const [modelCosts, setModelCosts] = useState<Record<string, ModelCostInfo>>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -119,8 +101,6 @@ export default function DialerPage() {
       setMode(CallMode.MOCK);
     } else if (modeParam === 'outbound' || modeParam === 'real') {
       setMode(CallMode.OUTBOUND);
-    } else if (modeParam === 'ai' || modeParam === 'ai_caller') {
-      setMode(CallMode.AI_CALLER);
     }
 
     const personaParam = searchParams.get('persona');
@@ -255,10 +235,8 @@ export default function DialerPage() {
     setError('');
 
     const isMockMode = mode === CallMode.MOCK;
-    const isAiCaller = mode === CallMode.AI_CALLER;
-    const needsPhone = !isMockMode;
 
-    if (!isMockMode && !isAiCaller && !allProducts && selectedProductIds.length === 0) {
+    if (!isMockMode && !allProducts && selectedProductIds.length === 0) {
       setError('Select at least one offering or keep All offerings enabled.');
       setSubmitting(false);
       return;
@@ -285,11 +263,6 @@ export default function DialerPage() {
       body.selected_product_ids = selectedProductIds;
     }
 
-    if (isAiCaller) {
-      body.ai_voice = aiVoice;
-      body.ai_model = aiModel;
-    }
-
     const res = await fetch('/api/calls', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -313,26 +286,23 @@ export default function DialerPage() {
   }
 
   const isMock = mode === CallMode.MOCK;
-  const isAiCaller = mode === CallMode.AI_CALLER;
 
   return (
     <div className="p-8 max-w-2xl">
       <div className="flex items-center gap-3 mb-6">
         <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${
-          isAiCaller ? 'bg-emerald-500/15' : isMock ? 'bg-violet-500/15' : 'bg-sky-500/15'
+          isMock ? 'bg-violet-500/15' : 'bg-sky-500/15'
         }`}>
-          {isAiCaller ? <PhoneOutgoing size={18} className="text-emerald-400" /> : isMock ? <Bot size={18} className="text-violet-400" /> : <Phone size={18} className="text-sky-400" />}
+          {isMock ? <Bot size={18} className="text-violet-400" /> : <Phone size={18} className="text-sky-400" />}
         </div>
         <div>
           <h1 className="text-lg font-semibold text-white">
-            {isAiCaller ? 'AI Caller' : isMock ? 'Practice call' : 'New call'}
+            {isMock ? 'Practice call' : 'New call'}
           </h1>
           <p className="text-xs text-slate-500">
-            {isAiCaller
-              ? 'AI makes the call autonomously using your sales context'
-              : isMock
-                ? 'Practice with a challenging AI prospect'
-                : 'Configure and start an outbound call'}
+            {isMock
+              ? 'Practice with a challenging AI prospect'
+              : 'Configure and start an outbound call'}
           </p>
         </div>
       </div>
@@ -353,18 +323,6 @@ export default function DialerPage() {
         </button>
         <button
           type="button"
-          onClick={() => setMode(CallMode.AI_CALLER)}
-          className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-colors border ${
-            isAiCaller
-              ? 'bg-emerald-600/20 border-emerald-500/40 text-emerald-400'
-              : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
-          }`}
-        >
-          <PhoneOutgoing size={14} />
-          AI Caller
-        </button>
-        <button
-          type="button"
           onClick={() => setMode(CallMode.MOCK)}
           className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-colors border ${
             isMock
@@ -378,71 +336,28 @@ export default function DialerPage() {
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-4">
-        {/* AI Caller: voice + model selection */}
-        {isAiCaller && (
-          <>
-            <div>
-              <label className="block text-xs text-slate-400 mb-1.5">Voice</label>
-              <div className="grid grid-cols-4 gap-1.5">
-                {AI_CALLER_VOICES.map((v) => {
-                  const info = VOICE_LABELS[v];
-                  return (
-                    <button
-                      key={v}
-                      type="button"
-                      onClick={() => setAiVoice(v)}
-                      className={`px-2.5 py-2 rounded-lg border text-xs transition-colors ${
-                        aiVoice === v
-                          ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300'
-                          : 'border-slate-700 bg-slate-800/60 text-slate-400 hover:border-slate-500 hover:text-white'
-                      }`}
-                    >
-                      <span className="font-medium block">{info.label}</span>
-                      <span className="text-[10px] opacity-60">{info.desc}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-            <div>
-              <label className="block text-xs text-slate-400 mb-1.5">AI model</label>
-              <select
-                className={INPUT}
-                value={aiModel}
-                onChange={(e) => setAiModel(e.target.value as AiCallerModel)}
-              >
-                {AI_CALLER_MODELS.map((m) => (
-                  <option key={m} value={m}>{AI_MODEL_LABELS[m]}</option>
-                ))}
-              </select>
-            </div>
-          </>
-        )}
-
-        {/* Coach model (outbound + practice only) */}
-        {!isAiCaller && (
-          <div>
-            <label className="block text-xs text-slate-400 mb-1.5">Coach model</label>
-            <select
-              className={INPUT}
-              value={llmModel}
-              onChange={(e) => setLlmModel(e.target.value as FastCallModel)}
-            >
-              {FAST_CALL_MODELS.map((model) => {
-                const cost = modelCosts[model];
-                const costLabel = cost ? ` — ~${cost.estimatedCreditsPerMin} credits/min` : '';
-                return (
-                  <option key={model} value={model}>
-                    {MODEL_LABELS[model]}{costLabel}
-                  </option>
-                );
-              })}
-            </select>
-            <p className="mt-1 text-[11px] text-slate-500">
-              Fast models only. No long-thinking model is used in live coaching.
-            </p>
-          </div>
-        )}
+        {/* Coach model */}
+        <div>
+          <label className="block text-xs text-slate-400 mb-1.5">Coach model</label>
+          <select
+            className={INPUT}
+            value={llmModel}
+            onChange={(e) => setLlmModel(e.target.value as FastCallModel)}
+          >
+            {FAST_CALL_MODELS.map((model) => {
+              const cost = modelCosts[model];
+              const costLabel = cost ? ` — ~${cost.estimatedCreditsPerMin} credits/min` : '';
+              return (
+                <option key={model} value={model}>
+                  {MODEL_LABELS[model]}{costLabel}
+                </option>
+              );
+            })}
+          </select>
+          <p className="mt-1 text-[11px] text-slate-500">
+            Fast models only. No long-thinking model is used in live coaching.
+          </p>
+        </div>
 
         {/* Practice persona selection */}
         {isMock && (
@@ -528,7 +443,7 @@ export default function DialerPage() {
           </div>
         )}
 
-        {/* Phone number (real calls + AI caller) */}
+        {/* Phone number (real calls only) */}
         {!isMock && (
           <div>
             <label className="block text-xs text-slate-400 mb-1.5">Phone number</label>
@@ -543,7 +458,7 @@ export default function DialerPage() {
           </div>
         )}
 
-        {!isMock && !isAiCaller && (
+        {!isMock && (
           <div className="space-y-2.5">
             <div className="flex items-center justify-between gap-3">
               <label className="block text-xs text-slate-400">Offerings</label>
@@ -611,25 +526,23 @@ export default function DialerPage() {
           </div>
         )}
 
-        {/* Coaching agent (outbound + practice only) */}
-        {!isAiCaller && (
-          <div>
-            <label className="block text-xs text-slate-400 mb-1.5">Coaching agent (optional)</label>
-            <select
-              className={INPUT}
-              value={form.agentId}
-              onChange={(e) => { setForm({ ...form, agentId: e.target.value }); setSelectedOpenerIdx(0); }}
-            >
-              <option value="">— Default coach —</option>
-              {agents.map((a) => (
-                <option key={a.id} value={a.id}>{a.name}</option>
-              ))}
-            </select>
-          </div>
-        )}
+        {/* Coaching agent */}
+        <div>
+          <label className="block text-xs text-slate-400 mb-1.5">Coaching agent (optional)</label>
+          <select
+            className={INPUT}
+            value={form.agentId}
+            onChange={(e) => { setForm({ ...form, agentId: e.target.value }); setSelectedOpenerIdx(0); }}
+          >
+            <option value="">— Default coach —</option>
+            {agents.map((a) => (
+              <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
+          </select>
+        </div>
 
-        {/* Opener selection when agent has openers (outbound + practice) */}
-        {!isAiCaller && (() => {
+        {/* Opener selection when agent has openers */}
+        {(() => {
           const selectedAgent = agents.find((a) => a.id === form.agentId);
           const agentOpeners = Array.isArray(selectedAgent?.openers) ? selectedAgent.openers.filter((o) => typeof o === 'string' && o.trim()) : [];
           if (agentOpeners.length === 0) return null;
@@ -664,17 +577,15 @@ export default function DialerPage() {
         {/* Notes */}
         <div>
           <label className="block text-xs text-slate-400 mb-1.5">
-            {isAiCaller ? 'Call context (optional)' : isMock ? 'Scenario notes (optional)' : 'Notes (optional)'}
+            {isMock ? 'Scenario notes (optional)' : 'Notes (optional)'}
           </label>
           <textarea
             rows={2}
             className={INPUT + ' resize-none'}
             placeholder={
-              isAiCaller
-                ? 'Context about the prospect, their company, or call objective...'
-                : isMock
-                  ? 'Add context: "They run a 50-agent brokerage in Toronto..."'
-                  : 'Context about this call, contact, or goal...'
+              isMock
+                ? 'Add context: "They run a 50-agent brokerage in Toronto..."'
+                : 'Context about this call, contact, or goal...'
             }
             value={form.notes}
             onChange={(e) => setForm({ ...form, notes: e.target.value })}
@@ -687,17 +598,13 @@ export default function DialerPage() {
           type="submit"
           disabled={submitting}
           className={`w-full flex items-center justify-center gap-2 py-2.5 disabled:opacity-50 text-white font-medium rounded-lg transition-colors ${
-            isAiCaller
-              ? 'bg-emerald-600 hover:bg-emerald-500'
-              : isMock ? 'bg-violet-600 hover:bg-violet-500' : 'bg-sky-600 hover:bg-sky-500'
+            isMock ? 'bg-violet-600 hover:bg-violet-500' : 'bg-sky-600 hover:bg-sky-500'
           }`}
         >
-          {isAiCaller ? <PhoneOutgoing size={15} /> : isMock ? <Bot size={15} /> : <Phone size={15} />}
+          {isMock ? <Bot size={15} /> : <Phone size={15} />}
           {submitting
             ? 'Starting...'
-            : isAiCaller
-              ? 'Start AI call'
-              : isMock ? 'Start practice call' : 'Start call'}
+            : isMock ? 'Start practice call' : 'Start call'}
         </button>
       </form>
 

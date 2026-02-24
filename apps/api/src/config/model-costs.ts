@@ -88,6 +88,14 @@ const MODEL_COSTS: Record<string, ModelCost> = {
     realtimeAudioInputPerToken: 10e-6,
     realtimeAudioOutputPerToken: 20e-6,
   },
+  'gpt-4o-realtime-preview': {
+    inputPerToken: 5e-6,
+    outputPerToken: 20e-6,
+    displayName: 'GPT-4o Realtime',
+    isRealtime: true,
+    realtimeAudioInputPerToken: 40e-6,
+    realtimeAudioOutputPerToken: 80e-6,
+  },
 };
 
 // ─── Constants ──────────────────────────────────────────────────────────────────

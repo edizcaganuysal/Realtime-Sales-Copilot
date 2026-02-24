@@ -78,7 +78,7 @@ export enum ProductsMode {
 export const FAST_CALL_MODELS = ['gpt-5-mini', 'gpt-4.1-mini', 'gpt-4o-mini', 'gpt-4o'] as const;
 export type FastCallModel = (typeof FAST_CALL_MODELS)[number];
 
-export const AI_CALLER_VOICES = ['ash', 'coral', 'sage', 'ballad', 'verse', 'alloy', 'echo', 'shimmer'] as const;
+export const AI_CALLER_VOICES = ['marin', 'cedar', 'ash', 'ballad', 'coral', 'sage', 'verse', 'alloy', 'echo', 'shimmer'] as const;
 export type AiCallerVoice = (typeof AI_CALLER_VOICES)[number];
 
 export const AI_CALLER_MODELS = ['gpt-4o-mini-realtime-preview', 'gpt-4o-realtime-preview'] as const;

@@ -324,7 +324,7 @@ export class AiCallService implements OnApplicationBootstrap {
 
       const orgId = callRow.orgId;
       const contactCfg = (callRow.contactJson ?? {}) as Record<string, unknown>;
-      const selectedVoice = (typeof contactCfg.aiVoice === 'string' ? contactCfg.aiVoice : 'ash') as string;
+      const selectedVoice = (typeof contactCfg.aiVoice === 'string' ? contactCfg.aiVoice : 'marin') as string;
       const selectedModel = (typeof contactCfg.aiModel === 'string' ? contactCfg.aiModel : 'gpt-4o-mini-realtime-preview') as string;
 
       // Start OpenAI WS connection + load context in parallel (saves ~150ms)

@@ -11,9 +11,11 @@ import {
   Patch,
   Post,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
-import { Role } from '@live-sales-coach/shared';
+import type { Response } from 'express';
+import { AI_CALLER_VOICES, Role } from '@live-sales-coach/shared';
 import type { JwtPayload } from '@live-sales-coach/shared';
 import { and, eq } from 'drizzle-orm';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -336,6 +338,48 @@ export class CallsController {
     await this.callsService.get(user, id);
     this.engineService.markPrimaryConsumed(id);
     return { ok: true };
+  }
+
+  /** Generate a short TTS audio sample for a given voice name. */
+  @Get('voice-preview')
+  async voicePreview(
+    @Query('voice') voice: string,
+    @Res() res: Response,
+  ) {
+    const validVoice = AI_CALLER_VOICES.includes(voice as (typeof AI_CALLER_VOICES)[number])
+      ? voice
+      : 'marin';
+
+    const apiKey = process.env['LLM_API_KEY'] ?? '';
+    if (!apiKey) {
+      res.status(503).json({ message: 'TTS not available' });
+      return;
+    }
+
+    const ttsRes = await fetch('https://api.openai.com/v1/audio/speech', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'tts-1',
+        voice: validVoice,
+        input: "Hey, how's it going? I wanted to reach out because I think we could really help your team.",
+        response_format: 'mp3',
+      }),
+    });
+
+    if (!ttsRes.ok) {
+      res.status(502).json({ message: 'TTS generation failed' });
+      return;
+    }
+
+    const arrayBuffer = await ttsRes.arrayBuffer();
+    res
+      .set('Content-Type', 'audio/mpeg')
+      .set('Cache-Control', 'public, max-age=86400')
+      .send(Buffer.from(arrayBuffer));
   }
 
   @Post('prompt-debug')
