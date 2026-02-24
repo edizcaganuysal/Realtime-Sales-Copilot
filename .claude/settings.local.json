@@ -1,11 +1,16 @@
 {
-  "defaultMode": "bypassPermissions",
   "permissions": {
     "allow": [
       "Bash",
       "Edit",
       "Write",
-      "Read"
+      "Read",
+      "WebFetch(domain:www.chakhaglobal.com)",
+      "WebFetch(domain:platform.openai.com)",
+      "WebFetch(domain:openai.com)",
+      "WebFetch",
+      "WebFetch(domain:https://pricepertoken.com/pricing-page/provider/openai)"
     ]
-  }
+  },
+  "defaultMode": "bypassPermissions"
 }
