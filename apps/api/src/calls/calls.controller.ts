@@ -431,76 +431,16 @@ export class TwilioWebhookController {
 
   /**
    * Twilio fetches this TwiML when the outbound call is answered.
-   * AI_CALLER → HTTP-based <Gather> loop (no WebSocket needed).
-   * OUTBOUND   → <Stream> WebSocket to /media-stream.
+   * ALL modes use <Connect><Stream> → /media-stream WebSocket.
+   * media-stream.service routes by call mode (OUTBOUND → Deepgram STT, AI_CALLER → OpenAI Realtime, SUPPORT → support engine).
    */
   @Get('twiml')
   @Header('Content-Type', 'text/xml')
-  async twiml(@Query('callId') callId: string) {
+  twiml(@Query('callId') callId: string) {
     const base = (process.env['TWILIO_WEBHOOK_BASE_URL'] ?? '').replace(/\/$/, '');
-
-    // Check if this is an AI_CALLER call
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-      callId ?? '',
-    );
-    if (callId && isUuid) {
-      try {
-        const [callRow] = await this.db
-          .select({
-            mode: schema.calls.mode,
-            preparedOpenerText: schema.calls.preparedOpenerText,
-            contactJson: schema.calls.contactJson,
-          })
-          .from(schema.calls)
-          .where(eq(schema.calls.id, callId))
-          .limit(1);
-
-        if (callRow?.mode === 'AI_CALLER') {
-          const opener = callRow.preparedOpenerText?.trim() || 'Hi, this is Alex. Do you have a quick moment?';
-          const gatherAction = `${base}/calls/ai-gather?callId=${callId}`;
-          const contactCfg = (callRow.contactJson ?? {}) as Record<string, unknown>;
-          const voice = typeof contactCfg.aiVoice === 'string' ? contactCfg.aiVoice : 'marin';
-
-          this.logger.log(`TwiML AI_CALLER — callId: ${callId}, voice: ${voice}`);
-
-          // Persist opener as first REP transcript
-          void this.db
-            .insert(schema.callTranscript)
-            .values({ callId, tsMs: Date.now(), speaker: 'REP', text: opener, isFinal: true })
-            .catch(() => {});
-          this.gateway.emitToCall(callId, 'transcript.final', {
-            speaker: 'REP', text: opener, tsMs: Date.now(), isFinal: true,
-          });
-
-          // Generate TTS with selected OpenAI voice; fall back to Polly if TTS fails
-          try {
-            const audioId = await this.aiCallService.generateTts(opener, voice);
-            const playUrl = `${base}/calls/tts/${audioId}`;
-            return `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Play>${playUrl}</Play>
-  <Gather input="speech" action="${gatherAction}" speechTimeout="auto" speechModel="phone_call" timeout="8" />
-  <Redirect>${gatherAction}</Redirect>
-</Response>`;
-          } catch (err) {
-            this.logger.warn(`TTS failed for opener, falling back to Polly: ${(err as Error).message}`);
-            return `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="Polly.Matthew-Neural">${escapeXml(opener)}</Say>
-  <Gather input="speech" action="${gatherAction}" speechTimeout="auto" speechModel="phone_call" timeout="8" />
-  <Redirect>${gatherAction}</Redirect>
-</Response>`;
-          }
-        }
-      } catch (err) {
-        this.logger.error(`TwiML DB lookup error: ${(err as Error).message}`);
-      }
-    }
-
-    // Regular outbound call — WebSocket stream
     const wsBase = base.replace(/^https/, 'wss').replace(/^http(?!s)/, 'ws');
     const streamUrl = `${wsBase}/media-stream`;
-    this.logger.log(`TwiML OUTBOUND stream — callId: ${callId}, streamUrl: ${streamUrl}`);
+    this.logger.log(`TwiML stream — callId: ${callId}, streamUrl: ${streamUrl}`);
 
     return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>

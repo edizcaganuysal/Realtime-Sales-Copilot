@@ -74,7 +74,11 @@ export class MockCallService implements OnApplicationBootstrap {
     }
 
     const [callRow] = await this.db
-      .select()
+      .select({
+        orgId: schema.calls.orgId,
+        contactJson: schema.calls.contactJson,
+        notes: schema.calls.notes,
+      })
       .from(schema.calls)
       .where(eq(schema.calls.id, callId))
       .limit(1);
@@ -90,8 +94,19 @@ export class MockCallService implements OnApplicationBootstrap {
     const practicePersonaId = (contactJson.practicePersonaId as string) ?? null;
     const customPersonaPrompt = (contactJson.customPersonaPrompt as string) ?? null;
 
-    // Load org sales context and products so the prospect AI knows what is being sold
-    const [ctxRow, productRows] = await Promise.all([
+    // Start OpenAI WS connection IMMEDIATELY — load context in parallel (saves ~200ms)
+    const openaiWs = new WebSocket(
+      'wss://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview',
+      {
+        headers: {
+          'Authorization': `Bearer ${this.apiKey}`,
+          'OpenAI-Beta': 'realtime=v1',
+        },
+      },
+    );
+
+    // Load context + optional custom agent in parallel with OpenAI WS handshake
+    const contextPromise = Promise.all([
       this.db
         .select({
           companyName: schema.salesContext.companyName,
@@ -116,35 +131,15 @@ export class MockCallService implements OnApplicationBootstrap {
         })
         .from(schema.products)
         .where(eq(schema.products.orgId, callRow.orgId)),
+      practicePersonaId?.startsWith('custom:')
+        ? this.db
+            .select({ prompt: schema.agents.prompt })
+            .from(schema.agents)
+            .where(eq(schema.agents.id, practicePersonaId.replace(/^custom:/, '')))
+            .limit(1)
+            .then((rows) => rows[0] ?? null)
+        : Promise.resolve(null),
     ]);
-
-    let prospectPersona: string;
-    if (customPersonaPrompt) {
-      prospectPersona = this.buildCustomPersona(customPersonaPrompt, callRow.notes ?? null, ctxRow, productRows);
-    } else if (practicePersonaId?.startsWith('custom:')) {
-      // Load saved custom persona from agents table
-      const agentId = practicePersonaId.replace(/^custom:/, '');
-      const [agent] = await this.db
-        .select()
-        .from(schema.agents)
-        .where(eq(schema.agents.id, agentId))
-        .limit(1);
-      prospectPersona = agent
-        ? this.buildCustomPersona(agent.prompt, callRow.notes ?? null, ctxRow, productRows)
-        : this.buildProspectPersona(null, callRow.notes ?? null, ctxRow, productRows);
-    } else {
-      prospectPersona = this.buildProspectPersona(practicePersonaId, callRow.notes ?? null, ctxRow, productRows);
-    }
-
-    const openaiWs = new WebSocket(
-      'wss://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview',
-      {
-        headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
-          'OpenAI-Beta': 'realtime=v1',
-        },
-      },
-    );
 
     let openaiReady = false;
     // Accumulate partial AI transcript text for a single response
@@ -305,8 +300,20 @@ export class MockCallService implements OnApplicationBootstrap {
       }, 650);
     };
 
-    openaiWs.on('open', () => {
+    openaiWs.on('open', async () => {
       this.logger.log(`OpenAI Realtime WS connected — call ${callId}`);
+
+      // Context is likely loaded by now; await just in case
+      const [ctxRow, productRows, customAgent] = await contextPromise;
+
+      let prospectPersona: string;
+      if (customPersonaPrompt) {
+        prospectPersona = this.buildCustomPersona(customPersonaPrompt, callRow.notes ?? null, ctxRow, productRows);
+      } else if (customAgent) {
+        prospectPersona = this.buildCustomPersona(customAgent.prompt, callRow.notes ?? null, ctxRow, productRows);
+      } else {
+        prospectPersona = this.buildProspectPersona(practicePersonaId, callRow.notes ?? null, ctxRow, productRows);
+      }
 
       openaiWs.send(JSON.stringify({
         type: 'session.update',

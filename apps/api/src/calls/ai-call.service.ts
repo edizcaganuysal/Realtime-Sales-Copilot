@@ -354,9 +354,13 @@ export class AiCallService implements OnApplicationBootstrap {
     };
 
     const startOpenAI = async (cId: string) => {
-      // Load call row first (need orgId + agentId + contactJson for model/voice)
       const [callRow] = await this.db
-        .select()
+        .select({
+          orgId: schema.calls.orgId,
+          agentId: schema.calls.agentId,
+          preparedOpenerText: schema.calls.preparedOpenerText,
+          contactJson: schema.calls.contactJson,
+        })
         .from(schema.calls)
         .where(eq(schema.calls.id, cId))
         .limit(1);
