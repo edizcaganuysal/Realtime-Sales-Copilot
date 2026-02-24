@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { Headset, Plus, Settings2 } from 'lucide-react';
+import { Headset, Settings2 } from 'lucide-react';
 import { PageHeader } from '@/components/ui/page-header';
 import { EmptyState } from '@/components/ui/empty-state';
 import { LoadingSkeleton } from '@/components/ui/loading-skeleton';
@@ -97,36 +97,40 @@ export default function SupportPage() {
             { label: 'Started' },
             { label: '', className: 'w-28' },
           ]}
-          rows={sorted.map((session) => ({
-            key: session.id,
-            cells: [
-              <span key="customer" className="font-medium text-white">
-                {customerLabel(session.customerJson)}
-              </span>,
-              <StatusBadge
-                key="status"
-                variant={STATUS_VARIANT[session.status] ?? 'neutral'}
-                label={session.status}
-              />,
-              <span key="issue" className="text-slate-400 text-xs">
+        >
+          {sorted.map((session) => (
+            <tr key={session.id} className="hover:bg-slate-800/50 transition-colors">
+              <td className="px-5 py-3">
+                <span className="font-medium text-white">
+                  {customerLabel(session.customerJson)}
+                </span>
+              </td>
+              <td className="px-5 py-3">
+                <StatusBadge
+                  variant={STATUS_VARIANT[session.status] ?? 'neutral'}
+                  label={session.status}
+                />
+              </td>
+              <td className="px-5 py-3 text-slate-400 text-xs">
                 {session.issueCategory ?? '\u2014'}
-              </span>,
-              <span key="duration" className="tabular-nums text-slate-400">
+              </td>
+              <td className="px-5 py-3 tabular-nums text-slate-400">
                 {duration(session.createdAt, session.resolvedAt)}
-              </span>,
-              <span key="started" className="text-slate-400 text-xs">
+              </td>
+              <td className="px-5 py-3 text-slate-400 text-xs">
                 {new Date(session.createdAt).toLocaleString()}
-              </span>,
-              <Link
-                key="actions"
-                href={`/app/support/${session.id}/live`}
-                className="text-xs text-sky-400 hover:text-sky-300"
-              >
-                {session.status === 'ACTIVE' ? 'Open live' : 'View'}
-              </Link>,
-            ],
-          }))}
-        />
+              </td>
+              <td className="px-5 py-3">
+                <Link
+                  href={`/app/support/${session.id}/live`}
+                  className="text-xs text-sky-400 hover:text-sky-300"
+                >
+                  {session.status === 'ACTIVE' ? 'Open live' : 'View'}
+                </Link>
+              </td>
+            </tr>
+          ))}
+        </DataTable>
       )}
     </div>
   );
