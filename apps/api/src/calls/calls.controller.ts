@@ -438,17 +438,26 @@ export class TwilioWebhookController {
           .limit(1);
 
         if (callRow?.mode === 'AI_CALLER') {
-          // Route AI_CALLER directly to AiCallService's WebSocket (no media-stream handoff)
-          const wsBase = base.replace(/^https/, 'wss').replace(/^http(?!s)/, 'ws');
-          const streamUrl = `${wsBase}/ai-call-stream`;
-          this.logger.log(`TwiML AI_CALLER stream — callId: ${callId}, streamUrl: ${streamUrl}`);
+          // AI_CALLER uses HTTP-based <Say>+<Gather> loop (Chat Completions per turn)
+          // Railway doesn't forward Twilio WebSocket upgrades, so <Connect><Stream> fails.
+          const opener = callRow.preparedOpenerText?.trim() || 'Hi, this is Alex. Do you have a quick moment?';
+          const gatherAction = `${base}/calls/ai-gather?callId=${callId}`;
+          this.logger.log(`TwiML AI_CALLER gather — callId: ${callId}`);
+
+          // Persist opener as first REP transcript
+          void this.db
+            .insert(schema.callTranscript)
+            .values({ callId, tsMs: Date.now(), speaker: 'REP', text: opener, isFinal: true })
+            .catch(() => {});
+          this.gateway.emitToCall(callId, 'transcript.final', {
+            speaker: 'REP', text: opener, tsMs: Date.now(), isFinal: true,
+          });
+
           return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Connect>
-    <Stream url="${streamUrl}" track="both_tracks">
-      <Parameter name="callId" value="${callId}" />
-    </Stream>
-  </Connect>
+  <Say voice="Polly.Matthew-Neural">${escapeXml(opener)}</Say>
+  <Gather input="speech" action="${gatherAction}" speechTimeout="2" speechModel="phone_call" timeout="8" />
+  <Redirect>${gatherAction}</Redirect>
 </Response>`;
         }
       } catch (err) {
@@ -516,15 +525,21 @@ export class TwilioWebhookController {
       this.gateway.emitToCall(callId, 'call.status', { status: 'COMPLETED' });
       return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Joanna-Neural">${escapeXml(aiText)}</Say>
+  <Say voice="Polly.Matthew-Neural">${escapeXml(aiText)}</Say>
   <Hangup/>
 </Response>`;
     }
 
+    // Persist AI response transcript immediately (fire-and-forget)
+    void this.db
+      .insert(schema.callTranscript)
+      .values({ callId, tsMs: Date.now(), speaker: 'REP', text: aiText, isFinal: true })
+      .catch(() => {});
+
     return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Joanna-Neural">${escapeXml(aiText)}</Say>
-  <Gather input="speech" action="${gatherAction}" speechTimeout="3" speechModel="phone_call" timeout="5" />
+  <Say voice="Polly.Matthew-Neural">${escapeXml(aiText)}</Say>
+  <Gather input="speech" action="${gatherAction}" speechTimeout="2" speechModel="phone_call" timeout="8" />
   <Redirect>${gatherAction}</Redirect>
 </Response>`;
   }
