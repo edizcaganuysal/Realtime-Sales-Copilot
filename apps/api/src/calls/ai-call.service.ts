@@ -309,7 +309,7 @@ export class AiCallService implements OnApplicationBootstrap {
     };
 
     const startOpenAI = async (cId: string) => {
-      // Load call + context
+      // Load call row first (need orgId + agentId + contactJson for model/voice)
       const [callRow] = await this.db
         .select()
         .from(schema.calls)
@@ -323,8 +323,12 @@ export class AiCallService implements OnApplicationBootstrap {
       }
 
       const orgId = callRow.orgId;
+      const contactCfg = (callRow.contactJson ?? {}) as Record<string, unknown>;
+      const selectedVoice = (typeof contactCfg.aiVoice === 'string' ? contactCfg.aiVoice : 'ash') as string;
+      const selectedModel = (typeof contactCfg.aiModel === 'string' ? contactCfg.aiModel : 'gpt-4o-mini-realtime-preview') as string;
 
-      const [ctxRow, productRows, agentRow] = await Promise.all([
+      // Start OpenAI WS connection + load context in parallel (saves ~150ms)
+      const contextPromise = Promise.all([
         this.db
           .select({
             companyName: schema.salesContext.companyName,
@@ -351,30 +355,8 @@ export class AiCallService implements OnApplicationBootstrap {
           : Promise.resolve(null),
       ]);
 
-      const toList = (val: unknown): string[] =>
-        Array.isArray(val) ? val.filter((v): v is string => typeof v === 'string') : [];
-
-      const openers = toList(agentRow?.openers);
-      const opener =
-        callRow.preparedOpenerText?.trim() ||
-        (openers.length > 0 ? openers[0] : null) ||
-        `Hi, this is Alex from ${ctxRow?.companyName || 'our company'}. Quick question — do you have 30 seconds?`;
-
-      const strategy = agentRow?.promptDelta?.trim() || agentRow?.prompt?.trim() || '';
-
-      const prompt = buildAiCallerPrompt({
-        companyName: ctxRow?.companyName ?? '',
-        whatWeSell: ctxRow?.whatWeSell ?? '',
-        targetCustomer: ctxRow?.targetCustomer ?? '',
-        globalValueProps: toList(ctxRow?.globalValueProps),
-        proofPoints: toList(ctxRow?.proofPoints),
-        products: productRows,
-        strategy,
-        opener,
-      });
-
       openaiWs = new WebSocket(
-        'wss://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview',
+        `wss://api.openai.com/v1/realtime?model=${selectedModel}`,
         {
           headers: {
             'Authorization': `Bearer ${this.apiKey}`,
@@ -383,14 +365,40 @@ export class AiCallService implements OnApplicationBootstrap {
         },
       );
 
-      openaiWs.on('open', () => {
-        this.logger.log(`OpenAI Realtime connected for AI call ${cId}`);
+      openaiWs.on('open', async () => {
+        this.logger.log(`OpenAI Realtime connected for AI call ${cId} (model=${selectedModel}, voice=${selectedVoice})`);
+
+        // Context is likely already loaded by now; await just in case
+        const [ctxRow, productRows, agentRow] = await contextPromise;
+
+        const toList = (val: unknown): string[] =>
+          Array.isArray(val) ? val.filter((v): v is string => typeof v === 'string') : [];
+
+        const openers = toList(agentRow?.openers);
+        const opener =
+          callRow.preparedOpenerText?.trim() ||
+          (openers.length > 0 ? openers[0] : null) ||
+          `Hi, this is Alex from ${ctxRow?.companyName || 'our company'}. Quick question — do you have 30 seconds?`;
+
+        const strategy = agentRow?.promptDelta?.trim() || agentRow?.prompt?.trim() || '';
+
+        const prompt = buildAiCallerPrompt({
+          companyName: ctxRow?.companyName ?? '',
+          whatWeSell: ctxRow?.whatWeSell ?? '',
+          targetCustomer: ctxRow?.targetCustomer ?? '',
+          globalValueProps: toList(ctxRow?.globalValueProps),
+          proofPoints: toList(ctxRow?.proofPoints),
+          products: productRows,
+          strategy,
+          opener,
+        });
+
         openaiWs!.send(JSON.stringify({
           type: 'session.update',
           session: {
             modalities: ['text', 'audio'],
             instructions: prompt,
-            voice: 'alloy',
+            voice: selectedVoice,
             input_audio_format: 'pcm16',
             output_audio_format: 'pcm16',
             input_audio_transcription: { model: 'whisper-1', language: 'en' },
@@ -398,7 +406,7 @@ export class AiCallService implements OnApplicationBootstrap {
               type: 'server_vad',
               threshold: 0.5,
               prefix_padding_ms: 300,
-              silence_duration_ms: 800,
+              silence_duration_ms: 600,
             },
           },
         }));
@@ -413,12 +421,11 @@ export class AiCallService implements OnApplicationBootstrap {
         }
 
         switch (event.type) {
-          case 'session.created':
           case 'session.updated': {
+            // Only trigger opener AFTER config is applied (not on session.created)
             if (!sessionReady) {
               sessionReady = true;
-              this.logger.log(`OpenAI session ready for AI call ${cId}`);
-              // Trigger the AI rep's opening line
+              this.logger.log(`OpenAI session configured for AI call ${cId}`);
               openaiWs!.send(JSON.stringify({ type: 'response.create', response: { modalities: ['audio', 'text'] } }));
             }
             break;
@@ -443,7 +450,6 @@ export class AiCallService implements OnApplicationBootstrap {
             if (text) {
               if (!aiSpeechStartedAt) aiSpeechStartedAt = Date.now();
               partialAiText += text;
-              // Emit partial for live view
               this.gateway.emitToCall(cId, 'transcript.partial', {
                 speaker: 'REP',
                 text: partialAiText,
@@ -466,7 +472,6 @@ export class AiCallService implements OnApplicationBootstrap {
           }
 
           case 'conversation.item.input_audio_transcription.completed': {
-            // Prospect's speech transcribed
             const text = event.transcript as string;
             if (text?.trim()) {
               emitTranscript('PROSPECT', text.trim());
@@ -475,7 +480,6 @@ export class AiCallService implements OnApplicationBootstrap {
           }
 
           case 'response.done': {
-            // Extract token usage from completed response for credit billing
             const usage = event.usage as {
               input_tokens?: number;
               output_tokens?: number;
@@ -489,17 +493,15 @@ export class AiCallService implements OnApplicationBootstrap {
               const audioOutput = Number(usage.output_token_details?.audio_tokens ?? 0);
               const textInput = Math.max(0, totalInput - audioInput);
               const textOutput = Math.max(0, totalOutput - audioOutput);
-              // Debit text tokens
               if (textInput > 0 || textOutput > 0) {
                 void this.creditsService.debitForAiUsage(
-                  orgId, 'gpt-4o-mini-realtime-preview', textInput, textOutput,
+                  orgId, selectedModel, textInput, textOutput,
                   'USAGE_LLM_AI_CALLER_REALTIME', { call_id: cId },
                 );
               }
-              // Debit audio tokens (significantly more expensive)
               if (audioInput > 0 || audioOutput > 0) {
                 void this.creditsService.debitForRealtimeAudio(
-                  orgId, 'gpt-4o-mini-realtime-preview', audioInput, audioOutput,
+                  orgId, selectedModel, audioInput, audioOutput,
                   'USAGE_AUDIO_AI_CALLER_REALTIME', { call_id: cId },
                 );
               }

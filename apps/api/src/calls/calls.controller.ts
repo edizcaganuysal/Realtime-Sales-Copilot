@@ -394,30 +394,18 @@ export class TwilioWebhookController {
           .limit(1);
 
         if (callRow?.mode === 'AI_CALLER') {
-          const opener =
-            callRow.preparedOpenerText?.trim() ||
-            'Hi, this is Alex. Quick question — do you have 30 seconds?';
-
-          // Persist opener as first REP transcript line
-          const tsMs = Date.now();
-          void this.db
-            .insert(schema.callTranscript)
-            .values({ callId, tsMs, speaker: 'REP', text: opener, isFinal: true })
-            .catch(() => {});
-          this.gateway.emitToCall(callId, 'transcript.final', {
-            speaker: 'REP',
-            text: opener,
-            tsMs,
-            isFinal: true,
-          });
-
-          const gatherAction = `${base}/calls/ai-gather?callId=${callId}`;
-          this.logger.log(`TwiML AI_CALLER Gather — callId: ${callId}`);
+          // Route AI_CALLER to Realtime API via WebSocket stream
+          // (eliminates 3-4s round-trip delay from old HTTP Gather approach)
+          const wsBase = base.replace(/^https/, 'wss').replace(/^http(?!s)/, 'ws');
+          const streamUrl = `${wsBase}/media-stream`;
+          this.logger.log(`TwiML AI_CALLER stream — callId: ${callId}, streamUrl: ${streamUrl}`);
           return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Joanna-Neural">${escapeXml(opener)}</Say>
-  <Gather input="speech" action="${gatherAction}" speechTimeout="3" speechModel="phone_call" timeout="5" />
-  <Redirect>${gatherAction}</Redirect>
+  <Connect>
+    <Stream url="${streamUrl}" track="both_tracks">
+      <Parameter name="callId" value="${callId}" />
+    </Stream>
+  </Connect>
 </Response>`;
         }
       } catch (err) {

@@ -445,6 +445,8 @@ export class CallsService {
     if (dto.practicePersonaId) contactJson.practicePersonaId = dto.practicePersonaId;
     if (dto.customPersonaPrompt) contactJson.customPersonaPrompt = dto.customPersonaPrompt;
     contactJson.llmModel = llmModel;
+    if (dto.ai_voice) contactJson.aiVoice = dto.ai_voice;
+    if (dto.ai_model) contactJson.aiModel = dto.ai_model;
 
     const call = await this.db.transaction(async (tx) => {
       const [created] = await tx

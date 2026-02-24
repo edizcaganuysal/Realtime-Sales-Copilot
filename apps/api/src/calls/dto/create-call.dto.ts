@@ -1,5 +1,7 @@
 import { IsArray, IsEnum, IsIn, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 import {
+  AI_CALLER_MODELS,
+  AI_CALLER_VOICES,
   CallMode,
   FAST_CALL_MODELS,
   GuidanceLevel,
@@ -65,4 +67,12 @@ export class CreateCallDto {
   @IsOptional()
   @IsIn(FAST_CALL_MODELS)
   llm_model?: string;
+
+  @IsOptional()
+  @IsIn([...AI_CALLER_VOICES])
+  ai_voice?: string;
+
+  @IsOptional()
+  @IsIn([...AI_CALLER_MODELS])
+  ai_model?: string;
 }
