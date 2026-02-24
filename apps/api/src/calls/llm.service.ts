@@ -8,6 +8,17 @@ type ChatOptions = {
   maxTokens?: number;
 };
 
+/**
+ * Result of an LLM call, including token usage for cost-based credit billing.
+ * Every caller receives this so it can pass usage to CreditsService.debitForAiUsage().
+ */
+export type LlmResult = {
+  text: string;
+  model: string;
+  promptTokens: number;
+  completionTokens: number;
+};
+
 @Injectable()
 export class LlmService implements OnModuleInit {
   private readonly logger = new Logger(LlmService.name);
@@ -110,7 +121,7 @@ export class LlmService implements OnModuleInit {
     systemPrompt: string,
     userPrompt: string,
     options: ChatOptions,
-  ): Promise<string> {
+  ): Promise<LlmResult> {
     const client = this.getClient();
     const resp = await client.chat.completions.create({
       model,
@@ -122,18 +133,24 @@ export class LlmService implements OnModuleInit {
       max_completion_tokens: options.maxTokens ?? 512,
       ...(options.jsonMode ? { response_format: { type: 'json_object' } } : {}),
     });
-    return ((resp.choices[0]?.message?.content as string | null | undefined) ?? '').trim();
+    const text = ((resp.choices[0]?.message?.content as string | null | undefined) ?? '').trim();
+    return {
+      text,
+      model,
+      promptTokens: Number(resp.usage?.prompt_tokens ?? 0),
+      completionTokens: Number(resp.usage?.completion_tokens ?? 0),
+    };
   }
 
   /**
    * Fast chat completion using mini-class GPT models for real-time coaching.
-   * Uses low max_tokens and high temperature for snappy responses.
+   * Returns LlmResult with token usage for cost-based credit billing.
    */
   async chatFast(
     systemPrompt: string,
     userPrompt: string,
     options: ChatOptions = {},
-  ): Promise<string> {
+  ): Promise<LlmResult> {
     const selected = this.resolveFastModel(options.model);
     try {
       return await this.runFastCompletion(selected, systemPrompt, userPrompt, options);
@@ -153,10 +170,11 @@ export class LlmService implements OnModuleInit {
     systemPrompt: string,
     userPrompt: string,
     options: ChatOptions = {},
-  ): Promise<string> {
+  ): Promise<LlmResult> {
     const client = this.getClient();
+    const usedModel = options.model ?? this.model;
     const resp = await client.chat.completions.create({
-      model: options.model ?? this.model,
+      model: usedModel,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
@@ -165,7 +183,13 @@ export class LlmService implements OnModuleInit {
       max_completion_tokens: options.maxTokens ?? 512,
       ...(options.jsonMode ? { response_format: { type: 'json_object' } } : {}),
     });
-    return ((resp.choices[0]?.message?.content as string | null | undefined) ?? '').trim();
+    const text = ((resp.choices[0]?.message?.content as string | null | undefined) ?? '').trim();
+    return {
+      text,
+      model: usedModel,
+      promptTokens: Number(resp.usage?.prompt_tokens ?? 0),
+      completionTokens: Number(resp.usage?.completion_tokens ?? 0),
+    };
   }
 
   parseJson<T>(text: string, fallback: T): T {

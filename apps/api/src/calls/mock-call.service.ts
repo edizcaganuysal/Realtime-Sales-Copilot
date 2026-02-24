@@ -13,6 +13,7 @@ import * as schema from '../db/schema';
 import { CallsGateway } from './calls.gateway';
 import { EngineService } from './engine.service';
 import { getPersonaById, PRACTICE_PERSONAS } from './practice-personas';
+import { CreditsService } from '../credits/credits.service';
 
 @Injectable()
 export class MockCallService implements OnApplicationBootstrap {
@@ -24,6 +25,7 @@ export class MockCallService implements OnApplicationBootstrap {
     private readonly gateway: CallsGateway,
     private readonly engineService: EngineService,
     @Inject(DRIZZLE) private readonly db: DrizzleDb,
+    private readonly creditsService: CreditsService,
   ) {}
 
   get available(): boolean {
@@ -83,6 +85,7 @@ export class MockCallService implements OnApplicationBootstrap {
       return;
     }
 
+    const orgId = callRow.orgId;
     const contactJson = (callRow.contactJson ?? {}) as Record<string, unknown>;
     const practicePersonaId = (contactJson.practicePersonaId as string) ?? null;
     const customPersonaPrompt = (contactJson.customPersonaPrompt as string) ?? null;
@@ -478,6 +481,35 @@ export class MockCallService implements OnApplicationBootstrap {
           responseActive = false;
           clearResponseWatchdog();
           clearResponseDoneFallbackTimer();
+
+          // Extract token usage for credit billing
+          const usage = event.usage as {
+            input_tokens?: number;
+            output_tokens?: number;
+            input_token_details?: { audio_tokens?: number; text_tokens?: number };
+            output_token_details?: { audio_tokens?: number; text_tokens?: number };
+          } | undefined;
+          if (usage && orgId) {
+            const totalInput = Number(usage.input_tokens ?? 0);
+            const totalOutput = Number(usage.output_tokens ?? 0);
+            const audioInput = Number(usage.input_token_details?.audio_tokens ?? 0);
+            const audioOutput = Number(usage.output_token_details?.audio_tokens ?? 0);
+            const textInput = Math.max(0, totalInput - audioInput);
+            const textOutput = Math.max(0, totalOutput - audioOutput);
+            if (textInput > 0 || textOutput > 0) {
+              void this.creditsService.debitForAiUsage(
+                orgId, 'gpt-4o-mini-realtime-preview', textInput, textOutput,
+                'USAGE_LLM_MOCK_CALL_REALTIME', { call_id: callId },
+              );
+            }
+            if (audioInput > 0 || audioOutput > 0) {
+              void this.creditsService.debitForRealtimeAudio(
+                orgId, 'gpt-4o-mini-realtime-preview', audioInput, audioOutput,
+                'USAGE_AUDIO_MOCK_CALL_REALTIME', { call_id: callId },
+              );
+            }
+          }
+
           if (partialAiText.trim().length > 0) {
             const fallbackText = partialAiText.trim();
             const fallbackTs = aiSpeechStartedAt ?? Date.now();

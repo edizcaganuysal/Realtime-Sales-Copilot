@@ -76,6 +76,11 @@ type CompanyExtractionResult = {
     competitor_positioning: ExtractedField<string[]>;
     escalation_rules: ExtractedField<string[]>;
     knowledge_base_appendix: ExtractedField<string>;
+    support_faqs: ExtractedField<string[]>;
+    troubleshooting_guides: ExtractedField<string[]>;
+    return_refund_policy: ExtractedField<string>;
+    sla_rules: ExtractedField<string[]>;
+    common_issues: ExtractedField<string[]>;
   };
 };
 
@@ -1674,7 +1679,7 @@ export class IngestService {
         'ALWAYS FILL (use TIER 3/4 if needed): tone_style, sales_strategy, target_customers, target_roles, industries, buying_triggers, discovery_questions, escalation_rules, forbidden_claims, next_steps.',
       user:
         'Given these sources, produce JSON with key fields. Schema:\n' +
-        '{ \"fields\": { \"company_name\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"what_we_sell\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"how_it_works\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"offer_category\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"target_customer\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"target_roles\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"industries\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"buying_triggers\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"disqualifiers\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"global_value_props\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"proof_points\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"case_studies\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"allowed_claims\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"sales_policies\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"forbidden_claims\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"competitors\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"positioning_rules\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"escalation_rules\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"discovery_questions\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"qualification_rubric\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"next_steps\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"knowledge_appendix\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"company_overview\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"target_customers\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"value_props\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"tone_style\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"sales_strategy\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"compliance_and_policies\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"competitor_positioning\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"knowledge_base_appendix\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean} } }\n' +
+        '{ \"fields\": { \"company_name\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"what_we_sell\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"how_it_works\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"offer_category\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"target_customer\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"target_roles\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"industries\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"buying_triggers\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"disqualifiers\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"global_value_props\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"proof_points\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"case_studies\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"allowed_claims\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"sales_policies\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"forbidden_claims\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"competitors\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"positioning_rules\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"escalation_rules\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"discovery_questions\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"qualification_rubric\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"next_steps\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"knowledge_appendix\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"company_overview\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"target_customers\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"value_props\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"tone_style\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"sales_strategy\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"compliance_and_policies\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"competitor_positioning\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"knowledge_base_appendix\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"support_faqs\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"troubleshooting_guides\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"return_refund_policy\": {\"value\": string, \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"sla_rules\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean}, \"common_issues\": {\"value\": string[], \"confidence\": number, \"citations\": string[], \"suggested\": boolean} } }\n' +
         'Rules:\n' +
         '- LANGUAGE: ALL values must be in the dominant language of the source content (Turkish if Turkish sources, English if English). Do NOT translate.\n' +
         '- For array fields, include up to 18 items. Use TIER 3/4 inference to fill arrays when sources are thin.\n' +
@@ -1693,6 +1698,11 @@ export class IngestService {
         '- compliance_and_policies: SALES POLICIES only — booking, payment, cancellation, turnaround. Do NOT include privacy policy or legal boilerplate.\n' +
         '- competitor_positioning: infer a sensible positioning approach for this industry if not stated.\n' +
         '- knowledge_base_appendix: compile all extracted facts not covered by other fields into a useful reference block.\n' +
+        '- support_faqs (TIER 1/2 or 3): Q/A pairs from FAQ pages or help center content. Format each as "Q: question → A: answer". Extract up to 15.\n' +
+        '- troubleshooting_guides (TIER 1/2 or 3): Step-by-step troubleshooting from support docs. Format each as "Issue: description → Steps: step1, step2, step3". Extract up to 10.\n' +
+        '- return_refund_policy (TIER 1/2): Return/refund/cancellation policy text. Extract verbatim if available, empty string if not found.\n' +
+        '- sla_rules (TIER 1/2 or 3): Service level commitments (response times, resolution times). Infer reasonable defaults if not stated.\n' +
+        '- common_issues (TIER 3/4): Commonly reported customer issues for this type of business. Infer from offering type and industry.\n' +
         '- Citations must be source IDs like S1. TIER 3/4 inferred fields have citations=[].\n' +
         this.renderSources(sources),
     }, {
@@ -1759,6 +1769,11 @@ export class IngestService {
       competitor_positioning: competitorPositioning,
       escalation_rules: escalationRules,
       knowledge_base_appendix: this.normalizeStringField(fields.knowledge_base_appendix, valid),
+      support_faqs: this.normalizeStringArrayField(fields.support_faqs, valid),
+      troubleshooting_guides: this.normalizeStringArrayField(fields.troubleshooting_guides, valid),
+      return_refund_policy: this.normalizeStringField(fields.return_refund_policy, valid),
+      sla_rules: this.normalizeStringArrayField(fields.sla_rules, valid),
+      common_issues: this.normalizeStringArrayField(fields.common_issues, valid),
     };
 
     return {
@@ -2304,10 +2319,8 @@ export class IngestService {
     }
 
     if (debit) {
-      const usage = (response as { usage?: { total_tokens?: number; prompt_tokens?: number; completion_tokens?: number } }).usage;
-      const usageTotal = Number(usage?.total_tokens ?? 0);
-      const fallbackTotal = this.estimateTokenCount([input.system, input.user, text]);
-      const totalTokens = Number.isFinite(usageTotal) && usageTotal > 0 ? usageTotal : fallbackTotal;
+      // Extract token usage from OpenAI response for cost-based billing
+      const usage = (response as { usage?: { prompt_tokens?: number; completion_tokens?: number } }).usage;
       const promptTokensRaw = Number(usage?.prompt_tokens ?? 0);
       const completionTokensRaw = Number(usage?.completion_tokens ?? 0);
       const promptTokens =
@@ -2317,19 +2330,15 @@ export class IngestService {
       const completionTokens =
         Number.isFinite(completionTokensRaw) && completionTokensRaw > 0
           ? completionTokensRaw
-          : Math.max(1, totalTokens - promptTokens);
+          : Math.max(1, Math.ceil(text.length / 4));
 
-      await this.creditsService.requireAndDebitByTokens(
+      await this.creditsService.debitForAiUsage(
         debit.orgId,
-        totalTokens,
+        model,
+        promptTokens,
+        completionTokens,
         debit.ledgerType,
-        {
-          ...(debit.metadata ?? {}),
-          model,
-          prompt_tokens: promptTokens,
-          completion_tokens: completionTokens,
-          total_tokens: totalTokens,
-        },
+        debit.metadata ?? {},
       );
     }
 
@@ -2383,6 +2392,11 @@ export class IngestService {
       next_steps: ['tone_style', 'escalation_rules'],
       knowledge_appendix: ['knowledge_base_appendix'],
       sales_strategy: ['sales_strategy', 'tone_style'],
+      support_faqs: ['support_faqs'],
+      troubleshooting_guides: ['troubleshooting_guides'],
+      return_refund_policy: ['return_refund_policy'],
+      sla_rules: ['sla_rules'],
+      common_issues: ['common_issues'],
     };
 
     const readAccepted = (key: string) => {
@@ -2620,6 +2634,35 @@ export class IngestService {
         set: salesPatch,
       })
       .returning();
+
+    // Support context — extract support-specific fields
+    const supportPatch: Partial<typeof schema.supportContext.$inferInsert> = {};
+
+    const supportFaqs = readListCandidate(['support_faqs']);
+    if (supportFaqs.length > 0) supportPatch.supportFaqs = supportFaqs;
+
+    const troubleshootingGuides = readListCandidate(['troubleshooting_guides']);
+    if (troubleshootingGuides.length > 0) supportPatch.troubleshootingGuides = troubleshootingGuides;
+
+    const returnRefundPolicy = readTextCandidate(['return_refund_policy']);
+    if (returnRefundPolicy) supportPatch.returnRefundPolicy = returnRefundPolicy;
+
+    const slaRules = readListCandidate(['sla_rules']);
+    if (slaRules.length > 0) supportPatch.slaRules = slaRules;
+
+    const commonIssues = readListCandidate(['common_issues']);
+    if (commonIssues.length > 0) supportPatch.commonIssues = commonIssues;
+
+    if (Object.keys(supportPatch).length > 0) {
+      supportPatch.updatedAt = new Date();
+      await this.db
+        .insert(schema.supportContext)
+        .values({ orgId, ...supportPatch })
+        .onConflictDoUpdate({
+          target: schema.supportContext.orgId,
+          set: supportPatch,
+        });
+    }
 
     const offeringEntries = Array.isArray(bodyCompany.offerings) ? bodyCompany.offerings : [];
     const createdOfferings: Array<{ id: string; name: string }> = [];

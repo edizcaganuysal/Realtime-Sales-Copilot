@@ -13,6 +13,7 @@ import * as schema from '../db/schema';
 import { CallsGateway } from './calls.gateway';
 import { buildAiCallerPrompt } from './ai-caller.prompt';
 import { twilioToOpenAI, openAIToTwilio } from './audio-utils';
+import { CreditsService } from '../credits/credits.service';
 
 @Injectable()
 export class AiCallService implements OnApplicationBootstrap {
@@ -23,6 +24,7 @@ export class AiCallService implements OnApplicationBootstrap {
     private readonly httpAdapterHost: HttpAdapterHost,
     private readonly gateway: CallsGateway,
     @Inject(DRIZZLE) private readonly db: DrizzleDb,
+    private readonly creditsService: CreditsService,
   ) {}
 
   get available(): boolean {
@@ -208,8 +210,19 @@ export class AiCallService implements OnApplicationBootstrap {
 
       const json = (await response.json()) as {
         choices: Array<{ message: { content: string } }>;
+        usage?: { prompt_tokens?: number; completion_tokens?: number };
       };
       let aiText = json.choices[0]?.message?.content?.trim() ?? '';
+
+      // Debit credits based on actual token usage (fire-and-forget)
+      const promptTokens = Number(json.usage?.prompt_tokens ?? 0);
+      const completionTokens = Number(json.usage?.completion_tokens ?? 0);
+      if (promptTokens > 0 || completionTokens > 0) {
+        void this.creditsService.debitForAiUsage(
+          callRow.orgId, 'gpt-4o-mini', promptTokens, completionTokens,
+          'USAGE_LLM_AI_CALLER_HTTP', { call_id: callId },
+        );
+      }
 
       // Detect [HANGUP] anywhere in the response, then strip it
       const shouldHangup = /\[HANGUP\]/i.test(aiText);
@@ -308,6 +321,8 @@ export class AiCallService implements OnApplicationBootstrap {
         twilioWs.close();
         return;
       }
+
+      const orgId = callRow.orgId;
 
       const [ctxRow, productRows, agentRow] = await Promise.all([
         this.db
@@ -455,6 +470,39 @@ export class AiCallService implements OnApplicationBootstrap {
             const text = event.transcript as string;
             if (text?.trim()) {
               emitTranscript('PROSPECT', text.trim());
+            }
+            break;
+          }
+
+          case 'response.done': {
+            // Extract token usage from completed response for credit billing
+            const usage = event.usage as {
+              input_tokens?: number;
+              output_tokens?: number;
+              input_token_details?: { audio_tokens?: number; text_tokens?: number };
+              output_token_details?: { audio_tokens?: number; text_tokens?: number };
+            } | undefined;
+            if (usage && orgId) {
+              const totalInput = Number(usage.input_tokens ?? 0);
+              const totalOutput = Number(usage.output_tokens ?? 0);
+              const audioInput = Number(usage.input_token_details?.audio_tokens ?? 0);
+              const audioOutput = Number(usage.output_token_details?.audio_tokens ?? 0);
+              const textInput = Math.max(0, totalInput - audioInput);
+              const textOutput = Math.max(0, totalOutput - audioOutput);
+              // Debit text tokens
+              if (textInput > 0 || textOutput > 0) {
+                void this.creditsService.debitForAiUsage(
+                  orgId, 'gpt-4o-mini-realtime-preview', textInput, textOutput,
+                  'USAGE_LLM_AI_CALLER_REALTIME', { call_id: cId },
+                );
+              }
+              // Debit audio tokens (significantly more expensive)
+              if (audioInput > 0 || audioOutput > 0) {
+                void this.creditsService.debitForRealtimeAudio(
+                  orgId, 'gpt-4o-mini-realtime-preview', audioInput, audioOutput,
+                  'USAGE_AUDIO_AI_CALLER_REALTIME', { call_id: cId },
+                );
+              }
             }
             break;
           }

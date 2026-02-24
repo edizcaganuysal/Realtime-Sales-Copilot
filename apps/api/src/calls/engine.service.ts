@@ -5,9 +5,11 @@ import { DRIZZLE, DrizzleDb } from '../db/db.module';
 import * as schema from '../db/schema';
 import { CallsGateway } from './calls.gateway';
 import { LlmService } from './llm.service';
+import type { LlmResult } from './llm.service';
 import { PROFESSIONAL_SALES_CALL_AGENT_PROMPT } from './professional-sales-agent.prompt';
 import { EMPTY_COMPANY_PROFILE_DEFAULTS } from '../org/company-profile.defaults';
 import { DEFAULT_SALES_STRATEGY } from '../org/sales-context.defaults';
+import { CreditsService } from '../credits/credits.service';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -18,6 +20,7 @@ type StageInfo = {
 };
 
 type CallContext = {
+  orgId: string;
   callId: string;
   callMode: string;
   llmModel: FastCallModel;
@@ -336,6 +339,7 @@ export class EngineService implements OnModuleDestroy {
     private readonly gateway: CallsGateway,
     private readonly llm: LlmService,
     @Inject(DRIZZLE) private readonly db: DrizzleDb,
+    private readonly creditsService: CreditsService,
   ) {}
 
   onModuleDestroy() {
@@ -906,12 +910,16 @@ export class EngineService implements OnModuleDestroy {
       `Respond with JSON only: {"suggestions": [${desiredCount === 1 ? '"option 1"' : '"option 1", "option 2"'}]}`;
 
     try {
-      const raw = await this.llm.chatFast(systemPrompt, userPrompt, {
+      const altResult = await this.llm.chatFast(systemPrompt, userPrompt, {
         model: context.llmModel,
         jsonMode: true,
         temperature: 0.62,
       });
-      const parsed = this.llm.parseJson<{ suggestions?: string[] }>(raw, {});
+      void this.creditsService.debitForAiUsage(
+        context.orgId, altResult.model, altResult.promptTokens, altResult.completionTokens,
+        'USAGE_LLM_ENGINE_ALTERNATIVES', { call_id: context.callId },
+      );
+      const parsed = this.llm.parseJson<{ suggestions?: string[] }>(altResult.text, {});
       let texts = this.normalizeSuggestions(
         parsed.suggestions ?? [],
         context.companyProfile,
@@ -1017,6 +1025,7 @@ export class EngineService implements OnModuleDestroy {
     ]);
 
     const context: CallContext = {
+      orgId,
       callId: 'prompt-debug',
       callMode: 'OUTBOUND',
       llmModel: this.llm.defaultFastModel,
@@ -1093,18 +1102,22 @@ export class EngineService implements OnModuleDestroy {
     }
 
     try {
-      const raw = await this.llm.chatFast(systemPrompt, userPrompt, {
+      const debugResult = await this.llm.chatFast(systemPrompt, userPrompt, {
         model: context.llmModel,
         jsonMode: true,
         temperature: 0.48,
       });
+      void this.creditsService.debitForAiUsage(
+        orgId, debugResult.model, debugResult.promptTokens, debugResult.completionTokens,
+        'USAGE_LLM_ENGINE_TICK', { debug: true },
+      );
       const parsed = this.llm.parseJson<{
         primary?: string;
         moment?: string;
         move_type?: string;
         nudges?: string[];
         context_toast?: { title?: string; bullets?: string[] } | null;
-      }>(raw, {});
+      }>(debugResult.text, {});
       const specificityPassed = parsed.primary ? !this.isGenericPrimary(parsed.primary) : null;
       const suggestions = this.normalizeSuggestions(
         parsed.primary ? [parsed.primary] : [],
@@ -1132,7 +1145,7 @@ export class EngineService implements OnModuleDestroy {
         llmAvailable: true,
         systemPrompt,
         userPrompt,
-        raw,
+        raw: debugResult.text,
         slots,
         specificityPassed,
         output: {
@@ -1203,7 +1216,7 @@ export class EngineService implements OnModuleDestroy {
         : FALLBACK_STAGES;
     const checklistItems = resolvedStages.flatMap((s) => s.checklist);
 
-    const result = await this.buildPostCallResult(callId, transcript, checklistItems, notes);
+    const result = await this.buildPostCallResult(callId, transcript, checklistItems, notes, callMeta?.orgId);
 
     await this.db
       .insert(schema.callSummaries)
@@ -1385,6 +1398,7 @@ export class EngineService implements OnModuleDestroy {
     }
 
     state.context = {
+      orgId: call.orgId,
       callId,
       callMode: call.mode,
       llmModel: this.resolveCallLlmModel(call.contactJson),
@@ -2023,7 +2037,13 @@ export class EngineService implements OnModuleDestroy {
         }
       }
 
-      const raw = raceResult !== null && raceResult !== '__skip__' ? raceResult : await llmPromise;
+      const llmResult: LlmResult = raceResult !== null && raceResult !== '__skip__' ? raceResult : await llmPromise;
+      const raw = llmResult.text;
+      // Debit credits for the main LLM tick (fire-and-forget — never blocks suggestions)
+      void this.creditsService.debitForAiUsage(
+        context.orgId, llmResult.model, llmResult.promptTokens, llmResult.completionTokens,
+        'USAGE_LLM_ENGINE_TICK', { call_id: callId },
+      );
       const llmLatency = Date.now() - llmStartedAt;
       state.avgLlmLatencyMs =
         state.avgLlmLatencyMs === 0
@@ -2050,23 +2070,31 @@ export class EngineService implements OnModuleDestroy {
       }>(raw, {});
 
       if (!parsed.primary || !parsed.moment) {
-        const retryRaw = await this.llm.chatFast(
+        const retryResult = await this.llm.chatFast(
           systemPrompt,
           `${userPrompt}\nReturn strictly valid JSON with keys: moment, primary, move_type, nudges, context_toast, ask, used_updates.`,
           { model: context.llmModel, jsonMode: true, temperature: 0.45 },
         );
-        parsed = this.llm.parseJson(retryRaw, parsed);
+        void this.creditsService.debitForAiUsage(
+          context.orgId, retryResult.model, retryResult.promptTokens, retryResult.completionTokens,
+          'USAGE_LLM_ENGINE_TICK', { call_id: callId, retry: true },
+        );
+        parsed = this.llm.parseJson(retryResult.text, parsed);
       }
 
       if (parsed.primary && !this.isOutputComplete(parsed.primary)) {
         const completionRetryPrompt =
           `${userPrompt}\nIMPORTANT: Your last primary was cut off mid-sentence. Finish the sentence. End with . or ? or !. Do not trail off. Return JSON only.`;
-        const completionRaw = await this.llm.chatFast(systemPrompt, completionRetryPrompt, {
+        const completionResult = await this.llm.chatFast(systemPrompt, completionRetryPrompt, {
           model: context.llmModel,
           jsonMode: true,
           temperature: 0.4,
         });
-        const completionParsed = this.llm.parseJson<typeof parsed>(completionRaw, {});
+        void this.creditsService.debitForAiUsage(
+          context.orgId, completionResult.model, completionResult.promptTokens, completionResult.completionTokens,
+          'USAGE_LLM_ENGINE_TICK', { call_id: callId, completion_retry: true },
+        );
+        const completionParsed = this.llm.parseJson<typeof parsed>(completionResult.text, {});
         if (completionParsed.primary && this.isOutputComplete(completionParsed.primary)) {
           parsed = completionParsed;
         } else if (lastProspectLine) {
@@ -2083,12 +2111,16 @@ export class EngineService implements OnModuleDestroy {
           `The prospect said: "${lastProspectLine}". ` +
           `Your new primary MUST reference something specific from that utterance or ask a pointed question using their exact words. ` +
           `Return JSON only.`;
-        const retryRaw = await this.llm.chatFast(systemPrompt, specificityRetryPrompt, {
+        const specificityResult = await this.llm.chatFast(systemPrompt, specificityRetryPrompt, {
           model: context.llmModel,
           jsonMode: true,
           temperature: 0.45,
         });
-        const retryParsed = this.llm.parseJson<typeof parsed>(retryRaw, {});
+        void this.creditsService.debitForAiUsage(
+          context.orgId, specificityResult.model, specificityResult.promptTokens, specificityResult.completionTokens,
+          'USAGE_LLM_ENGINE_TICK', { call_id: callId, specificity_retry: true },
+        );
+        const retryParsed = this.llm.parseJson<typeof parsed>(specificityResult.text, {});
         if (retryParsed.primary && !this.isGenericPrimary(retryParsed.primary)) {
           parsed = retryParsed;
         } else if (lastProspectLine) {
@@ -2664,6 +2696,7 @@ export class EngineService implements OnModuleDestroy {
     transcript: { speaker: string; text: string; tsMs: number }[],
     checklistItems: string[],
     notes: string | null,
+    orgId?: string | null,
   ) {
     const repWords = transcript
       .filter((t) => t.speaker === 'REP')
@@ -2756,7 +2789,13 @@ export class EngineService implements OnModuleDestroy {
     const userPrompt = `Transcript:\n${transcriptText}`;
 
     try {
-      const raw = await this.llm.chat(systemPrompt, userPrompt, { jsonMode: true });
+      const postCallResult = await this.llm.chat(systemPrompt, userPrompt, { jsonMode: true });
+      if (orgId) {
+        void this.creditsService.debitForAiUsage(
+          orgId, postCallResult.model, postCallResult.promptTokens, postCallResult.completionTokens,
+          'USAGE_LLM_ENGINE_TICK', { call_id: callId, post_call: true },
+        );
+      }
       const parsed = this.llm.parseJson<{
         summary?: string;
         keyMoments?: string[];
@@ -2769,7 +2808,7 @@ export class EngineService implements OnModuleDestroy {
           risks?: string[];
         };
         checklistResults?: Record<string, boolean>;
-      }>(raw, {});
+      }>(postCallResult.text, {});
 
       if (parsed.checklistResults) {
         Object.assign(checklistResultsJson, parsed.checklistResults);

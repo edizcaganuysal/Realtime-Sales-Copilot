@@ -69,6 +69,9 @@ const MODEL_LABELS: Record<FastCallModel, string> = {
   'gpt-4o': 'GPT-4o (Fast + higher quality)',
 };
 
+type ModelCostInfo = { id: string; displayName: string; estimatedCreditsPerMin: number };
+
+
 export default function DialerPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -87,6 +90,7 @@ export default function DialerPage() {
   const [form, setForm] = useState({ phoneTo: '', agentId: '', notes: '' });
   const [selectedOpenerIdx, setSelectedOpenerIdx] = useState(0);
   const [llmModel, setLlmModel] = useState<FastCallModel>('gpt-5-mini');
+  const [modelCosts, setModelCosts] = useState<Record<string, ModelCostInfo>>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [showOutOfCreditsModal, setShowOutOfCreditsModal] = useState(false);
@@ -139,6 +143,15 @@ export default function DialerPage() {
         setProducts([]);
       });
     loadPersonas();
+    // Load model cost estimates for display next to model selector
+    fetch('/api/credits/model-costs')
+      .then((r) => r.json())
+      .then((data: { models?: ModelCostInfo[] }) => {
+        const map: Record<string, ModelCostInfo> = {};
+        (data.models ?? []).forEach((m) => { map[m.id] = m; });
+        setModelCosts(map);
+      })
+      .catch(() => { /* ignore — labels will just lack cost info */ });
   }, [loadPersonas]);
 
   const filteredProducts = useMemo(() => {
@@ -325,11 +338,15 @@ export default function DialerPage() {
             value={llmModel}
             onChange={(e) => setLlmModel(e.target.value as FastCallModel)}
           >
-            {FAST_CALL_MODELS.map((model) => (
-              <option key={model} value={model}>
-                {MODEL_LABELS[model]}
-              </option>
-            ))}
+            {FAST_CALL_MODELS.map((model) => {
+              const cost = modelCosts[model];
+              const costLabel = cost ? ` — ~${cost.estimatedCreditsPerMin} credits/min` : '';
+              return (
+                <option key={model} value={model}>
+                  {MODEL_LABELS[model]}{costLabel}
+                </option>
+              );
+            })}
           </select>
           <p className="mt-1 text-[11px] text-slate-500">
             Fast models only. No long-thinking model is used in live coaching.

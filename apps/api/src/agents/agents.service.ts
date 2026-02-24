@@ -12,12 +12,14 @@ import * as schema from '../db/schema';
 import { CreateAgentDto } from './dto/create-agent.dto';
 import { UpdateAgentDto } from './dto/update-agent.dto';
 import { LlmService } from '../calls/llm.service';
+import { CreditsService } from '../credits/credits.service';
 
 @Injectable()
 export class AgentsService {
   constructor(
     @Inject(DRIZZLE) private readonly db: DrizzleDb,
     private readonly llm: LlmService,
+    private readonly creditsService: CreditsService,
   ) {}
 
   async list(user: JwtPayload) {
@@ -152,8 +154,12 @@ export class AgentsService {
         `What we sell: ${whatWeSell}\n` +
         `Agent focus: ${agentContext.slice(0, 300)}\n` +
         `Generate exactly 5 distinct 1-sentence openers (max 18 words each) that start with "Hi" and end with a question. Return a JSON array of 5 strings.`;
-      const raw = await this.llm.chatFast(system, user_prompt);
-      const parsed = this.llm.parseJson<string[]>(raw, []);
+      const openersResult = await this.llm.chatFast(system, user_prompt);
+      void this.creditsService.debitForAiUsage(
+        user.orgId, openersResult.model, openersResult.promptTokens, openersResult.completionTokens,
+        'USAGE_LLM_AGENT_OPENERS', {},
+      );
+      const parsed = this.llm.parseJson<string[]>(openersResult.text, []);
       const openers = Array.isArray(parsed)
         ? parsed
             .map((item) => (typeof item === 'string' ? item.trim() : ''))
@@ -245,8 +251,12 @@ export class AgentsService {
         `\nWrite a sales copilot strategy (4-8 sentences) that specifies: the recommended tone (consultative/direct/challenger), ` +
         `what discovery questions to prioritize, how to handle objections specific to this product and industry, ` +
         `which value props to lead with, and when to push for a next step. Make it specific to this company — not generic advice.`;
-      const raw = await this.llm.chatFast(system, userPrompt);
-      const strategy = raw?.trim() || FALLBACK_STRATEGY;
+      const strategyResult = await this.llm.chatFast(system, userPrompt);
+      void this.creditsService.debitForAiUsage(
+        orgId, strategyResult.model, strategyResult.promptTokens, strategyResult.completionTokens,
+        'USAGE_LLM_AGENT_STRATEGY', {},
+      );
+      const strategy = strategyResult.text?.trim() || FALLBACK_STRATEGY;
       return { strategy };
     } catch {
       return { strategy: FALLBACK_STRATEGY };
