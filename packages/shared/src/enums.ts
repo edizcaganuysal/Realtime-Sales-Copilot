@@ -37,6 +37,37 @@ export enum CallMode {
   OUTBOUND = 'OUTBOUND',
   MOCK = 'MOCK',
   AI_CALLER = 'AI_CALLER',
+  SUPPORT = 'SUPPORT',
+}
+
+export enum SessionStatus {
+  ACTIVE = 'ACTIVE',
+  RESOLVED = 'RESOLVED',
+  ESCALATED = 'ESCALATED',
+}
+
+export enum ActionStatus {
+  PROPOSED = 'PROPOSED',
+  APPROVED = 'APPROVED',
+  RUNNING = 'RUNNING',
+  COMPLETED = 'COMPLETED',
+  FAILED = 'FAILED',
+  REJECTED = 'REJECTED',
+}
+
+export enum ActionRisk {
+  LOW = 'LOW',
+  MEDIUM = 'MEDIUM',
+  HIGH = 'HIGH',
+}
+
+export enum SupportIssueType {
+  BILLING = 'BILLING',
+  TECHNICAL = 'TECHNICAL',
+  ACCOUNT = 'ACCOUNT',
+  SHIPPING = 'SHIPPING',
+  CANCELLATION = 'CANCELLATION',
+  GENERAL = 'GENERAL',
 }
 
 export enum ProductsMode {

@@ -14,6 +14,8 @@ import { CallsGateway } from './calls.gateway';
 import { SttService } from './stt.service';
 import { EngineService } from './engine.service';
 import { AiCallService } from './ai-call.service';
+import { SupportEngineService } from '../support/support-engine.service';
+import { SupportGateway } from '../support/support.gateway';
 
 type TwilioMsg =
   | { event: 'connected' }
@@ -46,9 +48,11 @@ export class MediaStreamService implements OnApplicationBootstrap {
   constructor(
     private readonly httpAdapterHost: HttpAdapterHost,
     private readonly gateway: CallsGateway,
+    private readonly supportGateway: SupportGateway,
     private readonly sttService: SttService,
     private readonly engineService: EngineService,
     private readonly aiCallService: AiCallService,
+    private readonly supportEngine: SupportEngineService,
     @Inject(DRIZZLE) private readonly db: DrizzleDb,
   ) {}
 
@@ -75,8 +79,9 @@ export class MediaStreamService implements OnApplicationBootstrap {
       this.logger.log('Media stream WS connected — waiting for start event to get callId');
 
       let callId: string | null = null;
-      // 'pending' = mode check in-flight; 'ai' = handed to AiCallService; 'outbound' = regular
-      let callMode: 'pending' | 'ai' | 'outbound' = 'outbound';
+      // 'pending' = mode check in-flight; 'ai' = handed to AiCallService; 'outbound' = regular; 'support' = support copilot
+      let callMode: 'pending' | 'ai' | 'outbound' | 'support' = 'outbound';
+      let supportSessionId: string | null = null;
       const deepgramByTrack = new Map<string, WebSocket>();
       const earlyMediaBuffer: Array<{ track: string; audio: Buffer }> = [];
 
@@ -87,8 +92,12 @@ export class MediaStreamService implements OnApplicationBootstrap {
         return 'inbound';
       };
 
-      const speakerForTrack = (rawTrack: string) =>
-        normalizeTrack(rawTrack) === 'outbound' ? 'REP' : 'PROSPECT';
+      const speakerForTrack = (rawTrack: string) => {
+        if (callMode === 'support') {
+          return normalizeTrack(rawTrack) === 'outbound' ? 'AGENT' : 'CUSTOMER';
+        }
+        return normalizeTrack(rawTrack) === 'outbound' ? 'REP' : 'PROSPECT';
+      };
 
       const closeSessions = () => {
         for (const session of deepgramByTrack.values()) {
@@ -111,25 +120,50 @@ export class MediaStreamService implements OnApplicationBootstrap {
             if (!text.trim()) return;
             const tsMs = Date.now();
 
-            this.gateway.emitToCall(
-              callRef,
-              isFinal ? 'transcript.final' : 'transcript.partial',
-              { speaker: spk, text, tsMs, isFinal },
-            );
+            if (callMode === 'support' && supportSessionId) {
+              // Route to support engine + support gateway
+              this.supportGateway.emitToSession(
+                supportSessionId,
+                isFinal ? 'transcript.final' : 'transcript.partial',
+                { speaker: spk, text, tsMs, isFinal },
+              );
 
-            if (!isFinal) {
-              this.engineService.signalSpeaking(callRef, spk, text);
-            }
+              if (!isFinal) {
+                this.supportEngine.signalSpeaking(supportSessionId, spk, text);
+              }
 
-            if (isFinal) {
-              this.engineService.pushTranscript(callRef, spk, text);
-              await this.db.insert(schema.callTranscript).values({
-                callId: callRef,
-                tsMs,
-                speaker: spk,
-                text,
-                isFinal: true,
-              });
+              if (isFinal) {
+                this.supportEngine.pushTranscript(supportSessionId, spk, text);
+                await this.db.insert(schema.supportTranscript).values({
+                  sessionId: supportSessionId,
+                  tsMs,
+                  speaker: spk,
+                  text,
+                  isFinal: true,
+                });
+              }
+            } else {
+              // Regular outbound call
+              this.gateway.emitToCall(
+                callRef,
+                isFinal ? 'transcript.final' : 'transcript.partial',
+                { speaker: spk, text, tsMs, isFinal },
+              );
+
+              if (!isFinal) {
+                this.engineService.signalSpeaking(callRef, spk, text);
+              }
+
+              if (isFinal) {
+                this.engineService.pushTranscript(callRef, spk, text);
+                await this.db.insert(schema.callTranscript).values({
+                  callId: callRef,
+                  tsMs,
+                  speaker: spk,
+                  text,
+                  isFinal: true,
+                });
+              }
             }
           },
         );
@@ -194,12 +228,28 @@ export class MediaStreamService implements OnApplicationBootstrap {
                   this.aiCallService.startFromHandover(ws, resolvedCallId, resolvedStreamSid ?? null);
                   return;
                 }
+
+                if (callRow?.mode === 'SUPPORT') {
+                  // Support call — find the session linked to this call
+                  const [session] = await this.db
+                    .select({ id: schema.supportSessions.id })
+                    .from(schema.supportSessions)
+                    .where(eq(schema.supportSessions.callId, resolvedCallId))
+                    .limit(1);
+                  if (session) {
+                    this.logger.log(`SUPPORT detected on /media-stream — routing to SupportEngine (callId=${resolvedCallId}, sessionId=${session.id})`);
+                    callMode = 'support';
+                    supportSessionId = session.id;
+                  } else {
+                    this.logger.warn(`SUPPORT call ${resolvedCallId} — no session found, treating as OUTBOUND`);
+                  }
+                }
               } catch (err) {
                 this.logger.warn(`Call mode check error: ${(err as Error).message} — treating as OUTBOUND`);
               }
 
-              // Regular outbound call: set up Deepgram
-              callMode = 'outbound';
+              // Regular outbound or support call: set up Deepgram
+              if (callMode !== 'support') callMode = 'outbound';
               this.logger.log(
                 `Media stream identified — call ${resolvedCallId}, tracks=${tracks.join(',')}, STT: ${this.sttService.available}`,
               );

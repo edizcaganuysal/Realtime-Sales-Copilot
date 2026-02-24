@@ -359,3 +359,127 @@ export const callSummaries = pgTable('call_summaries', {
   checklistResultsJson: jsonb('checklist_results_json').default({}).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
+
+/* ─── Support Copilot Tables ─── */
+
+export const sessionStatusEnum = pgEnum('session_status', [
+  'ACTIVE',
+  'RESOLVED',
+  'ESCALATED',
+]);
+
+export const actionStatusEnum = pgEnum('action_status', [
+  'PROPOSED',
+  'APPROVED',
+  'RUNNING',
+  'COMPLETED',
+  'FAILED',
+  'REJECTED',
+]);
+
+export const actionRiskEnum = pgEnum('action_risk', ['LOW', 'MEDIUM', 'HIGH']);
+
+export const supportContext = pgTable('support_context', {
+  orgId: uuid('org_id')
+    .primaryKey()
+    .references(() => orgs.id, { onDelete: 'cascade' }),
+  supportFaqs: jsonb('support_faqs').default([]).notNull(),
+  troubleshootingGuides: jsonb('troubleshooting_guides').default([]).notNull(),
+  returnRefundPolicy: text('return_refund_policy').default(''),
+  slaRules: jsonb('sla_rules').default([]).notNull(),
+  commonIssues: jsonb('common_issues').default([]).notNull(),
+  supportKnowledgeAppendix: text('support_knowledge_appendix').default(''),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const integrations = pgTable('integrations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id')
+    .notNull()
+    .references(() => orgs.id, { onDelete: 'cascade' }),
+  type: text('type').notNull(),
+  name: text('name').notNull(),
+  configJson: jsonb('config_json').default({}).notNull(),
+  status: text('status').default('active').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const actionDefinitions = pgTable('action_definitions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id')
+    .notNull()
+    .references(() => orgs.id, { onDelete: 'cascade' }),
+  integrationId: uuid('integration_id')
+    .notNull()
+    .references(() => integrations.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  description: text('description').notNull(),
+  triggerPhrases: jsonb('trigger_phrases').default([]).notNull(),
+  inputSchema: jsonb('input_schema').default({}).notNull(),
+  executionConfig: jsonb('execution_config').default({}).notNull(),
+  requiresApproval: boolean('requires_approval').default(true).notNull(),
+  riskLevel: actionRiskEnum('risk_level').default('LOW').notNull(),
+  isActive: boolean('is_active').default(true).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const supportSessions = pgTable('support_sessions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id')
+    .notNull()
+    .references(() => orgs.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id),
+  agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'set null' }),
+  status: sessionStatusEnum('status').default('ACTIVE').notNull(),
+  callId: uuid('call_id').references(() => calls.id, { onDelete: 'set null' }),
+  customerJson: jsonb('customer_json').default({}).notNull(),
+  issueCategory: text('issue_category'),
+  coachMemory: jsonb('coach_memory').default({}).notNull(),
+  notes: text('notes').default(''),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+});
+
+export const actionExecutions = pgTable('action_executions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  sessionId: uuid('session_id')
+    .notNull()
+    .references(() => supportSessions.id, { onDelete: 'cascade' }),
+  definitionId: uuid('definition_id')
+    .notNull()
+    .references(() => actionDefinitions.id),
+  status: actionStatusEnum('action_exec_status').default('PROPOSED').notNull(),
+  inputJson: jsonb('input_json').default({}).notNull(),
+  outputJson: jsonb('output_json'),
+  errorMessage: text('error_message'),
+  proposedAt: timestamp('proposed_at', { withTimezone: true }).defaultNow().notNull(),
+  approvedAt: timestamp('approved_at', { withTimezone: true }),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
+});
+
+export const supportTranscript = pgTable('support_transcript', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  sessionId: uuid('session_id')
+    .notNull()
+    .references(() => supportSessions.id, { onDelete: 'cascade' }),
+  tsMs: bigint('ts_ms', { mode: 'number' }).notNull(),
+  speaker: text('speaker').notNull(),
+  text: text('text').notNull(),
+  isFinal: boolean('is_final').default(true).notNull(),
+});
+
+export const supportSuggestions = pgTable('support_suggestions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  sessionId: uuid('session_id')
+    .notNull()
+    .references(() => supportSessions.id, { onDelete: 'cascade' }),
+  tsMs: bigint('ts_ms', { mode: 'number' }).notNull(),
+  kind: suggestionKindEnum('kind').notNull(),
+  rank: integer('rank').default(0).notNull(),
+  text: text('text').notNull(),
+  intent: text('intent'),
+  metaJson: jsonb('meta_json').default({}).notNull(),
+});

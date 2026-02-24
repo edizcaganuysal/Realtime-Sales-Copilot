@@ -30,6 +30,28 @@ type SalesContext = {
   knowledgeAppendix: string;
 };
 
+type SupportContextData = {
+  supportFaqs: string[];
+  troubleshootingGuides: string[];
+  returnRefundPolicy: string;
+  slaRules: string[];
+  commonIssues: string[];
+  supportKnowledgeAppendix: string;
+};
+
+type SupportField = {
+  key: keyof SupportContextData;
+  label: string;
+  helper: string;
+  placeholder: string;
+  type: 'text' | 'bullets' | 'long';
+};
+
+type SupportSection = {
+  title: string;
+  fields: SupportField[];
+};
+
 type Product = {
   id: string;
   name: string;
@@ -105,6 +127,15 @@ const DEFAULT_CONTEXT: SalesContext = {
   discoveryQuestions: [],
   qualificationRubric: [],
   knowledgeAppendix: '',
+};
+
+const DEFAULT_SUPPORT_CONTEXT: SupportContextData = {
+  supportFaqs: [],
+  troubleshootingGuides: [],
+  returnRefundPolicy: '',
+  slaRules: [],
+  commonIssues: [],
+  supportKnowledgeAppendix: '',
 };
 
 const DEFAULT_PRODUCT_FORM: ProductForm = {
@@ -336,6 +367,71 @@ const CONTEXT_SECTIONS: Section[] = [
   },
 ];
 
+const SUPPORT_SECTIONS: SupportSection[] = [
+  {
+    title: 'Section 9 — Support knowledge',
+    fields: [
+      {
+        key: 'supportFaqs',
+        label: 'Support FAQs',
+        helper: 'Common customer questions and answers. One Q/A per line.',
+        placeholder:
+          'Example: How do I reset my password? → Go to Settings > Security > Reset password.\nExample: What is your refund policy? → Full refund within 30 days of purchase.',
+        type: 'bullets',
+      },
+      {
+        key: 'troubleshootingGuides',
+        label: 'Troubleshooting guides',
+        helper: 'Step-by-step troubleshooting for common issues. One guide per line.',
+        placeholder:
+          'Example: Login fails → Check email/password, clear cache, try incognito, reset password if needed.\nExample: Payment declined → Verify card details, check expiry, try alternate payment method.',
+        type: 'bullets',
+      },
+      {
+        key: 'returnRefundPolicy',
+        label: 'Return & refund policy',
+        helper: 'Full return/refund policy text the support copilot can reference.',
+        placeholder:
+          'Example: Full refund within 30 days of purchase. Partial refund (prorated) within 31-90 days. No refunds after 90 days. Refunds processed within 5-7 business days.',
+        type: 'long',
+      },
+      {
+        key: 'slaRules',
+        label: 'SLA rules',
+        helper: 'Service level commitments for support response and resolution times.',
+        placeholder:
+          'Example: First response within 2 hours during business hours\nExample: Critical issues resolved within 4 hours\nExample: Non-critical issues resolved within 24 hours',
+        type: 'bullets',
+      },
+      {
+        key: 'commonIssues',
+        label: 'Common issues',
+        helper: 'Frequently reported issues so the copilot can quickly categorize incoming requests.',
+        placeholder:
+          'Example: Login failures\nExample: Payment declined\nExample: Shipping delays\nExample: Feature not working as expected',
+        type: 'bullets',
+      },
+      {
+        key: 'supportKnowledgeAppendix',
+        label: 'Support knowledge appendix',
+        helper:
+          'Long-form support-specific knowledge the copilot can draw from during sessions.',
+        placeholder:
+          'Add anything specific to support: escalation procedures, warranty details, known bugs, workarounds, internal tools, or customer tiers.\n\nExample: "Premium customers (Tier 1) get priority queue and direct Slack channel. Standard customers use email support with 4-hour SLA."',
+        type: 'long',
+      },
+    ],
+  },
+];
+
+// Sections visible only when mode is 'sales' (hidden in 'support' mode)
+const SALES_ONLY_SECTIONS = new Set([
+  'Section 3 — ICP & fit',
+  'Section 4 — Messaging & proof',
+  'Section 6 — Competitive context',
+  'Section 7 — Discovery & qualification',
+]);
+
 function toLines(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -370,11 +466,18 @@ function fieldRows(type: ContextFieldType) {
 }
 
 export default function ContextPage() {
+  const [mode, setMode] = useState<'all' | 'sales' | 'support'>('all');
+
   const [context, setContext] = useState<SalesContext>(DEFAULT_CONTEXT);
   const [baseline, setBaseline] = useState<SalesContext>(DEFAULT_CONTEXT);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<'saved' | 'error' | null>(null);
+
+  const [supportCtx, setSupportCtx] = useState<SupportContextData>(DEFAULT_SUPPORT_CONTEXT);
+  const [supportBaseline, setSupportBaseline] = useState<SupportContextData>(DEFAULT_SUPPORT_CONTEXT);
+  const [supportSaving, setSupportSaving] = useState(false);
+  const [supportStatus, setSupportStatus] = useState<'saved' | 'error' | null>(null);
 
   const [offerings, setOfferings] = useState<Product[]>([]);
   const [offeringsLoading, setOfferingsLoading] = useState(true);
@@ -399,6 +502,11 @@ export default function ContextPage() {
   const dirty = useMemo(
     () => JSON.stringify(context) !== JSON.stringify(baseline),
     [baseline, context],
+  );
+
+  const supportDirty = useMemo(
+    () => JSON.stringify(supportCtx) !== JSON.stringify(supportBaseline),
+    [supportBaseline, supportCtx],
   );
 
   // Completeness: track the 5 fields most critical for copilot quality
@@ -430,15 +538,17 @@ export default function ContextPage() {
 
   useEffect(() => {
     async function bootstrap() {
-      const [contextRes, productsRes, aiStatusRes] = await Promise.all([
+      const [contextRes, productsRes, aiStatusRes, supportRes] = await Promise.all([
         fetch('/api/org/sales-context', { cache: 'no-store' }),
         fetch('/api/products', { cache: 'no-store' }),
         fetch('/api/ai/fields/status', { cache: 'no-store' }),
+        fetch('/api/support/context', { cache: 'no-store' }),
       ]);
 
       const contextData = await contextRes.json().catch(() => ({}));
       const productsData = await productsRes.json().catch(() => []);
       const aiData = await aiStatusRes.json().catch(() => ({ enabled: false }));
+      const supportData = await supportRes.json().catch(() => ({}));
 
       const nextContext: SalesContext = {
         ...DEFAULT_CONTEXT,
@@ -474,8 +584,19 @@ export default function ContextPage() {
           : [],
       };
 
+      const nextSupport: SupportContextData = {
+        supportFaqs: Array.isArray(supportData?.supportFaqs) ? supportData.supportFaqs : [],
+        troubleshootingGuides: Array.isArray(supportData?.troubleshootingGuides) ? supportData.troubleshootingGuides : [],
+        returnRefundPolicy: supportData?.returnRefundPolicy ?? '',
+        slaRules: Array.isArray(supportData?.slaRules) ? supportData.slaRules : [],
+        commonIssues: Array.isArray(supportData?.commonIssues) ? supportData.commonIssues : [],
+        supportKnowledgeAppendix: supportData?.supportKnowledgeAppendix ?? '',
+      };
+
       setContext(nextContext);
       setBaseline(nextContext);
+      setSupportCtx(nextSupport);
+      setSupportBaseline(nextSupport);
       setOfferings(Array.isArray(productsData) ? productsData : []);
       setAiEnabled(Boolean(aiData?.enabled));
       setAiMessage(typeof aiData?.message === 'string' ? aiData.message : '');
@@ -553,6 +674,84 @@ export default function ContextPage() {
     setBaseline(nextContext);
     setStatus('saved');
     setTimeout(() => setStatus(null), 3000);
+  }
+
+  function setSupportField(key: keyof SupportContextData, value: string) {
+    setSupportCtx((prev) => {
+      const current = prev[key];
+      if (Array.isArray(current)) {
+        return { ...prev, [key]: fromLines(value) };
+      }
+      return { ...prev, [key]: value };
+    });
+  }
+
+  async function handleSaveSupportContext() {
+    setSupportSaving(true);
+    setSupportStatus(null);
+
+    const res = await fetch('/api/support/context', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(supportCtx),
+    });
+
+    const saved = await res.json().catch(() => supportCtx);
+    setSupportSaving(false);
+
+    if (!res.ok) {
+      setSupportStatus('error');
+      setTimeout(() => setSupportStatus(null), 3000);
+      return;
+    }
+
+    const nextSupport: SupportContextData = {
+      supportFaqs: Array.isArray(saved?.supportFaqs) ? saved.supportFaqs : [],
+      troubleshootingGuides: Array.isArray(saved?.troubleshootingGuides) ? saved.troubleshootingGuides : [],
+      returnRefundPolicy: saved?.returnRefundPolicy ?? '',
+      slaRules: Array.isArray(saved?.slaRules) ? saved.slaRules : [],
+      commonIssues: Array.isArray(saved?.commonIssues) ? saved.commonIssues : [],
+      supportKnowledgeAppendix: saved?.supportKnowledgeAppendix ?? '',
+    };
+
+    setSupportCtx(nextSupport);
+    setSupportBaseline(nextSupport);
+    setSupportStatus('saved');
+    setTimeout(() => setSupportStatus(null), 3000);
+  }
+
+  function toSupportInputValue(key: keyof SupportContextData): string {
+    const value = supportCtx[key];
+    if (Array.isArray(value)) return value.join('\n');
+    return (value as string) ?? '';
+  }
+
+  function renderSupportField(field: SupportField) {
+    const value = toSupportInputValue(field.key);
+    return (
+      <section key={field.key} className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+        <div className="mb-2">
+          <h3 className="text-sm font-medium text-white">{field.label}</h3>
+          <p className="mt-0.5 text-xs text-slate-500">{field.helper}</p>
+        </div>
+        {field.type === 'text' ? (
+          <input
+            className={INPUT}
+            value={value}
+            onChange={(e) => setSupportField(field.key, e.target.value)}
+            placeholder={field.placeholder}
+          />
+        ) : (
+          <textarea
+            rows={field.type === 'long' ? 5 : 4}
+            className={`${INPUT} resize-y`}
+            value={value}
+            onChange={(e) => setSupportField(field.key, e.target.value)}
+            placeholder={field.placeholder}
+          />
+        )}
+      </section>
+    );
   }
 
   async function runContextAiAction(fieldKey: keyof SalesContext, mode: 'draft' | 'improve') {
@@ -989,7 +1188,7 @@ export default function ContextPage() {
         <div>
           <h1 className="text-lg font-semibold text-white">Context</h1>
           <p className="mt-1 text-sm text-slate-500">
-            Complete sales context for live calls, objections, proof, safety, and next steps.
+            Knowledge base for sales and support copilots.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -1002,8 +1201,25 @@ export default function ContextPage() {
         </div>
       </div>
 
-      {/* Completeness banner */}
-      {isContextEmpty ? (
+      {/* Mode toggle */}
+      <div className="mb-6 flex gap-1 rounded-lg border border-slate-700 bg-slate-800/60 p-1 w-fit">
+        {(['all', 'sales', 'support'] as const).map((m) => (
+          <button
+            key={m}
+            onClick={() => setMode(m)}
+            className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+              mode === m
+                ? 'bg-sky-600 text-white'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            {m === 'all' ? 'All' : m === 'sales' ? 'Sales only' : 'Support only'}
+          </button>
+        ))}
+      </div>
+
+      {/* Completeness banner — sales context */}
+      {mode !== 'support' && isContextEmpty ? (
         <div className="mb-6 flex items-center justify-between gap-4 rounded-xl border border-sky-500/30 bg-sky-500/10 px-5 py-4">
           <div>
             <p className="text-sm font-medium text-sky-200">Get started in 2 minutes</p>
@@ -1018,7 +1234,7 @@ export default function ContextPage() {
             Auto-fill from website
           </Link>
         </div>
-      ) : completenessScore < 5 ? (
+      ) : mode !== 'support' && completenessScore < 5 ? (
         <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 px-5 py-3">
           <div className="flex items-center justify-between gap-3">
             <p className="text-sm text-amber-200">
@@ -1034,15 +1250,15 @@ export default function ContextPage() {
             </span>
           </div>
         </div>
-      ) : (
+      ) : mode !== 'support' ? (
         <div className="mb-6 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-5 py-3">
           <p className="text-sm text-emerald-200">
             <span className="font-medium">5/5 key fields complete</span> — your copilot has everything it needs for quality suggestions.
           </p>
         </div>
-      )}
+      ) : null}
 
-      <section className="mb-5 rounded-xl border border-slate-800 bg-slate-900 p-4">
+      {mode !== 'support' && <section className="mb-5 rounded-xl border border-slate-800 bg-slate-900 p-4">
         <div className="mb-3 flex items-center justify-between gap-3">
           <h2 className="text-sm font-semibold text-white">Section 2 — Offerings</h2>
           <button
@@ -1109,31 +1325,63 @@ export default function ContextPage() {
               ))}
           </div>
         )}
-      </section>
+      </section>}
 
-      <div className="space-y-5">
-        {CONTEXT_SECTIONS.map((section) => (
-          <section key={section.title} className="space-y-3">
-            <h2 className="text-sm font-semibold text-slate-200">{section.title}</h2>
-            <div className="space-y-3">{section.fields.map((field) => renderContextField(field))}</div>
-          </section>
-        ))}
-      </div>
+      {/* Sales context sections */}
+      {mode !== 'support' && (
+        <div className="space-y-5">
+          {CONTEXT_SECTIONS.filter(
+            (section) => mode === 'all' || !SALES_ONLY_SECTIONS.has(section.title),
+          ).map((section) => (
+            <section key={section.title} className="space-y-3">
+              <h2 className="text-sm font-semibold text-slate-200">{section.title}</h2>
+              <div className="space-y-3">{section.fields.map((field) => renderContextField(field))}</div>
+            </section>
+          ))}
+        </div>
+      )}
 
-      <div className="mt-5 flex flex-wrap items-center gap-3">
-        <button
-          type="button"
-          onClick={() => void handleSaveContext()}
-          disabled={saving || !dirty}
-          className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-40"
-        >
-          {saving ? 'Saving...' : 'Save context'}
-        </button>
-        {status === 'saved' ? <span className="text-sm text-sky-400">Saved</span> : null}
-        {status === 'error' ? <span className="text-sm text-red-400">Failed to save</span> : null}
-        {aiError ? <span className="text-sm text-red-400">{aiError}</span> : null}
-        {!aiEnabled && aiMessage ? <span className="text-sm text-amber-300">{aiMessage}</span> : null}
-      </div>
+      {mode !== 'support' && (
+        <div className="mt-5 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => void handleSaveContext()}
+            disabled={saving || !dirty}
+            className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-40"
+          >
+            {saving ? 'Saving...' : 'Save context'}
+          </button>
+          {status === 'saved' ? <span className="text-sm text-sky-400">Saved</span> : null}
+          {status === 'error' ? <span className="text-sm text-red-400">Failed to save</span> : null}
+          {aiError ? <span className="text-sm text-red-400">{aiError}</span> : null}
+          {!aiEnabled && aiMessage ? <span className="text-sm text-amber-300">{aiMessage}</span> : null}
+        </div>
+      )}
+
+      {/* Support context sections */}
+      {mode !== 'sales' && (
+        <div className={mode !== 'support' ? 'mt-8 space-y-5' : 'space-y-5'}>
+          {SUPPORT_SECTIONS.map((section) => (
+            <section key={section.title} className="space-y-3">
+              <h2 className="text-sm font-semibold text-slate-200">{section.title}</h2>
+              <div className="space-y-3">{section.fields.map((field) => renderSupportField(field))}</div>
+            </section>
+          ))}
+
+          <div className="mt-5 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={() => void handleSaveSupportContext()}
+              disabled={supportSaving || !supportDirty}
+              className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-40"
+            >
+              {supportSaving ? 'Saving...' : 'Save support context'}
+            </button>
+            {supportStatus === 'saved' ? <span className="text-sm text-sky-400">Saved</span> : null}
+            {supportStatus === 'error' ? <span className="text-sm text-red-400">Failed to save</span> : null}
+          </div>
+        </div>
+      )}
 
       {offeringModalOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">

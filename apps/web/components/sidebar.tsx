@@ -12,6 +12,7 @@ import {
   Settings,
   LogOut,
   Bot,
+  Headset,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { MeResponse } from '@live-sales-coach/shared';
@@ -20,6 +21,7 @@ const TOP_NAV = [
   { href: '/app/home', label: 'Home', icon: Home },
   { href: '/app/calls', label: 'Calls', icon: PhoneCall },
   { href: '/app/ai-calls', label: 'AI Calls', icon: Bot },
+  { href: '/app/support', label: 'Support', icon: Headset },
   { href: '/app/agents', label: 'Strategy', icon: Target },
   { href: '/app/context', label: 'Context', icon: Building2 },
   { href: '/app/billing', label: 'Billing', icon: CreditCard },

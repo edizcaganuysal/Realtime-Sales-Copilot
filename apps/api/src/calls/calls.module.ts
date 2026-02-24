@@ -10,9 +10,10 @@ import { MediaStreamService } from './media-stream.service';
 import { MockCallService } from './mock-call.service';
 import { AiCallService } from './ai-call.service';
 import { CreditsModule } from '../credits/credits.module';
+import { SupportModule } from '../support/support.module';
 
 @Module({
-  imports: [CreditsModule],
+  imports: [CreditsModule, SupportModule],
   controllers: [TwilioWebhookController, CallsController],
   providers: [
     CallsService,
