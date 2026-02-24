@@ -198,7 +198,7 @@ export class AiCallService implements OnApplicationBootstrap {
         body: JSON.stringify({
           model: 'gpt-4o-mini',
           messages,
-          max_tokens: 80,
+          max_completion_tokens: 80,
           temperature: 0.7,
         }),
       });
