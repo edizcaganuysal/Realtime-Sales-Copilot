@@ -9,7 +9,6 @@ import {
   ChevronRight,
   Plus,
   Plug,
-  Settings2,
   Trash2,
   Zap,
 } from 'lucide-react';

@@ -106,10 +106,9 @@ export default function SupportPage() {
                 </span>
               </td>
               <td className="px-5 py-3">
-                <StatusBadge
-                  variant={STATUS_VARIANT[session.status] ?? 'neutral'}
-                  label={session.status}
-                />
+                <StatusBadge variant={STATUS_VARIANT[session.status] ?? 'neutral'}>
+                  {session.status}
+                </StatusBadge>
               </td>
               <td className="px-5 py-3 text-slate-400 text-xs">
                 {session.issueCategory ?? '\u2014'}

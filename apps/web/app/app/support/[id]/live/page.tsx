@@ -4,11 +4,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { io, Socket } from 'socket.io-client';
 import {
-  AlertTriangle,
   CheckCircle2,
   Headset,
   Loader2,
-  MessageSquare,
   Play,
   X,
   XCircle,
