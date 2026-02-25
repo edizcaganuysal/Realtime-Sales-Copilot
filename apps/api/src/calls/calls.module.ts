@@ -9,6 +9,7 @@ import { LlmService } from './llm.service';
 import { MediaStreamService } from './media-stream.service';
 import { MockCallService } from './mock-call.service';
 import { AiCallService } from './ai-call.service';
+import { ProspectSimulatorService } from './prospect-simulator.service';
 import { CreditsModule } from '../credits/credits.module';
 import { SupportModule } from '../support/support.module';
 import { EmbeddingModule } from '../embeddings/embedding.module';
@@ -26,6 +27,7 @@ import { EmbeddingModule } from '../embeddings/embedding.module';
     MediaStreamService,
     MockCallService,
     AiCallService,
+    ProspectSimulatorService,
   ],
 })
 export class CallsModule {}

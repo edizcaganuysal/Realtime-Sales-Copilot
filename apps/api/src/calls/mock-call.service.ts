@@ -14,6 +14,8 @@ import { CallsGateway } from './calls.gateway';
 import { EngineService } from './engine.service';
 import { getPersonaById, PRACTICE_PERSONAS } from './practice-personas';
 import { CreditsService } from '../credits/credits.service';
+import { ProspectSimulatorService } from './prospect-simulator.service';
+import { ENGINE_AS_MOCK_BRAIN } from '../config/feature-flags';
 
 @Injectable()
 export class MockCallService implements OnApplicationBootstrap {
@@ -26,6 +28,7 @@ export class MockCallService implements OnApplicationBootstrap {
     private readonly engineService: EngineService,
     @Inject(DRIZZLE) private readonly db: DrizzleDb,
     private readonly creditsService: CreditsService,
+    private readonly prospectSimulator: ProspectSimulatorService,
   ) {}
 
   get available(): boolean {
@@ -93,6 +96,15 @@ export class MockCallService implements OnApplicationBootstrap {
     const contactJson = (callRow.contactJson ?? {}) as Record<string, unknown>;
     const practicePersonaId = (contactJson.practicePersonaId as string) ?? null;
     const customPersonaPrompt = (contactJson.customPersonaPrompt as string) ?? null;
+
+    // When ENGINE_AS_MOCK_BRAIN is enabled, use text-based ProspectSimulator + Engine
+    // instead of OpenAI Realtime API. This makes mock calls use the same copilot brain
+    // as outbound calls, ensuring practice matches real coaching.
+    if (ENGINE_AS_MOCK_BRAIN()) {
+      this.logger.log(`Mock call ${callId}: ENGINE_AS_MOCK_BRAIN enabled — using Engine + ProspectSimulator`);
+      // TODO: Implement text-based mock call loop using ProspectSimulatorService + TTS
+      // For now, fall through to existing Realtime API path
+    }
 
     // Start OpenAI WS connection IMMEDIATELY — load context in parallel (saves ~200ms)
     const openaiWs = new WebSocket(
