@@ -18,7 +18,11 @@
     "db:studio": "drizzle-kit studio"
   },
   "jest": {
-    "moduleFileExtensions": ["js", "json", "ts"],
+    "moduleFileExtensions": [
+      "js",
+      "json",
+      "ts"
+    ],
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
@@ -53,7 +57,8 @@
     "rxjs": "^7.8.1",
     "socket.io": "^4.8.3",
     "twilio": "^5.12.1",
-    "ws": "^8.19.0"
+    "ws": "^8.19.0",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@nestjs/cli": "^10.4.0",
