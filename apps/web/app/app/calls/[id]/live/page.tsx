@@ -808,6 +808,31 @@ export default function LiveCallPage() {
       setDebugPayload(data);
     });
 
+    // Unified engine.tick event (new schema — PR 3+)
+    // Reads new keys (say, intent, reason) with fallback to old keys (primary, moment, move_type).
+    // This listener coexists with individual event listeners above for backward compatibility.
+    socket.on(
+      'engine.tick',
+      (data: {
+        say?: string;
+        intent?: string;
+        reason?: string;
+        nudges?: string[];
+        context_toast?: { title: string; bullets: string[] } | null;
+        primary?: string;
+        moment?: string;
+        suggestions?: string[];
+        cards?: string[];
+      }) => {
+        const primary = data.say ?? data.primary ?? '';
+        if (!primary) return;
+        const momentVal = data.reason ?? data.moment ?? '';
+        if (momentVal) {
+          setMomentTag(momentVal);
+        }
+      },
+    );
+
     socket.on('call.status', (data: { status: string; startedAt: string | null }) => {
       setCallStatus(data.status);
       setCall((prev) => {
