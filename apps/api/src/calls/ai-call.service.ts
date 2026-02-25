@@ -15,6 +15,7 @@ import { CallsGateway } from './calls.gateway';
 import { buildAiCallerPrompt } from './ai-caller.prompt';
 import { twilioToOpenAI, openAIToTwilio } from './audio-utils';
 import { CreditsService } from '../credits/credits.service';
+import { ENGINE_AS_AI_CALLER_BRAIN } from '../config/feature-flags';
 
 @Injectable()
 export class AiCallService implements OnApplicationBootstrap {
@@ -307,6 +308,15 @@ export class AiCallService implements OnApplicationBootstrap {
   }
 
   private handleAiCallSession(twilioWs: WebSocket, initialCallId: string | null = null, initialStreamSid: string | null = null) {
+    // When ENGINE_AS_AI_CALLER_BRAIN is enabled, Realtime handles audio I/O only,
+    // and Engine.tick() decides what to say each turn. This ensures the AI Caller
+    // uses the same copilot brain as outbound coaching.
+    if (ENGINE_AS_AI_CALLER_BRAIN()) {
+      this.logger.log(`AI call: ENGINE_AS_AI_CALLER_BRAIN enabled — Engine will decide responses`);
+      // TODO: Implement Engine-driven response loop with Realtime as voice-only layer
+      // For now, fall through to existing direct Realtime conversation
+    }
+
     let callId: string | null = initialCallId;
     let streamSid: string | null = initialStreamSid;
     let openaiWs: WebSocket | null = null;
