@@ -9,7 +9,29 @@ import {
   bigint,
   jsonb,
   timestamp,
+  customType,
 } from 'drizzle-orm/pg-core';
+
+// ─── Custom pgvector type ────────────────────────────────────────────────────
+// Maps PostgreSQL `vector(N)` columns to TypeScript `number[]`.
+// Used by embedding_chunks for semantic RAG retrieval.
+
+export const vector = customType<{ data: number[]; driverData: string }>({
+  dataType() {
+    return 'vector(1536)';
+  },
+  toDriver(value: number[]): string {
+    return `[${value.join(',')}]`;
+  },
+  fromDriver(value: string): number[] {
+    // pgvector returns "[0.1,0.2,...]" string format
+    return value
+      .replace(/^\[/, '')
+      .replace(/\]$/, '')
+      .split(',')
+      .map(Number);
+  },
+});
 
 export const roleEnum = pgEnum('role', ['ADMIN', 'MANAGER', 'REP']);
 
@@ -482,4 +504,22 @@ export const supportSuggestions = pgTable('support_suggestions', {
   text: text('text').notNull(),
   intent: text('intent'),
   metaJson: jsonb('meta_json').default({}).notNull(),
+});
+
+// ─── RAG: Embedding Chunks ──────────────────────────────────────────────────
+
+export const embeddingChunks = pgTable('embedding_chunks', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id')
+    .notNull()
+    .references(() => orgs.id, { onDelete: 'cascade' }),
+  sourceType: text('source_type').notNull(),  // 'sales_context' | 'product' | 'support_context' | 'knowledge'
+  sourceId: text('source_id'),                 // product.id, agent.id, or null
+  field: text('field').notNull(),              // 'proofPoints', 'valueProps', etc.
+  chunkText: text('chunk_text').notNull(),
+  chunkIndex: integer('chunk_index').notNull().default(0),
+  embedding: vector('embedding').notNull(),
+  metadata: jsonb('metadata').default({}).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });

@@ -5,6 +5,7 @@ import {
   InternalServerErrorException,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import OpenAI from 'openai';
 import { and, eq } from 'drizzle-orm';
@@ -13,6 +14,7 @@ import { DRIZZLE, DrizzleDb } from '../db/db.module';
 import * as schema from '../db/schema';
 import { EMPTY_COMPANY_PROFILE_DEFAULTS } from '../org/company-profile.defaults';
 import { CreditsService } from '../credits/credits.service';
+import { EmbeddingService } from '../embeddings/embedding.service';
 import { CreateWebsiteIngestDto } from './dto/create-website-ingest.dto';
 import { QualityCompanyDto } from './dto/quality-company.dto';
 import { QualityProductDto } from './dto/quality-product.dto';
@@ -156,6 +158,7 @@ export class IngestService {
   constructor(
     @Inject(DRIZZLE) private readonly db: DrizzleDb,
     private readonly creditsService: CreditsService,
+    @Optional() private readonly embeddingService?: EmbeddingService,
   ) {}
 
   async queueWebsiteJob(
@@ -2690,6 +2693,13 @@ export class IngestService {
       createdOfferings.push(inserted);
     }
 
+    // Async embedding rebuild — fire-and-forget after ingest apply
+    if (this.embeddingService) {
+      void this.embeddingService.rebuildOrgEmbeddings(orgId).catch((err) => {
+        this.logger.warn(`Embedding rebuild failed for org ${orgId}: ${(err as Error).message}`);
+      });
+    }
+
     return {
       profile: saved,
       salesContext: savedContext,
@@ -2744,6 +2754,13 @@ export class IngestService {
         .returning({ id: schema.products.id, name: schema.products.name });
 
       created.push(inserted);
+    }
+
+    // Async embedding rebuild — fire-and-forget after product ingest
+    if (this.embeddingService) {
+      void this.embeddingService.rebuildOrgEmbeddings(orgId).catch((err) => {
+        this.logger.warn(`Embedding rebuild failed for org ${orgId}: ${(err as Error).message}`);
+      });
     }
 
     return { created };

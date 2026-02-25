@@ -1,4 +1,4 @@
-import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { and, asc, desc, eq } from 'drizzle-orm';
 import { DRIZZLE, DrizzleDb } from '../db/db.module';
 import * as schema from '../db/schema';
@@ -9,10 +9,16 @@ import { UpdateSalesContextDto } from './dto/update-sales-context.dto';
 import { SubscribePlanDto } from './dto/subscribe-plan.dto';
 import { AdjustCreditsDto } from './dto/adjust-credits.dto';
 import { DEFAULT_SALES_STRATEGY } from './sales-context.defaults';
+import { EmbeddingService } from '../embeddings/embedding.service';
 
 @Injectable()
 export class OrgService {
-  constructor(@Inject(DRIZZLE) private readonly db: DrizzleDb) {}
+  private readonly logger = new Logger(OrgService.name);
+
+  constructor(
+    @Inject(DRIZZLE) private readonly db: DrizzleDb,
+    @Optional() private readonly embeddingService?: EmbeddingService,
+  ) {}
 
   private normalizeTextArray(value: unknown) {
     if (!Array.isArray(value)) return [];
@@ -259,6 +265,13 @@ export class OrgService {
       })
       .returning();
 
+    // Async embedding rebuild — fire-and-forget, never block the response
+    if (this.embeddingService) {
+      void this.embeddingService.rebuildOrgEmbeddings(orgId).catch((err) => {
+        this.logger.warn(`Embedding rebuild failed for org ${orgId}: ${(err as Error).message}`);
+      });
+    }
+
     return updated;
   }
 
@@ -386,6 +399,13 @@ export class OrgService {
         set: patch,
       })
       .returning();
+
+    // Async embedding rebuild — fire-and-forget, never block the response
+    if (this.embeddingService) {
+      void this.embeddingService.rebuildOrgEmbeddings(orgId).catch((err) => {
+        this.logger.warn(`Embedding rebuild failed for org ${orgId}: ${(err as Error).message}`);
+      });
+    }
 
     return updated;
   }

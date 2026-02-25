@@ -96,6 +96,16 @@ const MODEL_COSTS: Record<string, ModelCost> = {
     realtimeAudioInputPerToken: 40e-6,
     realtimeAudioOutputPerToken: 80e-6,
   },
+  'text-embedding-3-small': {
+    inputPerToken: 0.02e-6,   // $0.02 per 1M tokens
+    outputPerToken: 0,         // embeddings have no output tokens
+    displayName: 'Embedding (Small)',
+  },
+  'text-embedding-3-large': {
+    inputPerToken: 0.13e-6,   // $0.13 per 1M tokens
+    outputPerToken: 0,
+    displayName: 'Embedding (Large)',
+  },
 };
 
 // ─── Constants ──────────────────────────────────────────────────────────────────

@@ -2,17 +2,25 @@ import {
   BadRequestException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { and, asc, eq } from 'drizzle-orm';
 import { DRIZZLE, DrizzleDb } from '../db/db.module';
 import * as schema from '../db/schema';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
+import { EmbeddingService } from '../embeddings/embedding.service';
 
 @Injectable()
 export class ProductsService {
-  constructor(@Inject(DRIZZLE) private readonly db: DrizzleDb) {}
+  private readonly logger = new Logger(ProductsService.name);
+
+  constructor(
+    @Inject(DRIZZLE) private readonly db: DrizzleDb,
+    @Optional() private readonly embeddingService?: EmbeddingService,
+  ) {}
 
   private toStringArray(input: unknown): string[] {
     if (!Array.isArray(input)) return [];
@@ -119,6 +127,8 @@ export class ProductsService {
         orgId,
       })
       .returning();
+
+    this.triggerEmbeddingRebuild(orgId);
     return created;
   }
 
@@ -147,6 +157,7 @@ export class ProductsService {
       .where(and(eq(schema.products.id, id), eq(schema.products.orgId, orgId)))
       .returning();
 
+    this.triggerEmbeddingRebuild(orgId);
     return updated;
   }
 
@@ -157,6 +168,15 @@ export class ProductsService {
       .returning({ id: schema.products.id });
 
     if (!deleted) throw new NotFoundException('Product not found');
+    this.triggerEmbeddingRebuild(orgId);
     return { id: deleted.id };
+  }
+
+  private triggerEmbeddingRebuild(orgId: string) {
+    if (this.embeddingService) {
+      void this.embeddingService.rebuildOrgEmbeddings(orgId).catch((err) => {
+        this.logger.warn(`Embedding rebuild failed for org ${orgId}: ${(err as Error).message}`);
+      });
+    }
   }
 }
