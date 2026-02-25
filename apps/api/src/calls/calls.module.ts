@@ -11,9 +11,10 @@ import { MockCallService } from './mock-call.service';
 import { AiCallService } from './ai-call.service';
 import { CreditsModule } from '../credits/credits.module';
 import { SupportModule } from '../support/support.module';
+import { EmbeddingModule } from '../embeddings/embedding.module';
 
 @Module({
-  imports: [CreditsModule, SupportModule],
+  imports: [CreditsModule, SupportModule, EmbeddingModule],
   controllers: [TwilioWebhookController, CallsController],
   providers: [
     CallsService,

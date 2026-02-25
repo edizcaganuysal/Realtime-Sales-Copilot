@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleDestroy, Optional } from '@nestjs/common';
 import { and, asc, eq } from 'drizzle-orm';
 import { FAST_CALL_MODELS, ProductsMode, type FastCallModel } from '@live-sales-coach/shared';
 import { DRIZZLE, DrizzleDb } from '../db/db.module';
@@ -9,6 +9,9 @@ import type { LlmResult } from './llm.service';
 import { PROFESSIONAL_SALES_CALL_AGENT_PROMPT } from './professional-sales-agent.prompt';
 import { EMPTY_COMPANY_PROFILE_DEFAULTS } from '../org/company-profile.defaults';
 import { DEFAULT_SALES_STRATEGY } from '../org/sales-context.defaults';
+import { EmbeddingService } from '../embeddings/embedding.service';
+import { VECTOR_RAG_ENABLED } from '../config/feature-flags';
+import { EngineResponseSchema, type TurnTrace } from './engine.types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -338,6 +341,7 @@ export class EngineService implements OnModuleDestroy {
     private readonly gateway: CallsGateway,
     private readonly llm: LlmService,
     @Inject(DRIZZLE) private readonly db: DrizzleDb,
+    @Optional() private readonly embeddingService?: EmbeddingService,
   ) {}
 
   onModuleDestroy() {
@@ -1958,11 +1962,68 @@ export class EngineService implements OnModuleDestroy {
       .slice(-15)
       .map((t) => `${t.speaker}: ${t.text}`)
       .join('\n');
-    const ragSnippets = this.retrieveCompanySnippets(
-      context.ragDocuments,
-      recentTurns,
-      state.stats.objectionDetected,
-    );
+
+    // ─── Per-turn tracing ───────────────────────────────────────────────
+    const traceStart = Date.now();
+    const trace: Partial<TurnTrace> = {
+      callId,
+      turnIndex: state.prospectUtteranceSeq,
+      ragFallback: false,
+      schemaRetry: false,
+      hallucinationDetected: false,
+      outcome: 'ok',
+    };
+
+    // ─── RAG retrieval (vector or keyword) ──────────────────────────────
+    let ragSnippets: RagSnippet[];
+    if (VECTOR_RAG_ENABLED() && this.embeddingService) {
+      const ragStart = Date.now();
+      try {
+        const queryText = state.lastProspectUtteranceText || recentTurns.slice(-500);
+        const vectorChunks = await this.embeddingService.retrieveRelevant(
+          context.orgId,
+          queryText,
+          { limit: 8, similarityThreshold: 0.25, timeoutMs: 150 },
+        );
+        trace.embedTimeMs = Date.now() - ragStart;
+        trace.ragTimeMs = Date.now() - ragStart;
+        trace.ragChunkCount = vectorChunks.length;
+
+        if (vectorChunks.length > 0) {
+          ragSnippets = vectorChunks.map((c) => ({
+            field: c.field as RagField,
+            text: c.chunkText,
+            score: c.score,
+          }));
+        } else {
+          // Fallback to keyword RAG if vector returned nothing
+          trace.ragFallback = true;
+          ragSnippets = this.retrieveCompanySnippets(
+            context.ragDocuments,
+            recentTurns,
+            state.stats.objectionDetected,
+          );
+          trace.ragChunkCount = ragSnippets.length;
+        }
+      } catch {
+        trace.ragFallback = true;
+        trace.ragTimeMs = Date.now() - ragStart;
+        ragSnippets = this.retrieveCompanySnippets(
+          context.ragDocuments,
+          recentTurns,
+          state.stats.objectionDetected,
+        );
+        trace.ragChunkCount = ragSnippets.length;
+      }
+    } else {
+      ragSnippets = this.retrieveCompanySnippets(
+        context.ragDocuments,
+        recentTurns,
+        state.stats.objectionDetected,
+      );
+      trace.ragChunkCount = ragSnippets.length;
+    }
+
     const stageForPrompt = context.stages[state.currentStageIdx] ?? currentStage;
     const desiredCount: 1 | 3 = 1;
     const systemPrompt = this.buildSystemPrompt(
@@ -2033,6 +2094,7 @@ export class EngineService implements OnModuleDestroy {
       const llmResult: LlmResult = raceResult !== null && raceResult !== '__skip__' ? raceResult : await llmPromise;
       const raw = llmResult.text;
       const llmLatency = Date.now() - llmStartedAt;
+      trace.llmTimeMs = llmLatency;
       state.avgLlmLatencyMs =
         state.avgLlmLatencyMs === 0
           ? llmLatency
@@ -2104,6 +2166,35 @@ export class EngineService implements OnModuleDestroy {
         } else if (lastProspectLine) {
           parsed.primary = this.buildDeterministicFallback(lastProspectLine, slots);
         }
+      }
+
+      // ─── Zod validation (non-blocking — validates new schema alongside old) ──
+      const zodResult = EngineResponseSchema.safeParse({
+        say: parsed.primary ?? '',
+        intent: parsed.move_type ?? 'clarify',
+        reason: parsed.moment ?? 'Discovery',
+        nudges: parsed.nudges ?? [],
+        context_toast: parsed.context_toast
+          ? { title: parsed.context_toast.title ?? '', bullets: parsed.context_toast.bullets ?? [] }
+          : null,
+        ask: parsed.ask ?? null,
+        used_updates: {
+          value_props_used: parsed.used_updates?.value_props_used ?? [],
+          differentiators_used: parsed.used_updates?.differentiators_used ?? [],
+          objection_responses_used: parsed.used_updates?.objection_responses_used ?? [],
+          questions_asked: parsed.used_updates?.questions_asked ?? [],
+        },
+      });
+      if (!zodResult.success) {
+        trace.schemaRetry = true;
+        this.logger.debug(`Zod validation note (${callId}): ${zodResult.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ')}`);
+      }
+
+      // ─── Hallucination guardrail ──────────────────────────────────────
+      if (parsed.primary && this.containsRiskyClaim(parsed.primary, ragSnippets)) {
+        trace.hallucinationDetected = true;
+        this.logger.warn(`Hallucination detected in (${callId}): "${parsed.primary.slice(0, 80)}"`);
+        parsed.primary = this.stripRiskyClaims(parsed.primary);
       }
 
       if (parsed.move_type && typeof parsed.move_type === 'string') {
@@ -2202,8 +2293,15 @@ export class EngineService implements OnModuleDestroy {
         opts.reason,
         opts.utteranceSeq ?? state.prospectUtteranceSeq,
       );
+
+      // ─── Finalize trace ─────────────────────────────────────────────
+      trace.totalTimeMs = Date.now() - traceStart;
+      this.logger.debug(`Trace (${callId}): ${JSON.stringify(trace)}`);
     } catch (err) {
+      trace.outcome = 'error';
+      trace.totalTimeMs = Date.now() - traceStart;
       this.logger.error(`LLM tick error (${callId}): ${(err as Error).message}`);
+      this.logger.debug(`Trace (${callId}): ${JSON.stringify(trace)}`);
       this.runStubTick(callId, state, opts.reason, opts.utteranceSeq);
     }
   }
@@ -2274,6 +2372,26 @@ export class EngineService implements OnModuleDestroy {
     });
     this.gateway.emitToCall(callId, 'engine.moment', {
       tag: payload.momentTag,
+      tsMs: Date.now(),
+    });
+
+    // ─── Dual-emit: new schema keys alongside old for frontend migration ──
+    this.gateway.emitToCall(callId, 'engine.tick', {
+      // New schema keys (PR 4 frontend will read these)
+      say: suggestionsForEmit[0] ?? '',
+      intent: payload.momentTag ? this.inferIntentFromMoment(payload.momentTag) : 'clarify',
+      reason: payload.momentTag ?? 'Discovery',
+      nudges: normalizedNudges,
+      context_toast: payload.cards.length > 0
+        ? { title: 'Context', bullets: payload.cards }
+        : null,
+      ask: null,
+      // Old schema keys (current frontend reads these)
+      primary: suggestionsForEmit[0] ?? '',
+      moment: payload.momentTag ?? '',
+      move_type: payload.momentTag ? this.inferIntentFromMoment(payload.momentTag) : 'clarify',
+      suggestions: suggestionsForEmit,
+      cards: payload.cards,
       tsMs: Date.now(),
     });
 
@@ -3863,5 +3981,53 @@ export class EngineService implements OnModuleDestroy {
     const lower = text.toLowerCase();
     if (/\b(merhaba|kotu|zaman|saniye|tesekkur|evet|hayir)\b/.test(lower)) return false;
     return true;
+  }
+
+  // ─── Hallucination Guardrail ──────────────────────────────────────────────
+
+  private static readonly RISKY_CLAIM_PATTERNS = [
+    /we (helped|worked with|saved|served)\s+\w+/i,
+    /guarantee/i,
+    /\d+%\s*(increase|decrease|improvement|reduction)/i,
+    /clients? (like|such as|including)\s+\w+/i,
+    /certified|certification/i,
+    /\$[\d,]+/i,
+  ];
+
+  private containsRiskyClaim(text: string, ragSnippets: RagSnippet[]): boolean {
+    const ragText = ragSnippets.map((s) => s.text).join(' ').toLowerCase();
+    for (const pattern of EngineService.RISKY_CLAIM_PATTERNS) {
+      const match = text.match(pattern);
+      if (match) {
+        const claim = match[0].toLowerCase();
+        const stripped = claim
+          .replace(/we (helped|worked with|saved|served)\s*/, '')
+          .trim();
+        if (stripped && !ragText.includes(stripped)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private stripRiskyClaims(text: string): string {
+    let result = text;
+    for (const pattern of EngineService.RISKY_CLAIM_PATTERNS) {
+      result = result.replace(pattern, '').trim();
+    }
+    // Clean up double spaces and orphan punctuation
+    return result.replace(/\s{2,}/g, ' ').replace(/^\s*[,;]\s*/, '').trim();
+  }
+
+  // ─── Schema Migration Helper ─────────────────────────────────────────────
+
+  private inferIntentFromMoment(momentTag: string): string {
+    const lower = momentTag.toLowerCase();
+    if (/discover|question|qualify|open/i.test(lower)) return 'discovery';
+    if (/objection|concern|pushback|hesitat/i.test(lower)) return 'empathize';
+    if (/value|benefit|differenti|proof|roi/i.test(lower)) return 'value_map';
+    if (/close|commit|next.?step|schedule|book/i.test(lower)) return 'next_step_close';
+    return 'clarify';
   }
 }
